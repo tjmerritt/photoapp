@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en" x-data="photoApp()" x-init="init()">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PhotoApp</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Alpine.js -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap');
+
+    :root {
+      --brand:  #1a1a2e;
+      --accent: #e94560;
+      --surface:#f7f5f2;
+      --card:   #ffffff;
+      --muted:  #6b7280;
+      --border: #e5e1db;
+    }
+
+    body { font-family: 'DM Sans', sans-serif; background: var(--surface); color: var(--brand); }
+    h1,h2,h3 { font-family: 'DM Serif Display', serif; }
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+
+    .label-chip:nth-child(1)  .label-name { background: hsl(210 70% 55%); }
+    .label-chip:nth-child(2)  .label-name { background: hsl(257 70% 55%); }
+    .label-chip:nth-child(3)  .label-name { background: hsl(330 70% 55%); }
+    .label-chip:nth-child(4)  .label-name { background: hsl(30  70% 55%); }
+    .label-chip:nth-child(5)  .label-name { background: hsl(160 60% 40%); }
+    .label-chip:nth-child(6)  .label-name { background: hsl(15  70% 55%); }
+    .label-chip:nth-child(7)  .label-name { background: hsl(190 70% 45%); }
+    .label-chip:nth-child(8)  .label-name { background: hsl(280 60% 55%); }
+    .label-chip:nth-child(n+9).label-name { background: hsl(45  70% 50%); }
+
+    @keyframes fadeIn  { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes scaleIn { from { opacity:0; transform:scale(.95);      } to { opacity:1; transform:scale(1);      } }
+    .animate-fadein  { animation: fadeIn  .25s ease both; }
+    .animate-scalein { animation: scaleIn .2s  ease both; }
+
+    .backdrop { background: rgba(26,26,46,.55); backdrop-filter: blur(3px); }
+    .comment-clamp { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+
+    .emoji-btn { cursor: pointer; transition: transform .15s; }
+    .emoji-btn:hover  { transform: scale(1.2);  }
+    .emoji-btn:active { transform: scale(1.05); }
+
+    [x-cloak] { display: none !important; }
+  </style>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { brand: '#1a1a2e', accent: '#e94560', muted: '#6b7280' },
+          fontFamily: {
+            serif: ['"DM Serif Display"', 'serif'],
+            sans:  ['"DM Sans"', 'sans-serif'],
+          },
+        },
+      },
+    };
+  </script>
+</head>
+
+<body class="min-h-screen flex flex-col">
+
+<!-- ══ NAVBAR ══════════════════════════════════════════════════════════════ -->
+<nav class="sticky top-0 z-40 bg-white border-b border-[var(--border)] shadow-sm">
+  <div class="max-w-7xl mx-auto px-4 flex items-center gap-3 h-14">
+
+    <!-- Hamburger -->
+    <div class="relative" x-data="{ open: false }">
+      <button @click="open = !open" class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="Menu">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+      <div x-show="open" @click.outside="open=false" x-transition
+           class="absolute left-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-44 py-1 animate-scalein">
+        <a href="#" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Photos</a>
+      </div>
+    </div>
+
+    <!-- Site icon -->
+    <a href="/" class="flex items-center gap-2 shrink-0">
+      <div class="w-8 h-8 rounded-lg bg-brand flex items-center justify-center">
+        <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/>
+        </svg>
+      </div>
+      <span class="font-serif text-lg font-bold text-brand hidden sm:block">Phōtos</span>
+    </a>
+
+    <!-- Search -->
+    <div class="flex-1 max-w-sm mx-2">
+      <input type="search" placeholder="Search photos…"
+             class="w-full px-3 py-1.5 text-sm border border-[var(--border)] rounded-full bg-gray-50 focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition"
+             @keydown.enter.prevent="showToast('Search is not yet implemented.')" />
+    </div>
+
+    <div class="ml-auto flex items-center gap-1">
+      <!-- Settings -->
+      <button @click="showToast('No settings yet.')"
+              class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="Settings">
+        <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+        </svg>
+      </button>
+      <!-- User -->
+      <button @click="userModal = true"
+              class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="User">
+        <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M5.121 17.804A4 4 0 019 16h6a4 4 0 013.879 1.804M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<!-- ══ MAIN ═════════════════════════════════════════════════════════════════ -->
+<main class="flex-1 max-w-7xl w-full mx-auto px-4 py-8" x-cloak>
+
+  <!-- Loading -->
+  <div x-show="loading" class="flex items-center justify-center py-32">
+    <div class="w-10 h-10 border-4 border-accent/30 border-t-accent rounded-full animate-spin"></div>
+  </div>
+
+  <template x-if="photo && !loading">
+    <div class="animate-fadein">
+
+      <!-- Photo + Related -->
+      <div class="flex gap-6 items-start">
+        <div class="flex-1 min-w-0">
+          <div class="rounded-2xl overflow-hidden bg-gray-100 shadow-lg">
+            <img :src="photo.image.url" :alt="photo.title.text"
+                 class="w-full object-cover max-h-[70vh]" loading="eager" />
+          </div>
+          <div class="mt-4">
+            <h1 class="text-3xl font-serif" x-text="photo.title.text"></h1>
+            <p class="mt-2 text-muted leading-relaxed text-sm" x-text="photo.description"></p>
+          </div>
+        </div>
+
+        <template x-if="photo.related && photo.related.length">
+          <div class="w-36 shrink-0 hidden md:flex flex-col gap-3">
+            <h3 class="text-xs font-semibold uppercase tracking-widest text-muted">Related</h3>
+            <template x-for="rel in photo.related" :key="rel.photoid">
+              <a :href="rel.clickurl" class="block rounded-xl overflow-hidden ring-1 ring-[var(--border)] hover:ring-accent/60 transition shadow-sm">
+                <img :src="rel.imageurl" :alt="rel.photoid" class="w-full h-24 object-cover hover:opacity-90 transition" />
+              </a>
+            </template>
+          </div>
+        </template>
+      </div>
+
+      <!-- Labels -->
+      <div class="mt-8">
+        <div class="flex flex-wrap gap-2 items-center">
+          <template x-for="label in photo.labels" :key="label.labelid">
+            <div class="label-chip flex items-center rounded-full overflow-hidden ring-1 ring-[var(--border)] shadow-sm text-sm">
+              <span class="label-name px-3 py-1 text-white font-medium text-xs" x-text="label.name"></span>
+              <span class="px-3 py-1 bg-white text-brand font-medium" x-text="label.value"></span>
+            </div>
+          </template>
+          <button @click="labelModal = true"
+                  class="w-8 h-8 rounded-full bg-gray-200 hover:bg-accent hover:text-white transition flex items-center justify-center text-lg font-light shadow-sm"
+                  title="Add label">+</button>
+        </div>
+      </div>
+
+      <!-- Emojis -->
+      <div class="mt-6">
+        <div class="flex flex-wrap items-center gap-2">
+          <template x-for="em in photo.emojis" :key="em.emojiid">
+            <div class="relative" x-data="{ holding: false, holdTimer: null }">
+              <button class="emoji-btn flex items-center gap-1.5 bg-white border border-[var(--border)] rounded-full px-3 py-1.5 text-sm shadow-sm select-none"
+                      @mousedown="holdTimer = setTimeout(() => holding = true, 400)"
+                      @mouseup="clearTimeout(holdTimer)"
+                      @mouseleave="clearTimeout(holdTimer)"
+                      @touchstart.prevent="holdTimer = setTimeout(() => holding = true, 400)"
+                      @touchend="clearTimeout(holdTimer)"
+                      title="Hold to see who reacted">
+                <span class="text-lg" x-text="em.emoji"></span>
+                <span class="font-medium text-muted text-xs" x-text="em.count"></span>
+              </button>
+              <!-- Hold popup -->
+              <div x-show="holding" @click.outside="holding=false"
+                   class="absolute bottom-full mb-2 left-0 bg-white rounded-xl shadow-xl border border-[var(--border)] p-3 w-44 z-20 animate-scalein">
+                <p class="text-xs font-semibold text-muted mb-2">Reacted with <span x-text="em.emoji"></span></p>
+                <template x-for="u in em.users" :key="u.id">
+                  <div class="flex items-center gap-2 py-1">
+                    <img :src="u.tn" :alt="u.name" class="w-6 h-6 rounded-full object-cover" />
+                    <span class="text-xs text-brand" x-text="u.name"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+          <button @click="emojiPickerOpen = true"
+                  class="w-8 h-8 rounded-full bg-gray-200 hover:bg-accent hover:text-white transition flex items-center justify-center text-lg font-light shadow-sm"
+                  title="Add emoji">+</button>
+        </div>
+      </div>
+
+      <!-- Comments -->
+      <div class="mt-10">
+        <h2 class="font-serif text-xl mb-4">Comments</h2>
+
+        <!-- New comment box -->
+        <div class="bg-white rounded-2xl border border-[var(--border)] p-4 shadow-sm mb-6">
+          <textarea rows="3" placeholder="Leave a comment…"
+                    class="w-full text-sm resize-none focus:outline-none text-brand placeholder-muted"></textarea>
+          <div class="flex justify-end mt-2">
+            <button @click="showToast('Posting comments is not yet available.')"
+                    class="bg-brand text-white text-sm px-4 py-1.5 rounded-full hover:bg-accent transition">Post</button>
+          </div>
+        </div>
+
+        <!-- Comment list -->
+        <div class="space-y-6">
+          <template x-for="comment in photo.comments" :key="comment.commentid">
+            <div x-data="commentItem(comment)" x-init="init()" class="animate-fadein">
+              <div class="flex gap-3">
+                <img :src="comment.author.tn || `https://i.pravatar.cc/48?u=${comment.author.userid}`"
+                     :alt="comment.author.username"
+                     class="w-10 h-10 rounded-full object-cover shrink-0 mt-0.5 ring-2 ring-white shadow" />
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-baseline gap-2 flex-wrap">
+                    <span class="font-semibold text-sm" x-text="comment.author.username"></span>
+                    <span class="text-xs text-muted" x-text="formatDate(comment.date)"></span>
+                  </div>
+
+                  <div class="mt-1 text-sm text-brand leading-relaxed">
+                    <div :class="expanded ? '' : 'comment-clamp'"
+                         :style="expanded ? '' : `-webkit-line-clamp: ${clampLines}`"
+                         x-ref="commentBody"
+                         x-text="comment.comment">
+                    </div>
+                    <template x-if="!expanded && needsClamp">
+                      <button @click="showMore()" class="text-accent text-xs mt-1 hover:underline">more</button>
+                    </template>
+                  </div>
+
+                  <div class="flex items-center gap-3 mt-2">
+                    <template x-if="comment.replycount > 0 && !showingReplies">
+                      <button @click="loadReplies()"
+                              class="text-xs text-accent hover:underline font-medium">
+                        Replies (<span x-text="comment.replycount"></span>)
+                      </button>
+                    </template>
+                    <template x-if="showingReplies">
+                      <button @click="showingReplies = false; replyOpen = false"
+                              class="text-xs text-muted hover:text-brand">Hide replies</button>
+                    </template>
+                    <button @click="replyOpen = !replyOpen"
+                            class="text-xs text-muted hover:text-brand font-medium">Reply</button>
+                  </div>
+
+                  <!-- Replies section -->
+                  <template x-if="showingReplies">
+                    <div class="mt-3 ml-2 pl-4 border-l-2 border-[var(--border)] space-y-4">
+                      <!-- Reply input always at top -->
+                      <div class="bg-gray-50 rounded-xl border border-[var(--border)] p-3">
+                        <textarea rows="2" placeholder="Write a reply…"
+                                  class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea>
+                        <div class="flex justify-end mt-1">
+                          <button @click="showToast('Posting replies is not yet available.')"
+                                  class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition">Reply</button>
+                        </div>
+                      </div>
+                      <div x-show="loadingReplies" class="flex justify-center py-2">
+                        <div class="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin"></div>
+                      </div>
+                      <template x-for="reply in replies" :key="reply.commentid">
+                        <div class="flex gap-2">
+                          <img :src="reply.author.tn || `https://i.pravatar.cc/40?u=${reply.author.userid}`"
+                               :alt="reply.author.username"
+                               class="w-8 h-8 rounded-full object-cover shrink-0" />
+                          <div>
+                            <div class="flex items-baseline gap-2">
+                              <span class="font-semibold text-xs" x-text="reply.author.username"></span>
+                              <span class="text-xs text-muted" x-text="formatDate(reply.date)"></span>
+                            </div>
+                            <p class="text-sm leading-relaxed mt-0.5" x-text="reply.comment"></p>
+                          </div>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+
+                  <!-- Inline reply box (when not showing full replies) -->
+                  <template x-if="replyOpen && !showingReplies">
+                    <div class="mt-3 bg-gray-50 rounded-xl border border-[var(--border)] p-3">
+                      <textarea rows="2" placeholder="Write a reply…"
+                                class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea>
+                      <div class="flex justify-end mt-1">
+                        <button @click="showToast('Posting replies is not yet available.')"
+                                class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition">Reply</button>
+                      </div>
+                    </div>
+                  </template>
+
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+    </div>
+  </template>
+
+  <div x-show="error && !loading" class="text-center py-32">
+    <p class="text-accent text-lg font-serif" x-text="error"></p>
+  </div>
+</main>
+
+<!-- ══ FOOTER ════════════════════════════════════════════════════════════════ -->
+<footer class="mt-16 border-t border-[var(--border)] bg-white">
+  <div class="max-w-7xl mx-auto px-4 py-5 flex flex-wrap items-center justify-between gap-3 text-xs text-muted">
+    <span>© 2024 Phōtos. All rights reserved.</span>
+    <div class="flex gap-4">
+      <a href="#" @click.prevent="showToast('Terms of Service not yet available.')"
+         class="hover:text-brand underline underline-offset-2">Terms of Service</a>
+      <a href="#" @click.prevent="showToast('Privacy Policy not yet available.')"
+         class="hover:text-brand underline underline-offset-2">Privacy Policy</a>
+    </div>
+  </div>
+</footer>
+
+<!-- ══ MODALS ════════════════════════════════════════════════════════════════ -->
+
+<!-- Toast -->
+<div x-show="toast.visible" x-cloak
+     x-transition:enter="transition ease-out duration-200"
+     x-transition:enter-start="opacity-0 translate-y-2"
+     x-transition:enter-end="opacity-100 translate-y-0"
+     x-transition:leave="transition ease-in duration-150"
+     x-transition:leave-start="opacity-100"
+     x-transition:leave-end="opacity-0"
+     class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-brand text-white text-sm px-5 py-3 rounded-2xl shadow-xl"
+     x-text="toast.message">
+</div>
+
+<!-- User login modal -->
+<template x-if="userModal">
+  <div class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4" @click.self="userModal = false">
+    <div class="bg-white rounded-2xl shadow-2xl w-80 p-6 animate-scalein">
+      <div class="flex items-center justify-between mb-5">
+        <h2 class="font-serif text-xl">Sign In</h2>
+        <button @click="userModal = false" class="text-muted hover:text-brand text-2xl leading-none">&times;</button>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs font-medium text-muted block mb-1">Username</label>
+          <input type="text" placeholder="your_username"
+                 class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+        </div>
+        <div>
+          <label class="text-xs font-medium text-muted block mb-1">Password</label>
+          <input type="password" placeholder="••••••••"
+                 class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+        </div>
+        <button @click="userModal = false; showToast('Login is not yet available.')"
+                class="w-full bg-brand text-white py-2.5 rounded-xl font-medium hover:bg-accent transition text-sm mt-2">
+          Log In
+        </button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- Add label modal -->
+<template x-if="labelModal">
+  <div class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4" @click.self="labelModal = false">
+    <div class="bg-white rounded-2xl shadow-2xl w-80 p-6 animate-scalein">
+      <div class="flex items-center justify-between mb-5">
+        <h2 class="font-serif text-xl">Add Label</h2>
+        <button @click="labelModal = false" class="text-muted hover:text-brand text-2xl leading-none">&times;</button>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs font-medium text-muted block mb-1">Name</label>
+          <input type="text" x-model="newLabel.name" placeholder="e.g. Camera"
+                 class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+        </div>
+        <div>
+          <label class="text-xs font-medium text-muted block mb-1">Text</label>
+          <input type="text" x-model="newLabel.text" placeholder="e.g. Sony A7R V"
+                 class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+        </div>
+        <button @click="labelModal = false; showToast('Saving labels is not yet available.')"
+                class="w-full bg-brand text-white py-2.5 rounded-xl font-medium hover:bg-accent transition text-sm mt-2">
+          Save
+        </button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- Emoji picker modal -->
+<template x-if="emojiPickerOpen">
+  <div class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4" @click.self="emojiPickerOpen = false">
+    <div class="bg-white rounded-2xl shadow-2xl w-80 p-5 animate-scalein">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="font-serif text-xl">Add Reaction</h2>
+        <button @click="emojiPickerOpen = false" class="text-muted hover:text-brand text-2xl leading-none">&times;</button>
+      </div>
+      <p class="text-xs text-muted mb-3">Tap an emoji to react to this photo.</p>
+      <div class="grid grid-cols-7 gap-2">
+        <template x-for="emoji in emojiPalette" :key="emoji">
+          <button @click="addEmoji(emoji)"
+                  class="text-2xl w-10 h-10 flex items-center justify-center rounded-xl hover:bg-gray-100 transition"
+                  x-text="emoji"></button>
+        </template>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- ══ ALPINE.JS ═════════════════════════════════════════════════════════════ -->
+<script>
+  function formatDate(dateStr) {
+    if (!dateStr) return '';
+    try {
+      const d = new Date(dateStr), now = new Date(), diff = (now - d) / 1000;
+      if (diff < 5)     return 'just now';
+      if (diff < 60)     return `${diff}s ago`;
+      if (diff < 3600)   return `${Math.floor(diff/60)}m ago`;
+      if (diff < 86400)  return `${Math.floor(diff/3600)}h ago`;
+      if (diff < 604800) return `${Math.floor(diff/86400)}d ago`;
+      return d.toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' });
+    } catch { return dateStr; }
+  }
+
+  function commentItem(comment) {
+    return {
+      comment,
+      expanded: false,
+      clampLines: 4,
+      needsClamp: false,
+      showingReplies: false,
+      loadingReplies: false,
+      replyOpen: false,
+      replies: [],
+
+      init() {
+        this.$nextTick(() => {
+          const el = this.$refs.commentBody;
+          if (el) {
+            const lineH = parseFloat(getComputedStyle(el).lineHeight) || 20;
+            this.needsClamp = el.scrollHeight > lineH * this.clampLines + 4;
+          }
+        });
+      },
+
+      showMore() {
+        this.clampLines += 1;
+        const el = this.$refs.commentBody;
+        if (el) {
+          const lineH = parseFloat(getComputedStyle(el).lineHeight) || 20;
+          if (el.scrollHeight <= lineH * this.clampLines + 4) this.expanded = true;
+        }
+      },
+
+      async loadReplies() {
+        this.showingReplies = true;
+        this.loadingReplies = true;
+        try {
+          const resp = await fetch(`http://192.168.64.2:8080/api/v1/comments?photoid=photo001&parentid=${this.comment.commentid}`);
+          const data = await resp.json();
+          this.replies = data.comments || [];
+        } catch (e) { console.error('Failed to load replies', e); }
+        this.loadingReplies = false;
+      },
+
+      formatDate,
+    };
+  }
+
+  function photoApp() {
+    return {
+      photo: null,
+      loading: true,
+      error: null,
+
+      userModal: false,
+      labelModal: false,
+      emojiPickerOpen: false,
+      newLabel: { name: '', text: '' },
+
+      toast: { visible: false, message: '', timer: null },
+
+      emojiPalette: [
+        '❤️','🔥','😍','🏔️','✨','👏','🎉','😮','😂','😢',
+        '😎','🤩','💯','🙌','👍','👎','💪','🌟','🌈','⚡',
+        '🍀','🎵','🌸','🦋','🌊','🚀','🌙','☀️','❄️','🌿',
+      ],
+
+      async init() {
+        const params = new URLSearchParams(window.location.search);
+        const photoid = params.get('photoid') || 'photo001';
+        await this.loadPhoto(photoid);
+      },
+
+      async loadPhoto(photoid) {
+        this.loading = true;
+        this.error = null;
+        try {
+          const resp = await fetch(`http://192.168.64.2:8080/api/v1/photo?photoid=${encodeURIComponent(photoid)}`);
+          if (!resp.ok) throw new Error(`Photo not found (${resp.status})`);
+          this.photo = await resp.json();
+        } catch (e) { this.error = e.message; }
+        this.loading = false;
+      },
+
+      showToast(message) {
+        clearTimeout(this.toast.timer);
+        this.toast.message = message;
+        this.toast.visible = true;
+        this.toast.timer = setTimeout(() => { this.toast.visible = false; }, 3500);
+      },
+
+      addEmoji(emoji) {
+        this.emojiPickerOpen = false;
+        const existing = this.photo.emojis.find(e => e.emoji === emoji);
+        if (existing) { existing.count++; }
+        else { this.photo.emojis.push({ emojiid: 'local-' + Date.now(), emoji, count: 1, users: [] }); }
+        this.showToast(`Reacted with ${emoji}  (saving not yet available)`);
+      },
+    };
+  }
+</script>
+</body>
+</html>

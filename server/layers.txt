@@ -1,0 +1,24 @@
+
+
+
+
+
+
+API Level
+
+
+
+
+
+Cache Access.
+Fetch
+	lookup photoid in valkey and return response.
+	Not found, then fetch from Postgres
+Update
+	Update postgres, remove entry from valkey
+
+
+Postgres Access.  Read all rows for photo info.
+
+
+Bottom Layer Postgres Schema
