@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -28,6 +29,10 @@ func main() {
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
+
+	// ── Flags (override env/defaults) ─────────────────────────────────────────
+	flag.StringVar(&cfg.AppDir, "app-dir", cfg.AppDir, "directory to serve for non-/api routes (env: APP_DIR)")
+	flag.Parse()
 
 	// ── Database ──────────────────────────────────────────────────────────────
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

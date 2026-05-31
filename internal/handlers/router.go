@@ -62,6 +62,16 @@ func NewRouter(pool *db.Pool, cfg *config.Config) http.Handler {
 	// ── Static file serving for uploaded emoji images ─────────────────────────
 	r.ServeFiles("/uploads/*filepath", http.Dir(cfg.UploadDir))
 
+	// ── Frontend — serve AppDir for all non-/api paths ───────────────────────
+	appFS := http.FileServer(http.Dir(cfg.AppDir))
+	r.NotFound = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if len(req.URL.Path) >= 4 && req.URL.Path[:4] == "/api" {
+			middleware.WriteError(w, http.StatusNotFound, "not found")
+			return
+		}
+		appFS.ServeHTTP(w, req)
+	})
+
 	// ── Health check ──────────────────────────────────────────────────────────
 	r.GET("/healthz", func(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 		middleware.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})

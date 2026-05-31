@@ -155,7 +155,7 @@
           <div class="w-36 shrink-0 hidden md:flex flex-col gap-3">
             <h3 class="text-xs font-semibold uppercase tracking-widest text-muted">Related</h3>
             <template x-for="rel in photo.related" :key="rel.photoid">
-              <a :href="rel.clickurl" class="block rounded-xl overflow-hidden ring-1 ring-[var(--border)] hover:ring-accent/60 transition shadow-sm">
+              <a href="#" @click.prevent="loadPhoto(rel.photoid)" class="block rounded-xl overflow-hidden ring-1 ring-[var(--border)] hover:ring-accent/60 transition shadow-sm">
                 <img :src="rel.imageurl" :alt="rel.photoid" class="w-full h-24 object-cover hover:opacity-90 transition" />
               </a>
             </template>
@@ -477,7 +477,7 @@
         this.showingReplies = true;
         this.loadingReplies = true;
         try {
-          const resp = await fetch(`http://192.168.64.2:8080/api/v1/comments?photoid=photo001&parentid=${this.comment.commentid}`);
+          const resp = await fetch(`/api/v1/comments?photoid=photo001&parentid=${this.comment.commentid}`);
           const data = await resp.json();
           this.replies = data.comments || [];
         } catch (e) { console.error('Failed to load replies', e); }
@@ -509,7 +509,7 @@
 
       async init() {
         const params = new URLSearchParams(window.location.search);
-        const photoid = params.get('photoid') || 'photo001';
+        const photoid = params.get('photoid') || 'aaaaaaaa-0000-0000-0000-000000000001';
         await this.loadPhoto(photoid);
       },
 
@@ -517,7 +517,7 @@
         this.loading = true;
         this.error = null;
         try {
-          const resp = await fetch(`http://192.168.64.2:8080/api/v1/photo?photoid=${encodeURIComponent(photoid)}`);
+          const resp = await fetch(`/api/v1/photo?photoid=${encodeURIComponent(photoid)}`);
           if (!resp.ok) throw new Error(`Photo not found (${resp.status})`);
           this.photo = await resp.json();
         } catch (e) { this.error = e.message; }

@@ -12,7 +12,7 @@ INSERT INTO users (userid, username, email, fullname, profile_image, joined_at) 
   ('11111111-0000-0000-0000-000000000005', 'dev_null', 'dev@example.com',    'Dev Null',        'https://i.pravatar.cc/64?img=12', '2023-05-05T00:00:00Z')
 ON CONFLICT (userid) DO NOTHING;
 
--- Photo
+-- Photos
 INSERT INTO photos (photoid, owner_userid, image_url, image_width, image_height, title_text, title_userid, description) VALUES
   (
     'aaaaaaaa-0000-0000-0000-000000000001',
@@ -22,12 +22,21 @@ INSERT INTO photos (photoid, owner_userid, image_url, image_width, image_height,
     'Summit at Golden Hour',
     '11111111-0000-0000-0000-000000000001',
     'Captured just as the last light kissed the ridgeline, this shot from the summit of Mt. Rainier looks east across the Cascade Range.'
+  ),
+  (
+    'aaaaaaaa-0000-0000-0000-000000000002',
+    '11111111-0000-0000-0000-000000000001',
+    'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=1200&q=80',
+    1200, 800,
+    'Alpine Valley',
+    '11111111-0000-0000-0000-000000000001',
+    'Looking down into the valley from a high alpine ridge.'
   )
 ON CONFLICT (photoid) DO NOTHING;
 
--- Related photos (point at the same photo for demo purposes)
+-- Related photos
 INSERT INTO related_photos (photoid, related_photoid, scaled_image_url, sort_order) VALUES
-  ('aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000001',
+  ('aaaaaaaa-0000-0000-0000-000000000001', 'aaaaaaaa-0000-0000-0000-000000000002',
    'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=300&q=70', 1)
 ON CONFLICT DO NOTHING;
 

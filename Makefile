@@ -3,6 +3,10 @@
 # ── Build & run ───────────────────────────────────────────────────────────────
 build:
 	go build -o bin/photoapp ./cmd/server
+	go build -o bin/import-photos ./cmd/import-photos
+
+import-photos:
+	go run ./cmd/import-photos $(ARGS)
 
 run:
 	go run ./cmd/server

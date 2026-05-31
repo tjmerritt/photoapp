@@ -1,86 +1,160 @@
-# PhotoApp
+# PhotoApp — Go API Server
 
-A photo viewer web application built with plain HTML, Alpine.js, and Tailwind CSS, backed by a mock Node.js API server.
+REST API server for the PhotoApp photo viewer, written in Go, backed by PostgreSQL.
+
+## Prerequisites
+
+- Go 1.22+
+- PostgreSQL 13+
+- `psql` on your PATH (for migrations)
 
 ## Quick Start
 
 ```bash
-cd /Users/tjmerritt/src/github.com/tjmerritt/photoapp
-node server.js
-# Open http://localhost:3000/?photoid=photo001
+# 1. Create the database
+createdb photoapp
+
+# 2. Configure environment
+cp .env.example .env
+# edit .env with your DB credentials if needed
+
+# 3. Source the env and run migrations
+source .env   # or: export $(cat .env | xargs)
+make migrate-up
+
+# 4. Seed with development data (optional)
+make seed
+
+# 5. Fetch dependencies
+make tidy
+
+# 6. Run the server
+make run
+# → listening on http://localhost:8080
 ```
 
-No npm install required — the server uses only Node built-ins (`http`, `fs`, `path`, `url`).
-
-## File Structure
+## Project Layout
 
 ```
 photoapp/
-├── index.html      # Main photo viewer page
-├── server.js       # Mock API server (Node, no dependencies)
-├── package.json
-└── README.md
+├── cmd/server/main.go              # Entrypoint — server setup & graceful shutdown
+├── internal/
+│   ├── config/config.go            # Environment-based configuration
+│   ├── db/db.go                    # pgxpool wrapper + helpers
+│   ├── middleware/middleware.go     # RequestID, Logger, CORS, Auth
+│   ├── models/models.go            # Request/response structs
+│   └── handlers/
+│       ├── router.go               # Route wiring
+│       ├── pagination.go           # parsePage / buildPages helpers
+│       ├── fetch.go                # Shared DB fetch functions
+│       ├── photo.go                # GET /api/v1/photo, GET /api/v1/user
+│       ├── labels.go               # Labels CRUD
+│       ├── emojis.go               # Emoji reactions + type upload
+│       └── comments.go             # Comments CRUD
+├── migrations/
+│   ├── 001_initial.sql             # Full schema (idempotent)
+│   └── 002_seed.sql                # Development seed data
+├── .env.example                    # Environment variable template
+├── Makefile
+└── go.mod
 ```
 
-## Tech Stack
+## API Reference
 
-- **Layout**: Plain HTML5 semantic markup
-- **Interactivity**: Alpine.js 3.x (CDN)
-- **Styling**: Tailwind CSS 3.x (CDN)
-- **Server**: Node.js built-in `http` module (no Express needed)
-
-## API Endpoints
+### Read (no auth required)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/photo?photoid=` | Full photo object |
-| GET | `/api/v1/labels?photoid=&offset=&limit=` | Paginated labels |
-| GET | `/api/v1/emojis?photoid=&offset=&limit=` | Paginated emojis |
-| GET | `/api/v1/emoji/users?emoji=&offset=&limit=` | Users for an emoji |
-| GET | `/api/v1/comments?photoid=&offset=&limit=` | Top-level comments |
-| GET | `/api/v1/comments?photoid=&parentid=&offset=&limit=` | Replies to a comment |
+| GET | `/api/v1/photo?photoid=` | Full photo with labels, emojis, comments |
 | GET | `/api/v1/user?userid=` | User profile |
+| GET | `/api/v1/labels?photoid=&offset=&limit=` | Paginated labels |
+| GET | `/api/v1/emojis?photoid=&offset=&limit=` | Paginated emojis with counts |
+| GET | `/api/v1/emoji/users?emoji=&photoid=&offset=&limit=` | Users who used an emoji |
+| GET | `/api/v1/emoji/types` | All active emoji types (picker palette) |
+| GET | `/api/v1/comments?photoid=&parentid=&offset=&limit=` | Comments or replies |
 
-Static files (index.html) are served from the project root.
+### Write (auth required — pass `X-User-ID: <uuid>` header)
 
----
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/labels?photoid=` | Add a label `{name, value}` |
+| PATCH | `/api/v1/labels/:labelid` | Edit your own label `{name?, value?}` |
+| DELETE | `/api/v1/labels/:labelid` | Delete your own label |
+| POST | `/api/v1/emoji/react?photoid=&emojiid=` | Add your emoji reaction |
+| DELETE | `/api/v1/emoji/react?photoid=&emojiid=` | Remove your emoji reaction |
+| POST | `/api/v1/emoji/types` | Upload a new emoji image (multipart: `image`, `alttext`) |
+| POST | `/api/v1/comments?photoid=&parentid=` | Post a comment or reply `{comment}` |
+| PATCH | `/api/v1/comments/:commentid` | Edit your own comment `{comment}` |
+| DELETE | `/api/v1/comments/:commentid` | Soft-delete your own comment |
 
-## Notes on Missing / Ambiguous API Details
+### Other
 
-The following items were noticed during implementation and are worth resolving when write APIs are added:
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/healthz` | Health check |
+| GET | `/uploads/*` | Serve uploaded emoji images |
 
-### Structural Issues in the Spec
+## Authentication
 
-1. **`emojis` field is an object `{}` not an array `[]`** in the photo response spec, but the contents imply it should be an array. The mock server treats it as an array.
+Authentication is currently a placeholder using the `X-User-ID` header.
+Pass the UUID of the acting user:
 
-2. **`emojis` pagination response** has a malformed array — the array items start with `"emojiid":` as if the `{` opening the object was omitted. Assumed each item is a full object `{ emojiid, imageurl, count, users, usersurl }`.
+```bash
+curl -X POST http://localhost:8080/api/v1/labels?photoid=aaaaaaaa-0000-0000-0000-000000000001 \
+  -H "X-User-ID: 11111111-0000-0000-0000-000000000001" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Shutter","value":"1/250s"}'
+```
 
-3. **`comments` pagination response** is missing `"current"` in the `pages` sub-object (present in the `/api/v1/labels` response but absent from the `/api/v1/comments` response).
+When real login is added, replace the `Auth` middleware in
+`internal/middleware/middleware.go` with JWT / session validation and remove
+the `X-User-ID` override.
 
-4. **`date` field** in comment objects is missing its closing `"` in the spec: `"date": "YYYY-MM-DDTHH:NN:SS.mmm"` — the milliseconds separator is `.` not `:`, which is non-standard. ISO 8601 uses `.` for sub-seconds which is fine, but `NN` for minutes is unconventional (usually `MM` — ambiguous with months). Clarify intended format.
+## Emoji Upload
 
-### Missing Data
+Custom emoji images are uploaded as `multipart/form-data`:
 
-5. **Author thumbnail (`tn`) in comments**: The comment `author` object only has `userid` and `username`. There is no `tn` (thumbnail) field. The UI needs an avatar; either add `tn` to the author object in the comment, or the client must call `/api/v1/user?userid=` for every comment author — expensive. **Recommend adding `tn` to the comment author object.**
+```bash
+curl -X POST http://localhost:8080/api/v1/emoji/types \
+  -H "X-User-ID: 11111111-0000-0000-0000-000000000001" \
+  -F "image=@/path/to/emoji.png" \
+  -F "alttext=My Custom Emoji"
+```
 
-6. **Emoji unicode/character field**: The `emojis` array has `imageurl` but no unicode character field. If using standard emoji (❤️, 🔥, etc.), an `emoji` character field (or `codepoint`) is needed so the browser can render them without loading images. If all emojis are custom images, `imageurl` alone is fine but an `alttext` field would help accessibility.
+Files are stored in `UPLOAD_DIR` (default `./uploads`) and served at
+`UPLOAD_URL_BASE` (default `/uploads`).
 
-7. **`labelsurl` in photo response**: Described as the URL for additional labels "can be omitted, ommitted [sic] = no more than in labels." It's unclear whether "omitted" means there are no more labels, or just that the field itself is optional. Suggest: omit the field (or set to `null`) when all labels are already included in the `labels` array.
+## Environment Variables
 
-### Missing Write APIs (noted for future addition)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8080` | Listen port |
+| `HOST` | `` | Listen host (empty = all interfaces) |
+| `DATABASE_URL` | — | Full PostgreSQL DSN |
+| `DB_HOST` | `localhost` | Used if `DATABASE_URL` not set |
+| `DB_PORT` | `5432` | Used if `DATABASE_URL` not set |
+| `DB_USER` | `photoapp` | Used if `DATABASE_URL` not set |
+| `DB_PASSWORD` | `photoapp` | Used if `DATABASE_URL` not set |
+| `DB_NAME` | `photoapp` | Used if `DATABASE_URL` not set |
+| `UPLOAD_DIR` | `./uploads` | Directory for uploaded emoji images |
+| `UPLOAD_URL_BASE` | `/uploads` | Public URL prefix for uploaded images |
+| `DEFAULT_PAGE_SIZE` | `10` | Default items per page |
+| `MAX_PAGE_SIZE` | `100` | Maximum items per page |
+| `AUTH_HEADER` | `X-User-ID` | Header name used for placeholder auth |
 
-8. **Add label**: `POST /api/v1/labels?photoid=` — with `{ name, value }` body.
-9. **Add emoji reaction**: `POST /api/v1/emoji/react?photoid=&emoji=` — or `POST /api/v1/emojis?photoid=`.
-10. **Remove emoji reaction**: `DELETE /api/v1/emoji/react?photoid=&emojiid=`.
-11. **Post comment**: `POST /api/v1/comments?photoid=` — with `{ comment }` body.
-12. **Post reply**: `POST /api/v1/comments?photoid=&parentid=` — with `{ comment }` body.
-13. **Edit title/description**: `PATCH /api/v1/photo?photoid=` — only when `canedit: true`.
-14. **Authentication**: `/api/v1/auth/login` (POST), `/api/v1/auth/logout` (POST), session/token management.
-15. **User registration**: Not specified.
+## Dependencies
 
-### UX / Behavioral Gaps
+- [`jackc/pgx/v5`](https://github.com/jackc/pgx) — PostgreSQL driver with connection pooling
+- [`julienschmidt/httprouter`](https://github.com/julienschmidt/httprouter) — Fast HTTP router
+- [`google/uuid`](https://github.com/google/uuid) — UUID generation
 
-16. **Search API**: No `/api/v1/search` endpoint described at all. The search box is present in the UI.
-17. **Pagination UI**: The API provides `pages` objects with `next`/`prev` URLs, but there is no "Load more" button or infinite scroll mechanism specified for labels, emojis, or comments on the page. The mock data is small enough to fit in the initial response, but this will matter at scale.
-18. **`canedit` flag**: The title object has `canedit: false` but no editing UI is specified. Presumably an edit pencil should appear when `canedit: true`.
-19. **Photo ownership / permissions**: No field indicating whether the current user owns the photo, which would control showing "delete", "edit" controls.
+No ORM is used. All queries are plain SQL.
+
+## Known Limitations / Future Work
+
+1. **No real auth** — replace `X-User-ID` header with JWT or session tokens when login is implemented.
+2. **Emoji counts materialised view** is refreshed synchronously after each reaction. Under high write load, switch to a background refresh job or use a plain `COUNT(*)` with a covering index.
+3. **No photo creation API** — photos are curated and inserted directly into the database by administrators.
+4. **No search endpoint** — `/api/v1/search` is not yet implemented.
+5. **No image resizing** — uploaded emoji images are stored as-is. Add a resizing step (e.g. using `vips` or `imaging`) for production.
+6. **No rate limiting** — add per-IP or per-user rate limiting before public deployment.

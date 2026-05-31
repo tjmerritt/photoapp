@@ -15,8 +15,11 @@ type Config struct {
 	// Database
 	DBURL string // full DSN, e.g. postgres://user:pass@host:5432/dbname
 
+	// Static app directory served for all non-/api routes
+	AppDir string
+
 	// File storage for uploaded emoji images
-	UploadDir    string // local filesystem path
+	UploadDir     string // local filesystem path
 	UploadURLBase string // public URL prefix served for uploaded files
 
 	// Pagination defaults
@@ -58,6 +61,7 @@ func Load() (*Config, error) {
 		Port:            port,
 		Host:            envStr("HOST", ""),
 		DBURL:           dbURL,
+		AppDir:          envStr("APP_DIR", "app"),
 		UploadDir:       envStr("UPLOAD_DIR", "./uploads"),
 		UploadURLBase:   envStr("UPLOAD_URL_BASE", "/uploads"),
 		DefaultPageSize: defaultPage,
