@@ -18,8 +18,11 @@ type PhotoHandler struct {
 }
 
 func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	photoid := r.URL.Query().Get("photoid")
-	if photoid == "" {
+	q := r.URL.Query()
+	photoid := q.Get("photoid")
+	random := q.Get("random") == "true" || q.Get("random") == "1"
+
+	if photoid == "" && !random {
 		middleware.WriteError(w, http.StatusBadRequest, "photoid is required")
 		return
 	}
@@ -28,16 +31,32 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// ── Core photo row ────────────────────────────────────────────────────────
-	row := h.DB.QueryRow(ctx, `
-		SELECT
-			p.photoid, p.image_url, p.image_width, p.image_height,
-			COALESCE(p.title_text, ''), COALESCE(p.title_userid::text, ''),
-			COALESCE(tu.username, ''),  p.owner_userid::text,
-			COALESCE(p.description, '')
-		FROM  photos p
-		LEFT  JOIN users tu ON tu.userid = p.title_userid
-		WHERE p.photoid = $1 AND p.deleted_at IS NULL
-	`, photoid)
+	var row pgx.Row
+	if random {
+		row = h.DB.QueryRow(ctx, `
+			SELECT
+				p.photoid, p.image_url, p.image_width, p.image_height,
+				COALESCE(p.title_text, ''), COALESCE(p.title_userid::text, ''),
+				COALESCE(tu.username, ''),  p.owner_userid::text,
+				COALESCE(p.description, '')
+			FROM  photos p
+			LEFT  JOIN users tu ON tu.userid = p.title_userid
+			WHERE p.deleted_at IS NULL
+			ORDER BY random()
+			LIMIT 1
+		`)
+	} else {
+		row = h.DB.QueryRow(ctx, `
+			SELECT
+				p.photoid, p.image_url, p.image_width, p.image_height,
+				COALESCE(p.title_text, ''), COALESCE(p.title_userid::text, ''),
+				COALESCE(tu.username, ''),  p.owner_userid::text,
+				COALESCE(p.description, '')
+			FROM  photos p
+			LEFT  JOIN users tu ON tu.userid = p.title_userid
+			WHERE p.photoid = $1 AND p.deleted_at IS NULL
+		`, photoid)
+	}
 
 	var (
 		imgURL, titleText, titleUserID, titleUsername, ownerUserID, desc string

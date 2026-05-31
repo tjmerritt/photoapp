@@ -106,6 +106,15 @@
     </div>
 
     <div class="ml-auto flex items-center gap-1">
+      <!-- Random photo -->
+      <button @click="loadPhoto('random')"
+              class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="Random photo" title="Random photo">
+        <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M4 16v-4a8 8 0 0116 0v4M4 16l-2 2m2-2l2 2m12-2l-2 2m2-2l2 2"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0l2 2M4 4L2 6m16 2V4m0 0l2 2m-2-2l-2 2"/>
+        </svg>
+      </button>
       <!-- Settings -->
       <button @click="showToast('No settings yet.')"
               class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="Settings">
@@ -517,7 +526,10 @@
         this.loading = true;
         this.error = null;
         try {
-          const resp = await fetch(`/api/v1/photo?photoid=${encodeURIComponent(photoid)}`);
+          const url = photoid === 'random'
+            ? '/api/v1/photo?random=true'
+            : `/api/v1/photo?photoid=${encodeURIComponent(photoid)}`;
+          const resp = await fetch(url);
           if (!resp.ok) throw new Error(`Photo not found (${resp.status})`);
           this.photo = await resp.json();
         } catch (e) { this.error = e.message; }
