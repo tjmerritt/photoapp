@@ -163,6 +163,10 @@ type UpdateCommentRequest struct {
 	Comment string `json:"comment"`
 }
 
+type UpdatePhotoTitleRequest struct {
+	Title string `json:"title"`
+}
+
 // EmojiTypeResponse is returned after uploading a new emoji type.
 type EmojiTypeResponse struct {
 	EmojiID   string  `json:"emojiid"`

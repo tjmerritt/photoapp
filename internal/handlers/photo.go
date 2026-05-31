@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/tjmerritt/photoapp/internal/config"
@@ -169,4 +171,70 @@ func (h *UserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	middleware.WriteJSON(w, http.StatusOK, u)
+}
+
+// PatchPhotoHandler handles PATCH /api/v1/photo?photoid=<id>
+// Allows the title owner or photo owner to update the title text.
+type PatchPhotoHandler struct {
+	DB  *db.Pool
+	Cfg *config.Config
+}
+
+func (h *PatchPhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	photoid := r.URL.Query().Get("photoid")
+	if photoid == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "photoid is required")
+		return
+	}
+
+	currentUser, ok := middleware.UserID(r.Context())
+	if !ok || currentUser == "" {
+		middleware.WriteError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	var body models.UpdatePhotoTitleRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	title := strings.TrimSpace(body.Title)
+	if title == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "title must not be empty")
+		return
+	}
+
+	ctx := r.Context()
+
+	// Verify the photo exists and the caller is allowed to edit it.
+	var ownerID, titleUserID string
+	err := h.DB.QueryRow(ctx, `
+		SELECT owner_userid::text, COALESCE(title_userid::text, owner_userid::text)
+		FROM   photos
+		WHERE  photoid = $1 AND deleted_at IS NULL
+	`, photoid).Scan(&ownerID, &titleUserID)
+	if err == pgx.ErrNoRows {
+		middleware.WriteError(w, http.StatusNotFound, "photo not found")
+		return
+	}
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if currentUser != ownerID && currentUser != titleUserID {
+		middleware.WriteError(w, http.StatusForbidden, "not allowed to edit this title")
+		return
+	}
+
+	_, err = h.DB.Exec(ctx, `
+		UPDATE photos
+		SET    title_text = $1, title_userid = $2, updated_at = NOW()
+		WHERE  photoid = $3
+	`, title, currentUser, photoid)
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, map[string]string{"title": title})
 }

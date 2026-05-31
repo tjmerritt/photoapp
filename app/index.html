@@ -154,8 +154,30 @@
             <img :src="photo.image.url" :alt="photo.title.text"
                  class="w-full object-cover max-h-[70vh]" loading="eager" />
           </div>
-          <div class="mt-4">
-            <h1 class="text-3xl font-serif" x-text="photo.title.text"></h1>
+          <div class="mt-4" x-data="titleEditor(photo)">
+            <!-- View mode -->
+            <template x-if="!editing">
+              <h1 class="text-3xl font-serif"
+                  :class="photo.title.canedit ? 'cursor-pointer hover:text-accent transition-colors' : ''"
+                  :title="photo.title.canedit ? 'Click to edit title' : ''"
+                  @click="photo.title.canedit && startEdit()"
+                  x-text="photo.title.text">
+              </h1>
+            </template>
+            <!-- Edit mode -->
+            <template x-if="editing">
+              <div class="flex items-center gap-2">
+                <input x-ref="titleInput"
+                       x-model="draft"
+                       @keydown.enter.prevent="save()"
+                       @keydown.escape.prevent="cancel()"
+                       @blur="save()"
+                       class="flex-1 text-3xl font-serif bg-transparent border-b-2 border-accent focus:outline-none" />
+                <button @mousedown.prevent="cancel()"
+                        class="text-muted hover:text-accent transition text-2xl leading-none flex-shrink-0"
+                        title="Cancel">&times;</button>
+              </div>
+            </template>
             <p class="mt-2 text-muted leading-relaxed text-sm" x-text="photo.description"></p>
           </div>
         </div>
@@ -497,6 +519,65 @@
     };
   }
 
+  function titleEditor(photo) {
+    return {
+      photo,
+      editing: false,
+      draft: '',
+      original: '',
+
+      startEdit() {
+        this.original = this.photo.title.text;
+        this.draft    = this.photo.title.text;
+        this.editing  = true;
+        this.$nextTick(() => {
+          const el = this.$refs.titleInput;
+          if (el) { el.focus(); el.select(); }
+        });
+      },
+
+      cancel() {
+        this.draft   = this.original;
+        this.editing = false;
+      },
+
+      async save() {
+        if (!this.editing) return;
+        const newTitle = this.draft.trim();
+        // Treat empty or unchanged as a cancel.
+        if (!newTitle || newTitle === this.original) {
+          this.cancel();
+          return;
+        }
+        this.editing = false;
+        try {
+          const resp = await fetch(
+            `/api/v1/photo?photoid=${encodeURIComponent(this.photo.photoid)}`,
+            {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-User-ID': window._currentUserID || '',
+              },
+              body: JSON.stringify({ title: newTitle }),
+            }
+          );
+          if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.error || `HTTP ${resp.status}`);
+          }
+          this.photo.title.text = newTitle;
+          this.original         = newTitle;
+        } catch (e) {
+          // Roll back on failure and show error.
+          this.photo.title.text = this.original;
+          // Bubble up to parent photoApp showToast if accessible.
+          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Save failed: ${e.message}` }));
+        }
+      },
+    };
+  }
+
   function photoApp() {
     return {
       photo: null,
@@ -520,6 +601,7 @@
         const params = new URLSearchParams(window.location.search);
         const photoid = params.get('photoid') || 'aaaaaaaa-0000-0000-0000-000000000001';
         await this.loadPhoto(photoid);
+        document.addEventListener('photoapp:toast', (e) => this.showToast(e.detail));
       },
 
       async loadPhoto(photoid) {
