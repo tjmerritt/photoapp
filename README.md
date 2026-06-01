@@ -182,7 +182,23 @@ Files are stored in `UPLOAD_DIR` (default `./uploads`) and served at `UPLOAD_URL
 
 ## Importing Photos
 
-The `import-photos` command inserts photos from a list of URLs. It fetches each image to read its dimensions from the header and derives a title from the URL basename.
+The `import-photos` command bulk-inserts photos from a list of URLs. Each image is downloaded once: dimensions are decoded from the image header and EXIF metadata is extracted and stored as labels. The title is derived from the URL basename by default.
+
+### Input format
+
+The input file is a CSV (or plain text). Each row can have one or two fields:
+
+```
+# Plain URL — always inserts a new photo
+https://example.com/photo.jpg
+
+# URL with photoid — re-uses an existing photo if the URL matches
+https://example.com/photo.jpg,aaaaaaaa-0000-0000-0000-000000000001
+```
+
+Lines starting with `#` are treated as comments. The header row `url,photoid,action` (produced by `--output`) is skipped automatically.
+
+### Basic usage
 
 ```bash
 # From a file
@@ -191,24 +207,56 @@ go run ./cmd/import-photos --owner <user-uuid> urls.txt
 # From stdin
 cat urls.txt | go run ./cmd/import-photos --owner <user-uuid>
 
-# Dry run (no DB writes)
+# Dry run — prints what would be inserted/updated without touching the DB
 go run ./cmd/import-photos --owner <user-uuid> --dry-run urls.txt
 
 # Via make
 ARGS="--owner <user-uuid> urls.txt" make import-photos
 ```
 
-**Flags:**
+### Adding labels
+
+EXIF metadata is automatically extracted as labels (camera make/model, lens, shutter speed, aperture, ISO, focal length, GPS, date taken, and more). Additional labels can be added or overridden with `--label`:
+
+```bash
+go run ./cmd/import-photos \
+  --owner <user-uuid> \
+  --label "Season=Summer" \
+  --label "Location=Mt. Rainier, WA" \
+  urls.txt
+```
+
+`--label` values override any EXIF label with the same name. Supported image formats for EXIF and dimension detection: JPEG, PNG, GIF.
+
+### Output file and idempotent re-runs
+
+Use `--output` to write a `url,photoid,action` CSV after each run. Feed that file back in on subsequent runs to update existing photos without duplicating them:
+
+```bash
+# First run — inserts photos and records their IDs
+go run ./cmd/import-photos --owner <user-uuid> --output results.csv urls.txt
+
+# Second run — skips photos whose URL already matches; only inserts new ones
+go run ./cmd/import-photos --owner <user-uuid> --output results.csv results.csv
+
+# Force label refresh — re-downloads every image and replaces all labels
+go run ./cmd/import-photos --owner <user-uuid> --refresh-exif --output results.csv results.csv
+```
+
+When a photo is unchanged (URL matches, `--refresh-exif` not set), any `--label` flags are still applied to that photo without re-downloading the image.
+
+### Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--db` | `$DATABASE_URL` | PostgreSQL DSN |
 | `--owner` | *(required)* | UUID of the owning user |
-| `--title` | | Fixed title for every photo |
-| `--title-from-url` | `true` | Derive title from URL basename |
-| `--dry-run` | `false` | Print rows without writing to DB |
-
-Lines starting with `#` and blank lines in the URL file are ignored. Failed URLs are logged and skipped without aborting the run. Supported image formats for dimension detection: JPEG, PNG, GIF.
+| `--title` | | Fixed title for every photo (overrides `--title-from-url`) |
+| `--title-from-url` | `true` | Derive title from URL path basename |
+| `--label` | | Extra label as `Name=Value`; may be repeated |
+| `--output` | | Write `url,photoid,action` results to this CSV file |
+| `--refresh-exif` | `false` | Re-download images and replace labels even for existing photos |
+| `--dry-run` | `false` | Print what would happen without writing to the DB |
 
 ## Environment Variables
 
@@ -234,6 +282,7 @@ Lines starting with `#` and blank lines in the URL file are ignored. Failed URLs
 - [`jackc/pgx/v5`](https://github.com/jackc/pgx) — PostgreSQL driver with connection pooling
 - [`julienschmidt/httprouter`](https://github.com/julienschmidt/httprouter) — Fast HTTP router
 - [`google/uuid`](https://github.com/google/uuid) — UUID generation
+- [`rwcarlsen/goexif`](https://github.com/rwcarlsen/goexif) — EXIF metadata extraction (used by `import-photos`)
 
 No ORM is used. All queries are plain SQL.
 

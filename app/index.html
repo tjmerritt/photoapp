@@ -190,7 +190,7 @@
             <!-- View mode -->
             <template x-if="!editing">
               <h1 class="text-3xl font-serif"
-                  :class="photo.title.canedit ? 'cursor-pointer hover:text-accent transition-colors' : ''"
+                  :class="photo.title.canedit ? 'cursor-pointer hover:text-gray-400 transition-colors' : ''"
                   :title="photo.title.canedit ? 'Click to edit title' : ''"
                   @click="photo.title.canedit && startEdit()"
                   x-text="photo.title.text">
@@ -204,7 +204,7 @@
                        @keydown.enter.prevent="save()"
                        @keydown.escape.prevent="cancel()"
                        @blur="save()"
-                       class="flex-1 text-3xl font-serif bg-transparent border-b-2 border-accent focus:outline-none" />
+                       class="flex-1 text-3xl font-serif bg-transparent border-b-2 border-gray-300 focus:outline-none" />
                 <button @mousedown.prevent="cancel()"
                         class="text-muted hover:text-accent transition text-2xl leading-none flex-shrink-0"
                         title="Cancel">&times;</button>

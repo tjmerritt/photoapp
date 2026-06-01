@@ -1,29 +1,40 @@
 // cmd/import-photos/main.go
 // Reads photo URLs from a file (or stdin) and inserts them into the database.
+// EXIF metadata is extracted from each image and stored as labels.
 //
 // Usage:
 //
 //	import-photos [flags] [file]
 //	cat urls.txt | import-photos [flags]
 //
+// Input format (one entry per line, lines starting with # are ignored):
+//
+//	<url>
+//	<url>,<photoid>   — if photoid exists in DB with the same URL, update labels only
+//
 // Flags:
 //
-//	--db          PostgreSQL DSN (default: $DATABASE_URL)
-//	--owner       UUID of the owning user (required)
-//	--title       Fixed title text for every photo (optional)
+//	--db              PostgreSQL DSN (default: $DATABASE_URL)
+//	--owner           UUID of the owning user (required)
+//	--title           Fixed title text for every photo (optional)
 //	--title-from-url  Derive title from the URL path basename (default true)
-//	--dry-run     Print what would be inserted without writing to the DB
+//	--label           Extra label in Name=Value format; may be repeated
+//	--output          Write url,photoid results to this file
+//	--refresh-exif    Re-download images and update labels even when photoid already exists
+//	--dry-run         Print what would be inserted without writing to the DB
 package main
 
 import (
-	"bufio"
+	"bytes"
 	"context"
+	"encoding/csv"
 	"flag"
 	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -33,7 +44,24 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rwcarlsen/goexif/exif"
 )
+
+// label is a name/value pair.
+type label struct{ name, value string }
+
+// labelFlag is a flag.Value that accumulates --label Name=Value entries.
+type labelFlag []label
+
+func (l *labelFlag) String() string { return fmt.Sprintf("%v", *l) }
+func (l *labelFlag) Set(s string) error {
+	parts := strings.SplitN(s, "=", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return fmt.Errorf("label must be in Name=Value format, got %q", s)
+	}
+	*l = append(*l, label{strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])})
+	return nil
+}
 
 func main() {
 	var (
@@ -42,6 +70,9 @@ func main() {
 		fixedTitle   string
 		titleFromURL bool
 		dryRun       bool
+		refreshEXIF  bool
+		outputFile   string
+		extraLabels  labelFlag
 	)
 
 	flag.StringVar(&dbURL, "db", os.Getenv("DATABASE_URL"), "PostgreSQL DSN (env: DATABASE_URL)")
@@ -49,6 +80,9 @@ func main() {
 	flag.StringVar(&fixedTitle, "title", "", "Fixed title for every photo (overrides --title-from-url)")
 	flag.BoolVar(&titleFromURL, "title-from-url", true, "Derive title from URL basename")
 	flag.BoolVar(&dryRun, "dry-run", false, "Print rows without inserting")
+	flag.BoolVar(&refreshEXIF, "refresh-exif", false, "Re-download images and replace labels even when photoid already exists")
+	flag.StringVar(&outputFile, "output", "", "Write url,photoid results to this CSV file")
+	flag.Var(&extraLabels, "label", "Extra label in Name=Value format (repeatable)")
 	flag.Parse()
 
 	if ownerID == "" {
@@ -76,6 +110,20 @@ func main() {
 		input = os.Stdin
 	}
 
+	// ── Open output CSV ───────────────────────────────────────────────────────
+	var csvWriter *csv.Writer
+	if outputFile != "" && !dryRun {
+		f, err := os.Create(outputFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error creating output file: %v\n", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+		csvWriter = csv.NewWriter(f)
+		defer csvWriter.Flush()
+		_ = csvWriter.Write([]string{"url", "photoid", "action"})
+	}
+
 	// ── Connect to DB ─────────────────────────────────────────────────────────
 	var pool *pgxpool.Pool
 	if !dryRun {
@@ -92,92 +140,373 @@ func main() {
 
 	// ── Process URLs ──────────────────────────────────────────────────────────
 	client := &http.Client{Timeout: 30 * time.Second}
-	scanner := bufio.NewScanner(input)
-	inserted, skipped := 0, 0
+	reader := csv.NewReader(input)
+	reader.Comment = '#'
+	reader.FieldsPerRecord = -1 // allow variable number of fields
+	reader.TrimLeadingSpace = true
+	inserted, updated, unchanged, skipped := 0, 0, 0, 0
 
-	for scanner.Scan() {
-		rawURL := strings.TrimSpace(scanner.Text())
-		if rawURL == "" || strings.HasPrefix(rawURL, "#") {
+	for {
+		fields, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			slog.Warn("skipping malformed line", "error", err)
+			skipped++
+			continue
+		}
+		if len(fields) == 0 {
 			continue
 		}
 
-		title := fixedTitle
-		if title == "" && titleFromURL {
-			title = titleFromURLPath(rawURL)
+		rawURL := strings.TrimSpace(fields[0])
+		if rawURL == "" || rawURL == "url" {
+			continue // skip blank lines and the header row
 		}
 
-		w, h, err := fetchDimensions(client, rawURL)
+		hintID := ""
+		if len(fields) >= 2 {
+			hintID = strings.TrimSpace(fields[1])
+		}
+
+		ctx := context.Background()
+
+		// When a photoid hint is present and --refresh-exif is off, check the DB
+		// first. If the URL matches we can skip downloading entirely.
+		if hintID != "" && !refreshEXIF && !dryRun {
+			var existingURL string
+			err := pool.QueryRow(ctx,
+				`SELECT image_url FROM photos WHERE photoid = $1 AND deleted_at IS NULL`,
+				hintID,
+			).Scan(&existingURL)
+			if err == nil && existingURL == rawURL {
+				action := "unchanged"
+				if len(extraLabels) > 0 {
+					if err := patchLabels(ctx, pool, hintID, ownerID, []label(extraLabels)); err != nil {
+						slog.Warn("failed to patch labels", "photoid", hintID, "error", err)
+					} else {
+						action = "updated"
+						updated++
+					}
+				} else {
+					unchanged++
+				}
+				slog.Info(action, "photoid", hintID, "url", rawURL)
+				if csvWriter != nil {
+					_ = csvWriter.Write([]string{rawURL, hintID, action})
+				}
+				continue
+			}
+			// URL mismatch or not found — fall through to download + insert.
+			if err == nil {
+				slog.Warn("photoid URL mismatch — inserting new photo",
+					"photoid", hintID, "db_url", existingURL, "input_url", rawURL)
+			} else {
+				slog.Warn("photoid not found — inserting new photo", "photoid", hintID)
+			}
+			hintID = "" // don't try to update a mismatched/missing row
+		}
+
+		imgBytes, err := fetchImage(client, rawURL)
 		if err != nil {
-			slog.Warn("skipping URL: could not fetch dimensions", "url", rawURL, "error", err)
+			slog.Warn("skipping URL: download failed", "url", rawURL, "error", err)
 			skipped++
 			continue
 		}
 
+		w, h, err := imageDimensions(imgBytes)
+		if err != nil {
+			slog.Warn("skipping URL: could not decode image dimensions", "url", rawURL, "error", err)
+			skipped++
+			continue
+		}
+
+		exifLabels := extractEXIF(imgBytes)
+		allLabels := mergeLabels(exifLabels, []label(extraLabels))
+
 		if dryRun {
-			fmt.Printf("[dry-run] INSERT photo url=%s title=%q w=%d h=%d owner=%s\n", rawURL, title, w, h, ownerID)
+			action := "insert"
+			if hintID != "" {
+				action = fmt.Sprintf("update labels for %s", hintID)
+			}
+			fmt.Printf("[dry-run] %s url=%s title=%q w=%d h=%d\n",
+				action, rawURL, titleFor(rawURL, fixedTitle, titleFromURL), w, h)
+			for _, l := range allLabels {
+				fmt.Printf("           label %q = %q\n", l.name, l.value)
+			}
 			inserted++
 			continue
 		}
 
-		ctx := context.Background()
-		var photoID string
-		err = pool.QueryRow(ctx, `
-			INSERT INTO photos (owner_userid, image_url, image_width, image_height, title_text, title_userid)
-			VALUES ($1, $2, $3, $4, $5, $1)
-			RETURNING photoid::text
-		`, ownerID, rawURL, w, h, title).Scan(&photoID)
+		photoID, action, err := upsertPhoto(ctx, pool, upsertParams{
+			hintID:  hintID,
+			rawURL:  rawURL,
+			ownerID: ownerID,
+			title:   titleFor(rawURL, fixedTitle, titleFromURL),
+			width:   w,
+			height:  h,
+			labels:  allLabels,
+		})
 		if err != nil {
-			slog.Warn("skipping URL: insert failed", "url", rawURL, "error", err)
+			slog.Warn("skipping URL", "url", rawURL, "error", err)
 			skipped++
 			continue
 		}
 
-		slog.Info("inserted photo", "photoid", photoID, "url", rawURL, "title", title, "width", w, "height", h)
-		inserted++
+		slog.Info(action, "photoid", photoID, "url", rawURL, "labels", len(allLabels))
+		if action == "inserted" {
+			inserted++
+		} else {
+			updated++
+		}
+
+		if csvWriter != nil {
+			_ = csvWriter.Write([]string{rawURL, photoID, action})
+		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "error reading input: %v\n", err)
-		os.Exit(1)
-	}
 
-	fmt.Printf("done: %d inserted, %d skipped\n", inserted, skipped)
+	fmt.Printf("done: %d inserted, %d updated, %d unchanged, %d skipped\n", inserted, updated, unchanged, skipped)
 }
 
-// fetchDimensions downloads just enough of the image to decode its header.
-func fetchDimensions(client *http.Client, imageURL string) (int, int, error) {
+type upsertParams struct {
+	hintID  string
+	rawURL  string
+	ownerID string
+	title   string
+	width   int
+	height  int
+	labels  []label
+}
+
+// upsertPhoto either inserts a new photo or, when hintID is supplied and the
+// DB row's image_url matches rawURL, replaces all labels for that photo.
+// Returns the photoid and a string describing what happened.
+func upsertPhoto(ctx context.Context, pool *pgxpool.Pool, p upsertParams) (string, string, error) {
+	if p.hintID != "" {
+		// Check whether the existing photo has the same URL.
+		var existingURL string
+		err := pool.QueryRow(ctx,
+			`SELECT image_url FROM photos WHERE photoid = $1 AND deleted_at IS NULL`,
+			p.hintID,
+		).Scan(&existingURL)
+		if err == nil && existingURL == p.rawURL {
+			// URL matches — update labels only.
+			if err := replaceLabels(ctx, pool, p.hintID, p.ownerID, p.labels); err != nil {
+				return "", "", fmt.Errorf("replacing labels: %w", err)
+			}
+			return p.hintID, "updated", nil
+		}
+		if err == nil {
+			slog.Warn("photoid found but URL mismatch — inserting new photo",
+				"photoid", p.hintID, "db_url", existingURL, "input_url", p.rawURL)
+		} else {
+			slog.Warn("photoid not found in DB — inserting new photo",
+				"photoid", p.hintID, "error", err)
+		}
+	}
+
+	// Insert new photo.
+	var photoID string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO photos (owner_userid, image_url, image_width, image_height, title_text, title_userid)
+		VALUES ($1, $2, $3, $4, $5, $1)
+		RETURNING photoid::text
+	`, p.ownerID, p.rawURL, p.width, p.height, p.title).Scan(&photoID)
+	if err != nil {
+		return "", "", fmt.Errorf("inserting photo: %w", err)
+	}
+
+	if err := replaceLabels(ctx, pool, photoID, p.ownerID, p.labels); err != nil {
+		return photoID, "inserted", fmt.Errorf("inserting labels: %w", err)
+	}
+	return photoID, "inserted", nil
+}
+
+// patchLabels upserts only the supplied labels by name, leaving all other
+// existing labels for the photo untouched.
+func patchLabels(ctx context.Context, pool *pgxpool.Pool, photoID, ownerID string, labels []label) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	for _, l := range labels {
+		// Delete any existing label with this name, then re-insert.
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM labels WHERE photoid = $1 AND name = $2`,
+			photoID, l.name,
+		); err != nil {
+			return fmt.Errorf("deleting label %q: %w", l.name, err)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO labels (photoid, added_by_userid, name, value)
+			VALUES ($1, $2, $3, $4)
+		`, photoID, ownerID, l.name, l.value); err != nil {
+			return fmt.Errorf("inserting label %q: %w", l.name, err)
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+// replaceLabels deletes existing labels for a photo and inserts the new set.
+func replaceLabels(ctx context.Context, pool *pgxpool.Pool, photoID, ownerID string, labels []label) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM labels WHERE photoid = $1`, photoID,
+	); err != nil {
+		return err
+	}
+
+	for _, l := range labels {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO labels (photoid, added_by_userid, name, value)
+			VALUES ($1, $2, $3, $4)
+		`, photoID, ownerID, l.name, l.value); err != nil {
+			return fmt.Errorf("inserting label %q: %w", l.name, err)
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+// titleFor resolves a photo title from the available inputs.
+func titleFor(rawURL, fixed string, fromURL bool) string {
+	if fixed != "" {
+		return fixed
+	}
+	if fromURL {
+		return titleFromURLPath(rawURL)
+	}
+	return ""
+}
+
+// fetchImage downloads the full image body into memory.
+func fetchImage(client *http.Client, imageURL string) ([]byte, error) {
 	resp, err := client.Get(imageURL)
 	if err != nil {
-		return 0, 0, err
+		return nil, err
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
-		return 0, 0, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
+	return io.ReadAll(resp.Body)
+}
 
-	cfg, _, err := image.DecodeConfig(resp.Body)
+// imageDimensions decodes width/height from raw image bytes.
+func imageDimensions(data []byte) (int, int, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return 0, 0, fmt.Errorf("decode image config: %w", err)
 	}
 	return cfg.Width, cfg.Height, nil
 }
 
+// exifFields lists the EXIF tags to surface as labels.
+var exifFields = []struct {
+	tag   exif.FieldName
+	label string
+}{
+	{exif.Make, "Camera Make"},
+	{exif.Model, "Camera Model"},
+	{exif.LensMake, "Lens Make"},
+	{exif.LensModel, "Lens Model"},
+	{exif.ExposureTime, "Shutter Speed"},
+	{exif.FNumber, "Aperture"},
+	{exif.ISOSpeedRatings, "ISO"},
+	{exif.FocalLength, "Focal Length"},
+	{exif.FocalLengthIn35mmFilm, "Focal Length (35mm)"},
+	{exif.Flash, "Flash"},
+	{exif.WhiteBalance, "White Balance"},
+	{exif.ExposureMode, "Exposure Mode"},
+	{exif.ExposureProgram, "Exposure Program"},
+	{exif.Artist, "Artist"},
+	{exif.Copyright, "Copyright"},
+	{exif.Software, "Software"},
+	{exif.ImageDescription, "Description"},
+}
+
+// extractEXIF returns labels parsed from EXIF metadata. Missing tags are skipped.
+func extractEXIF(data []byte) []label {
+	x, err := exif.Decode(bytes.NewReader(data))
+	if err != nil && exif.IsCriticalError(err) {
+		return nil
+	}
+	if x == nil {
+		return nil
+	}
+
+	var labels []label
+
+	for _, f := range exifFields {
+		tag, err := x.Get(f.tag)
+		if err != nil {
+			continue
+		}
+		val := strings.Trim(strings.TrimSpace(tag.String()), `"`)
+		if val == "" {
+			continue
+		}
+		labels = append(labels, label{f.label, val})
+	}
+
+	if t, err := x.DateTime(); err == nil {
+		labels = append(labels, label{"Date Taken", t.Format("2006-01-02 15:04:05")})
+	}
+
+	if lat, long, err := x.LatLong(); err == nil {
+		labels = append(labels, label{"GPS", fmt.Sprintf("%.6f, %.6f", lat, long)})
+	}
+
+	return labels
+}
+
+// mergeLabels combines base and extra; extra overrides on duplicate names.
+func mergeLabels(base, extra []label) []label {
+	if len(extra) == 0 {
+		return base
+	}
+	override := make(map[string]string, len(extra))
+	for _, l := range extra {
+		override[strings.ToLower(l.name)] = l.value
+	}
+	out := make([]label, 0, len(base)+len(extra))
+	for _, l := range base {
+		if v, ok := override[strings.ToLower(l.name)]; ok {
+			out = append(out, label{l.name, v})
+			delete(override, strings.ToLower(l.name))
+		} else {
+			out = append(out, l)
+		}
+	}
+	for _, l := range extra {
+		if _, still := override[strings.ToLower(l.name)]; still {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
 // titleFromURLPath turns the last path segment into a human-readable title.
-// e.g. "photo-1506905925346-21bda4d32df4" → "Photo 1506905925346 21bda4d32df4"
 func titleFromURLPath(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return ""
 	}
 	base := path.Base(u.Path)
-	// Strip query-style suffixes that sneak into the path (e.g. "file?w=1200")
 	base = strings.SplitN(base, "?", 2)[0]
-	// Strip extension
 	if ext := path.Ext(base); ext != "" {
 		base = strings.TrimSuffix(base, ext)
 	}
-	// Replace dashes/underscores with spaces and title-case
 	words := strings.FieldsFunc(base, func(r rune) bool { return r == '-' || r == '_' })
 	for i, w := range words {
 		if len(w) > 0 {
