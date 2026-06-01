@@ -184,7 +184,10 @@
         <div class="flex-1 min-w-0">
           <div class="rounded-2xl overflow-hidden bg-gray-100 shadow-lg">
             <img :src="photo.image.url" :alt="photo.title.text"
-                 class="w-full object-cover max-h-[70vh]" loading="eager" />
+                 :class="photo.image.height > photo.image.width
+                   ? 'w-full object-contain max-h-[85vh]'
+                   : 'w-full object-cover max-h-[70vh]'"
+                 loading="eager" />
           </div>
           <div class="mt-4" x-data="titleEditor(photo, () => authHeaders())">
             <!-- View mode -->
@@ -651,7 +654,7 @@
 
       async init() {
         const params = new URLSearchParams(window.location.search);
-        const photoid = params.get('photoid') || 'aaaaaaaa-0000-0000-0000-000000000001';
+        const photoid = params.get('photoid') || 'random';
         await this.loadPhoto(photoid);
         document.addEventListener('photoapp:toast', (e) => this.showToast(e.detail));
       },
@@ -666,6 +669,9 @@
           const resp = await fetch(url, { headers: this.authHeaders() });
           if (!resp.ok) throw new Error(`Photo not found (${resp.status})`);
           this.photo = await resp.json();
+          // Keep the URL in sync so bookmarks and the back button work.
+          const qs = new URLSearchParams({ photoid: this.photo.photoid });
+          window.history.replaceState(null, '', `?${qs}`);
         } catch (e) { this.error = e.message; }
         this.loading = false;
       },
