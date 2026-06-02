@@ -22,7 +22,8 @@ type PhotoHandler struct {
 func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	photoid := q.Get("photoid")
-	random := q.Get("random") == "true" || q.Get("random") == "1"
+	random  := q.Get("random") == "true" || q.Get("random") == "1"
+	labelID := q.Get("label")
 
 	if photoid == "" && !random {
 		middleware.WriteError(w, http.StatusBadRequest, "photoid is required")
@@ -115,8 +116,16 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		photo.EmojisURL = &u
 	}
 
+	// ── Increment view count ──────────────────────────────────────────────────
+	_, _ = h.DB.Exec(ctx, `UPDATE photos SET view_count = view_count + 1 WHERE photoid = $1`, photoid)
+
 	// ── Related photos ────────────────────────────────────────────────────────
-	related, err := fetchRelated(ctx, h.DB, photoid)
+	var related []models.RelatedPhoto
+	if labelID != "" {
+		related, err = fetchRelatedByLabel(ctx, h.DB, photoid, labelID)
+	} else {
+		related, err = fetchRelated(ctx, h.DB, photoid)
+	}
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return

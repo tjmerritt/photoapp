@@ -107,7 +107,7 @@
 
     <div class="ml-auto flex items-center gap-1">
       <!-- Random photo -->
-      <button @click="loadPhoto('random')"
+      <button @click="loadPhoto('random', null)"
               class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="Random photo" title="Random photo">
         <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round"
@@ -177,51 +177,25 @@
   </div>
 
   <template x-if="photo && !loading">
-    <div class="animate-fadein">
+    <div class="animate-fadein space-y-4">
 
       <!-- Photo + Related -->
-      <div class="flex gap-6 items-start">
-        <div class="flex-1 min-w-0">
-          <div class="rounded-2xl overflow-hidden bg-gray-100 shadow-lg">
+      <div class="flex gap-4 items-start">
+        <div class="flex-1 min-w-0 bg-white rounded-2xl overflow-hidden ring-1 ring-[var(--border)] shadow-sm">
+          <div class="bg-gray-100">
             <img :src="photo.image.url" :alt="photo.title.text"
                  :class="photo.image.height > photo.image.width
                    ? 'w-full object-contain max-h-[85vh]'
                    : 'w-full object-cover max-h-[70vh]'"
                  loading="eager" />
           </div>
-          <div class="mt-4" x-data="titleEditor(photo, () => authHeaders())">
-            <!-- View mode -->
-            <template x-if="!editing">
-              <h1 class="text-3xl font-serif"
-                  :class="photo.title.canedit ? 'cursor-pointer hover:text-gray-400 transition-colors' : ''"
-                  :title="photo.title.canedit ? 'Click to edit title' : ''"
-                  @click="photo.title.canedit && startEdit()"
-                  x-text="photo.title.text">
-              </h1>
-            </template>
-            <!-- Edit mode -->
-            <template x-if="editing">
-              <div class="flex items-center gap-2">
-                <input x-ref="titleInput"
-                       x-model="draft"
-                       @keydown.enter.prevent="save()"
-                       @keydown.escape.prevent="cancel()"
-                       @blur="save()"
-                       class="flex-1 text-3xl font-serif bg-transparent border-b-2 border-gray-300 focus:outline-none" />
-                <button @mousedown.prevent="cancel()"
-                        class="text-muted hover:text-accent transition text-2xl leading-none flex-shrink-0"
-                        title="Cancel">&times;</button>
-              </div>
-            </template>
-            <p class="mt-2 text-muted leading-relaxed text-sm" x-text="photo.description"></p>
-          </div>
         </div>
 
         <template x-if="photo.related && photo.related.length">
-          <div class="w-36 shrink-0 hidden md:flex flex-col gap-3">
-            <h3 class="text-xs font-semibold uppercase tracking-widest text-muted">Related</h3>
+          <div class="w-36 shrink-0 hidden md:flex flex-col gap-3 self-stretch overflow-y-auto pr-1">
+            <h3 class="text-xs font-semibold uppercase tracking-widest text-muted sticky top-0 bg-[var(--surface)] py-1">Related</h3>
             <template x-for="rel in photo.related" :key="rel.photoid">
-              <a href="#" @click.prevent="loadPhoto(rel.photoid)" class="block rounded-xl overflow-hidden ring-1 ring-[var(--border)] hover:ring-accent/60 transition shadow-sm">
+              <a href="#" @click.prevent="loadPhoto(rel.photoid)" class="block rounded-xl overflow-hidden ring-1 ring-[var(--border)] hover:ring-accent/60 transition shadow-sm shrink-0">
                 <img :src="rel.imageurl" :alt="rel.photoid" class="w-full h-24 object-cover hover:opacity-90 transition" />
               </a>
             </template>
@@ -229,14 +203,49 @@
         </template>
       </div>
 
+      <!-- Title + Description -->
+      <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-5"
+           x-data="titleEditor(photo, () => authHeaders())">
+        <!-- View mode -->
+        <template x-if="!editing">
+          <h1 class="text-3xl font-serif"
+              :class="photo.title.canedit ? 'cursor-pointer hover:text-gray-400 transition-colors' : ''"
+              :title="photo.title.canedit ? 'Click to edit title' : ''"
+              @click="photo.title.canedit && startEdit()"
+              x-text="photo.title.text">
+          </h1>
+        </template>
+        <!-- Edit mode -->
+        <template x-if="editing">
+          <div class="flex items-center gap-2">
+            <input x-ref="titleInput"
+                   x-model="draft"
+                   @keydown.enter.prevent="save()"
+                   @keydown.escape.prevent="cancel()"
+                   @blur="save()"
+                   class="flex-1 text-3xl font-serif bg-transparent border-b-2 border-gray-300 focus:outline-none" />
+            <button @mousedown.prevent="cancel()"
+                    class="text-muted hover:text-accent transition text-2xl leading-none flex-shrink-0"
+                    title="Cancel">&times;</button>
+          </div>
+        </template>
+        <p class="mt-2 text-muted leading-relaxed text-sm" x-text="photo.description"></p>
+      </div>
+
       <!-- Labels -->
-      <div class="mt-8">
+      <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-4">
         <div class="flex flex-wrap gap-2 items-center">
           <template x-for="label in photo.labels" :key="label.labelid">
-            <div class="label-chip relative flex items-stretch rounded-full overflow-visible ring-1 ring-[var(--border)] shadow-sm text-sm"
+            <div class="label-chip relative flex items-stretch rounded-full overflow-visible shadow-sm text-sm transition-shadow"
+                 :class="activeLabelID === label.labelid
+                   ? 'ring-2 ring-accent'
+                   : 'ring-1 ring-[var(--border)]'"
                  x-data="{ hovered: false }" @mouseenter="hovered = true" @mouseleave="hovered = false">
               <span class="label-name flex items-center px-3 py-1 text-white font-medium text-xs rounded-l-full" x-text="label.name"></span>
-              <span class="flex items-center px-3 py-1 bg-white text-brand font-medium rounded-r-full" x-text="label.value"></span>
+              <span class="flex items-center px-3 py-1 bg-white text-brand font-medium rounded-r-full cursor-pointer hover:bg-gray-50 transition-colors"
+                    @click.stop="loadPhoto(photo.photoid, activeLabelID === label.labelid ? null : label.labelid)"
+                    :title="activeLabelID === label.labelid ? 'Clear label filter' : 'Find photos with this label'"
+                    x-text="label.value"></span>
               <template x-if="testUser && hovered">
                 <span class="absolute left-1/2 -translate-x-1/2 top-full flex flex-col items-center z-10" style="padding-top:3px">
                   <span class="flex items-center gap-1 bg-white border border-[var(--border)] rounded-lg shadow-md px-1 py-0.5">
@@ -268,7 +277,7 @@
       </div>
 
       <!-- Emojis -->
-      <div class="mt-6">
+      <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-4">
         <div class="flex flex-wrap items-center gap-2">
           <template x-for="em in photo.emojis" :key="em.emojiid">
             <div class="relative" x-data="{ holding: false, holdTimer: null }">
@@ -302,7 +311,7 @@
       </div>
 
       <!-- Comments -->
-      <div class="mt-10">
+      <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-5">
         <h2 class="font-serif text-xl mb-4">Comments</h2>
 
         <!-- New comment box -->
@@ -834,7 +843,7 @@
 
       selectTestUser(user) {
         this.testUser = user;
-        if (this.photo) this.loadPhoto(this.photo.photoid);
+        if (this.photo) this.loadPhoto(this.photo.photoid);  // preserve activeLabelID
       },
 
       userModal: false,
@@ -850,26 +859,37 @@
         '🍀','🎵','🌸','🦋','🌊','🚀','🌙','☀️','❄️','🌿',
       ],
 
+      activeLabelID: null,
+
       async init() {
         const params = new URLSearchParams(window.location.search);
         const photoid = params.get('photoid') || 'random';
-        await this.loadPhoto(photoid);
+        const label   = params.get('label') || null;
+        this.activeLabelID = label;
+        await this.loadPhoto(photoid, label);
         document.addEventListener('photoapp:toast', (e) => this.showToast(e.detail));
         document.addEventListener('photoapp:close-label-modal', () => { this.labelModal = false; });
       },
 
-      async loadPhoto(photoid) {
+      async loadPhoto(photoid, labelID) {
+        // labelID=undefined preserves activeLabelID; null clears it explicitly.
+        if (labelID !== undefined) this.activeLabelID = labelID || null;
         this.loading = true;
         this.error = null;
         try {
-          const url = photoid === 'random'
-            ? '/api/v1/photo?random=true'
-            : `/api/v1/photo?photoid=${encodeURIComponent(photoid)}`;
+          let url;
+          if (photoid === 'random') {
+            url = '/api/v1/photo?random=true';
+          } else {
+            url = `/api/v1/photo?photoid=${encodeURIComponent(photoid)}`;
+            if (this.activeLabelID) url += `&label=${encodeURIComponent(this.activeLabelID)}`;
+          }
           const resp = await fetch(url, { headers: this.authHeaders() });
           if (!resp.ok) throw new Error(`Photo not found (${resp.status})`);
           this.photo = await resp.json();
           // Keep the URL in sync so bookmarks and the back button work.
           const qs = new URLSearchParams({ photoid: this.photo.photoid });
+          if (this.activeLabelID) qs.set('label', this.activeLabelID);
           window.history.replaceState(null, '', `?${qs}`);
         } catch (e) { this.error = e.message; }
         this.loading = false;

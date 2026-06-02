@@ -154,6 +154,54 @@ func fetchRelated(ctx context.Context, pool *db.Pool, photoid string) ([]models.
 	return related, rows.Err()
 }
 
+// fetchRelatedByLabel returns up to 8 photos that share the same label name+value
+// as the given labelID, excluding the current photo.
+// The top 7 are chosen by view_count DESC; one additional is chosen at random
+// from the remaining candidates (if any exist beyond the top 7).
+func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID string) ([]models.RelatedPhoto, error) {
+	rows, err := pool.Query(ctx, `
+		WITH label_info AS (
+			SELECT name, value FROM labels WHERE labelid = $1 AND deleted_at IS NULL
+		),
+		candidates AS (
+			SELECT DISTINCT p.photoid::text, p.image_url, p.image_width, p.image_height, p.view_count
+			FROM   photos  p
+			JOIN   labels  l  ON l.photoid = p.photoid
+			JOIN   label_info li ON l.name = li.name AND l.value = li.value
+			WHERE  p.photoid != $2::uuid
+			  AND  p.deleted_at IS NULL
+			  AND  l.deleted_at IS NULL
+		),
+		top_seven AS (
+			SELECT * FROM candidates ORDER BY view_count DESC LIMIT 7
+		),
+		random_extra AS (
+			SELECT * FROM candidates
+			WHERE  photoid NOT IN (SELECT photoid FROM top_seven)
+			ORDER  BY random()
+			LIMIT  1
+		)
+		SELECT photoid, image_url, image_width, image_height FROM top_seven
+		UNION ALL
+		SELECT photoid, image_url, image_width, image_height FROM random_extra
+	`, labelID, photoid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	related := make([]models.RelatedPhoto, 0)
+	for rows.Next() {
+		var rp models.RelatedPhoto
+		if err := rows.Scan(&rp.PhotoID, &rp.ImageURL, &rp.Width, &rp.Height); err != nil {
+			return nil, err
+		}
+		rp.ClickURL = fmt.Sprintf("/?photoid=%s&label=%s", rp.PhotoID, labelID)
+		related = append(related, rp)
+	}
+	return related, rows.Err()
+}
+
 // fetchComments returns a page of comments for a photo or replies to a parent comment.
 // Pass parentID = "" for top-level comments.
 func fetchComments(ctx context.Context, pool *db.Pool, photoid, parentID string, offset, limit int) ([]models.Comment, int, error) {
