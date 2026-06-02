@@ -39,6 +39,8 @@ func NewRouter(pool *db.Pool, cfg *config.Config) http.Handler {
 	}))
 	r.HandlerFunc(http.MethodGet, "/api/v1/user",         users.ServeHTTP)
 	r.GET("/api/v1/labels",                               labels.List)
+	r.GET("/api/v1/label-names",                          labels.Names)
+	r.GET("/api/v1/label-values",                         labels.Values)
 	r.GET("/api/v1/emojis",                               emojis.List)
 	r.GET("/api/v1/emoji/users",                          emojis.ListUsers)
 	r.GET("/api/v1/emoji/types",                          emojis.ListTypes)

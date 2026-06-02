@@ -188,3 +188,51 @@ func (h *LabelsHandler) Delete(w http.ResponseWriter, r *http.Request, ps httpro
 
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// GET /api/v1/label-names  — distinct label names across all non-deleted labels.
+func (h *LabelsHandler) Names(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT DISTINCT name FROM labels WHERE deleted_at IS NULL ORDER BY name
+	`)
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	defer rows.Close()
+
+	names := []string{}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err == nil {
+			names = append(names, n)
+		}
+	}
+	middleware.WriteJSON(w, http.StatusOK, map[string][]string{"names": names})
+}
+
+// GET /api/v1/label-values?name=  — distinct values for a given label name.
+func (h *LabelsHandler) Values(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT DISTINCT value FROM labels WHERE name=$1 AND deleted_at IS NULL ORDER BY value
+	`, name)
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	defer rows.Close()
+
+	values := []string{}
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err == nil {
+			values = append(values, v)
+		}
+	}
+	middleware.WriteJSON(w, http.StatusOK, map[string][]string{"values": values})
+}
