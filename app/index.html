@@ -233,25 +233,28 @@
       <div class="mt-8">
         <div class="flex flex-wrap gap-2 items-center">
           <template x-for="label in photo.labels" :key="label.labelid">
-            <div class="label-chip group flex items-center rounded-full overflow-hidden ring-1 ring-[var(--border)] shadow-sm text-sm">
-              <span class="label-name px-3 py-1 text-white font-medium text-xs" x-text="label.name"></span>
-              <span class="px-3 py-1 bg-white text-brand font-medium" x-text="label.value"></span>
-              <template x-if="testUser">
-                <span class="flex items-center gap-0.5 pr-1 bg-white opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button @click="openLabelModal(label)"
-                          class="w-5 h-5 flex items-center justify-center rounded-full hover:bg-gray-100 text-muted hover:text-brand transition"
-                          title="Edit label">
-                    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 112.828 2.828L11.828 15.828a2 2 0 01-1.414.586H9v-2a2 2 0 01.586-1.414z"/>
-                    </svg>
-                  </button>
-                  <button @click="deleteLabel(label)"
-                          class="w-5 h-5 flex items-center justify-center rounded-full hover:bg-red-50 text-muted hover:text-red-500 transition"
-                          title="Delete label">
-                    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
-                    </svg>
-                  </button>
+            <div class="label-chip relative flex items-stretch rounded-full overflow-visible ring-1 ring-[var(--border)] shadow-sm text-sm"
+                 x-data="{ hovered: false }" @mouseenter="hovered = true" @mouseleave="hovered = false">
+              <span class="label-name flex items-center px-3 py-1 text-white font-medium text-xs rounded-l-full" x-text="label.name"></span>
+              <span class="flex items-center px-3 py-1 bg-white text-brand font-medium rounded-r-full" x-text="label.value"></span>
+              <template x-if="testUser && hovered">
+                <span class="absolute left-1/2 -translate-x-1/2 top-full flex flex-col items-center z-10" style="padding-top:3px">
+                  <span class="flex items-center gap-1 bg-white border border-[var(--border)] rounded-lg shadow-md px-1 py-0.5">
+                    <button @click.stop="openLabelModal(label)"
+                            class="w-6 h-6 flex items-center justify-center rounded hover:bg-gray-100 text-muted hover:text-brand transition"
+                            title="Edit">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 112.828 2.828L11.828 15.828a2 2 0 01-1.414.586H9v-2a2 2 0 01.586-1.414z"/>
+                      </svg>
+                    </button>
+                    <button @click.stop="deleteLabel(label)"
+                            class="w-6 h-6 flex items-center justify-center rounded hover:bg-red-50 text-muted hover:text-red-500 transition"
+                            title="Delete">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                      </svg>
+                    </button>
+                  </span>
                 </span>
               </template>
             </div>
@@ -482,24 +485,33 @@
         <!-- Name -->
         <div>
           <label class="text-xs font-medium text-muted block mb-1">Name</label>
-          <select x-show="!nameIsOther"
-                  x-model="selectedName"
-                  @change="onNameChange()"
-                  class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 bg-white">
-            <option value="" disabled>— choose a name —</option>
-            <template x-for="n in knownNames" :key="n">
-              <option :value="n" x-text="n"></option>
-            </template>
-            <option value="__other__">Other…</option>
-          </select>
-          <input x-show="nameIsOther"
-                 x-model="customName"
-                 x-ref="customNameInput"
-                 type="text" placeholder="Enter label name"
-                 class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 mt-1" />
-          <button x-show="nameIsOther"
-                  @click="nameIsOther = false; selectedName = ''"
-                  class="text-xs text-accent mt-1 hover:underline">← back to list</button>
+          <!-- Editing: name is fixed, shown as read-only -->
+          <template x-if="editingLabel">
+            <div class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm bg-gray-50 text-brand font-medium" x-text="editingLabel.name"></div>
+          </template>
+          <!-- Adding: full name picker -->
+          <template x-if="!editingLabel">
+            <div>
+              <select x-show="!nameIsOther"
+                      x-model="selectedName"
+                      @change="onNameChange()"
+                      class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 bg-white">
+                <option value="" disabled>— choose a name —</option>
+                <template x-for="n in knownNames" :key="n">
+                  <option :value="n" x-text="n"></option>
+                </template>
+                <option value="__other__">Other…</option>
+              </select>
+              <input x-show="nameIsOther"
+                     x-model="customName"
+                     x-ref="customNameInput"
+                     type="text" placeholder="Enter label name"
+                     class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 mt-1" />
+              <button x-show="nameIsOther"
+                      @click="nameIsOther = false; selectedName = ''"
+                      class="text-xs text-accent mt-1 hover:underline">← back to list</button>
+            </div>
+          </template>
         </div>
 
         <!-- Value -->
@@ -511,7 +523,7 @@
               <select x-show="!valueIsOther"
                       x-model="selectedValue"
                       class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 bg-white"
-                      @change="if (selectedValue === '__other__') { valueIsOther = true; selectedValue = ''; $nextTick(() => $refs.customValueInput?.focus()); }">
+                      @change="if (selectedValue === '__other__') { customValue = editingLabel ? editingLabel.value : ''; valueIsOther = true; selectedValue = ''; $nextTick(() => { $refs.customValueInput?.focus(); $refs.customValueInput?.select(); }); }">
                 <option value="" disabled>— choose a value —</option>
                 <template x-for="v in knownValues" :key="v">
                   <option :value="v" x-text="v"></option>
@@ -635,7 +647,7 @@
       customName:    '',
       nameIsOther:   false,
 
-      selectedValue: data ? data.value : '',
+      selectedValue: '',
       customValue:   '',
       valueIsOther:  false,
 
@@ -711,7 +723,7 @@
             resp = await fetch(`/api/v1/labels/${encodeURIComponent(this.editingLabel.labelid)}`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
-              body: JSON.stringify({ name, value }),
+              body: JSON.stringify({ value }),  // name is immutable when editing
             });
           } else {
             resp = await fetch(`/api/v1/labels?photoid=${encodeURIComponent(this.photo.photoid)}`, {
