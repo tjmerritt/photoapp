@@ -565,20 +565,66 @@
 
 <!-- Emoji picker modal -->
 <template x-if="emojiPickerOpen">
-  <div class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4" @click.self="emojiPickerOpen = false">
-    <div class="bg-white rounded-2xl shadow-2xl w-80 p-5 animate-scalein">
-      <div class="flex items-center justify-between mb-4">
+  <div class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
+       @click.self="emojiPickerOpen = false"
+       x-data="emojiPicker(photo, () => authHeaders())"
+       x-init="init()">
+    <div class="bg-white rounded-2xl shadow-2xl w-[28rem] p-5 animate-scalein flex flex-col" style="max-height:80vh">
+
+      <!-- Header -->
+      <div class="flex items-center justify-between mb-3 shrink-0">
         <h2 class="font-serif text-xl">Add Reaction</h2>
         <button @click="emojiPickerOpen = false" class="text-muted hover:text-brand text-2xl leading-none">&times;</button>
       </div>
-      <p class="text-xs text-muted mb-3">Tap an emoji to react to this photo.</p>
-      <div class="grid grid-cols-7 gap-2">
-        <template x-for="emoji in emojiPalette" :key="emoji">
-          <button @click="addEmoji(emoji)"
-                  class="text-2xl w-10 h-10 flex items-center justify-center rounded-xl hover:bg-gray-100 transition"
-                  x-text="emoji"></button>
-        </template>
+
+      <!-- Search -->
+      <div class="relative mb-3 shrink-0">
+        <input x-model="search"
+               @input.debounce.300ms="doSearch()"
+               type="search" placeholder="Search emojis…"
+               class="w-full pl-8 pr-3 py-2 text-sm border border-[var(--border)] rounded-xl focus:outline-none focus:ring-2 focus:ring-accent/30" />
+        <svg class="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 115 11a6 6 0 0112 0z"/>
+        </svg>
       </div>
+
+      <!-- Loading spinner -->
+      <div x-show="loading" class="flex justify-center py-8 shrink-0">
+        <div class="w-6 h-6 border-2 border-accent/30 border-t-accent rounded-full animate-spin"></div>
+      </div>
+
+      <!-- Emoji grid -->
+      <div x-show="!loading" class="overflow-y-auto flex-1 min-h-0">
+        <div x-show="emojis.length === 0" class="text-center text-muted text-sm py-8">No emojis found.</div>
+        <div class="grid grid-cols-8 gap-1">
+          <template x-for="em in emojis" :key="em.emojiid">
+            <button @click="react(em)"
+                    :title="em.alttext"
+                    :class="reactedIds.has(em.emojiid) ? 'bg-accent/10 ring-1 ring-accent/40' : 'hover:bg-gray-100'"
+                    class="text-2xl w-12 h-12 flex items-center justify-center rounded-xl transition select-none">
+              <template x-if="em.emoji">
+                <span x-text="em.emoji"></span>
+              </template>
+              <template x-if="!em.emoji && em.imageurl">
+                <img :src="em.imageurl" :alt="em.alttext" class="w-8 h-8 object-contain" />
+              </template>
+            </button>
+          </template>
+        </div>
+      </div>
+
+      <!-- Pagination -->
+      <div x-show="!loading && total > limit" class="flex items-center justify-between mt-3 pt-3 border-t border-[var(--border)] shrink-0 text-sm">
+        <button @click="prevPage()" :disabled="offset === 0"
+                class="px-3 py-1.5 rounded-lg border border-[var(--border)] hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition">← Prev</button>
+        <span class="text-xs text-muted">
+          <span x-text="offset + 1"></span>–<span x-text="Math.min(offset + limit, total)"></span>
+          of <span x-text="total"></span>
+        </span>
+        <button @click="nextPage()" :disabled="offset + limit >= total"
+                class="px-3 py-1.5 rounded-lg border border-[var(--border)] hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition">Next →</button>
+      </div>
+
     </div>
   </div>
 </template>
@@ -640,6 +686,90 @@
       },
 
       formatDate,
+    };
+  }
+
+  function emojiPicker(photo, getAuthHeaders) {
+    return {
+      photo,
+      getAuthHeaders,
+      search:     '',
+      emojis:     [],
+      total:      0,
+      offset:     0,
+      limit:      64,
+      loading:    false,
+      reactedIds: new Set(),
+
+      async init() {
+        // Pre-build set of emojis the user has already reacted with.
+        if (getAuthHeaders()['X-User-ID']) {
+          const uid = getAuthHeaders()['X-User-ID'];
+          (photo.emojis || []).forEach(em => {
+            if (em.users && em.users.some(u => u.id === uid)) {
+              this.reactedIds.add(em.emojiid);
+            }
+          });
+        }
+        await this.load();
+      },
+
+      async load() {
+        this.loading = true;
+        try {
+          const params = new URLSearchParams({ limit: this.limit, offset: this.offset });
+          if (this.search) params.set('search', this.search);
+          const resp = await fetch(`/api/v1/emoji/types?${params}`);
+          const data = await resp.json();
+          this.emojis = data.emojis || [];
+          this.total  = data.total  || 0;
+        } catch(e) {
+          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Failed to load emojis: ${e.message}` }));
+        }
+        this.loading = false;
+      },
+
+      doSearch() { this.offset = 0; this.load(); },
+      nextPage()  { this.offset += this.limit; this.load(); },
+      prevPage()  { this.offset = Math.max(0, this.offset - this.limit); this.load(); },
+
+      async react(em) {
+        const headers = this.getAuthHeaders();
+        if (!headers['X-User-ID']) {
+          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: 'Select a user to react.' }));
+          return;
+        }
+        const alreadyReacted = this.reactedIds.has(em.emojiid);
+        const method = alreadyReacted ? 'DELETE' : 'POST';
+        try {
+          const resp = await fetch(
+            `/api/v1/emoji/react?photoid=${encodeURIComponent(this.photo.photoid)}&emojiid=${encodeURIComponent(em.emojiid)}`,
+            { method, headers }
+          );
+          if (!resp.ok) {
+            const e = await resp.json().catch(() => ({}));
+            throw new Error(e.error || `HTTP ${resp.status}`);
+          }
+          if (alreadyReacted) {
+            this.reactedIds.delete(em.emojiid);
+            const existing = this.photo.emojis.find(e => e.emojiid === em.emojiid);
+            if (existing) {
+              existing.count--;
+              if (existing.count <= 0) this.photo.emojis = this.photo.emojis.filter(e => e.emojiid !== em.emojiid);
+            }
+          } else {
+            this.reactedIds.add(em.emojiid);
+            const existing = this.photo.emojis.find(e => e.emojiid === em.emojiid);
+            if (existing) {
+              existing.count++;
+            } else {
+              this.photo.emojis.push({ emojiid: em.emojiid, emoji: em.emoji, alttext: em.alttext, count: 1, users: [] });
+            }
+          }
+        } catch(e) {
+          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Reaction failed: ${e.message}` }));
+        }
+      },
     };
   }
 
@@ -854,11 +984,6 @@
 
       toast: { visible: false, message: '', timer: null },
 
-      emojiPalette: [
-        '❤️','🔥','😍','🏔️','✨','👏','🎉','😮','😂','😢',
-        '😎','🤩','💯','🙌','👍','👎','💪','🌟','🌈','⚡',
-        '🍀','🎵','🌸','🦋','🌊','🚀','🌙','☀️','❄️','🌿',
-      ],
 
       activeLabelID: null,
 
@@ -925,13 +1050,6 @@
         }
       },
 
-      addEmoji(emoji) {
-        this.emojiPickerOpen = false;
-        const existing = this.photo.emojis.find(e => e.emoji === emoji);
-        if (existing) { existing.count++; }
-        else { this.photo.emojis.push({ emojiid: 'local-' + Date.now(), emoji, count: 1, users: [] }); }
-        this.showToast(`Reacted with ${emoji}  (saving not yet available)`);
-      },
     };
   }
 </script>
