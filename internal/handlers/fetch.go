@@ -181,9 +181,9 @@ func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID st
 			ORDER  BY random()
 			LIMIT  1
 		)
-		SELECT photoid, image_url, image_width, image_height FROM top_seven
-		UNION ALL
 		SELECT photoid, image_url, image_width, image_height FROM random_extra
+		UNION ALL
+		SELECT photoid, image_url, image_width, image_height FROM top_seven
 	`, labelID, photoid)
 	if err != nil {
 		return nil, err
