@@ -346,7 +346,7 @@
         <!-- Comment list -->
         <div class="space-y-6">
           <template x-for="c in comments" :key="c.commentid">
-            <div class="animate-fadein" x-data="commentItem(c, photo.photoid, () => testUser, () => authHeaders())">
+            <div class="animate-fadein" x-data="commentItem(c, photo.photoid, () => testUser, () => authHeaders(), 0)">
               <div class="flex gap-3">
                 <img :src="c.author.tn || `https://i.pravatar.cc/48?u=${c.author.userid}`"
                      :alt="c.author.username"
@@ -396,60 +396,21 @@
                   <!-- Actions row -->
                   <div class="flex items-center gap-3 mt-2">
                     <template x-if="c.replycount > 0 && !showingReplies">
-                      <button @click="loadReplies()"
-                              class="text-xs text-accent hover:underline font-medium">
+                      <button @click="loadReplies()" class="text-xs text-accent hover:underline font-medium">
                         Replies (<span x-text="c.replycount"></span>)
                       </button>
                     </template>
                     <template x-if="showingReplies">
-                      <button @click="showingReplies = false; replyOpen = false"
-                              class="text-xs text-muted hover:text-brand">Hide replies</button>
+                      <button @click="showingReplies = false; replyOpen = false" class="text-xs text-muted hover:text-brand">Hide replies</button>
                     </template>
-                    <template x-if="testUser">
-                      <button @click="replyOpen = !replyOpen"
-                              class="text-xs text-muted hover:text-brand font-medium">Reply</button>
+                    <template x-if="canReply">
+                      <button @click="replyOpen = !replyOpen" class="text-xs text-muted hover:text-brand font-medium">Reply</button>
                     </template>
                   </div>
 
-                  <!-- Replies section -->
-                  <template x-if="showingReplies">
-                    <div class="mt-3 ml-2 pl-4 border-l-2 border-[var(--border)] space-y-4">
-                      <!-- Reply input -->
-                      <template x-if="testUser">
-                        <div class="bg-gray-50 rounded-xl border border-[var(--border)] p-3">
-                          <textarea x-model="replyText" rows="2" placeholder="Write a reply…"
-                                    class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea>
-                          <div class="flex justify-end mt-1">
-                            <button @click="postReply()" :disabled="postingReply || !replyText.trim()"
-                                    class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition disabled:opacity-40">
-                              <span x-text="postingReply ? 'Posting…' : 'Reply'"></span>
-                            </button>
-                          </div>
-                        </div>
-                      </template>
-                      <div x-show="loadingReplies" class="flex justify-center py-2">
-                        <div class="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin"></div>
-                      </div>
-                      <template x-for="reply in replies" :key="reply.commentid">
-                        <div class="flex gap-2">
-                          <img :src="reply.author.tn || `https://i.pravatar.cc/40?u=${reply.author.userid}`"
-                               :alt="reply.author.username"
-                               class="w-8 h-8 rounded-full object-cover shrink-0" />
-                          <div class="flex-1 min-w-0">
-                            <div class="flex items-baseline gap-2 flex-wrap">
-                              <span class="font-semibold text-xs" x-text="reply.author.username"></span>
-                              <span class="text-xs text-muted" x-text="formatDate(reply.date)"></span>
-                            </div>
-                            <p class="text-sm leading-relaxed mt-0.5" x-text="reply.comment"></p>
-                          </div>
-                        </div>
-                      </template>
-                    </div>
-                  </template>
-
-                  <!-- Inline reply box (when replies not shown) -->
+                  <!-- Inline reply box -->
                   <template x-if="replyOpen && !showingReplies">
-                    <div class="mt-3 bg-gray-50 rounded-xl border border-[var(--border)] p-3">
+                    <div class="mt-2 bg-gray-50 rounded-xl border border-[var(--border)] p-3">
                       <textarea x-model="replyText" rows="2" placeholder="Write a reply…"
                                 class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea>
                       <div class="flex justify-end mt-1">
@@ -458,6 +419,147 @@
                           <span x-text="postingReply ? 'Posting…' : 'Reply'"></span>
                         </button>
                       </div>
+                    </div>
+                  </template>
+
+                  <!-- Replies (depth 1–5, rendered as nested commentItem components) -->
+                  <template x-if="showingReplies">
+                    <div class="mt-3 space-y-3 border-l-2 border-[var(--border)] ml-2 pl-3">
+                      <template x-if="canReply && replyOpen">
+                        <div class="bg-gray-50 rounded-xl border border-[var(--border)] p-2">
+                          <textarea x-model="replyText" rows="2" placeholder="Write a reply…" class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea>
+                          <div class="flex justify-end mt-1">
+                            <button @click="postReply()" :disabled="postingReply || !replyText.trim()" class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition disabled:opacity-40">
+                              <span x-text="postingReply ? 'Posting…' : 'Reply'"></span>
+                            </button>
+                          </div>
+                        </div>
+                      </template>
+                      <div x-show="loadingReplies" class="flex justify-center py-2">
+                        <div class="w-4 h-4 border-2 border-accent/30 border-t-accent rounded-full animate-spin"></div>
+                      </div>
+                      <template x-for="r1 in replies" :key="r1.commentid">
+                        <div x-data="commentItem(r1, photoid, getUser, getHeaders, depth + 1)">
+                          <div class="flex gap-2">
+                            <img :src="`https://i.pravatar.cc/32?u=${c.author.userid}`" class="w-8 h-8 rounded-full object-cover shrink-0" />
+                            <div class="flex-1 min-w-0">
+                              <div class="flex items-baseline gap-2 flex-wrap">
+                                <span class="font-semibold text-xs" x-text="c.author.username"></span>
+                                <span class="text-xs text-muted" x-text="formatDate(c.date)"></span>
+                                <template x-if="testUser && testUser.userid === c.author.userid">
+                                  <span class="flex gap-2 ml-auto"><button @click="startEdit()" class="text-xs text-muted hover:text-brand">Edit</button><button @click="deleteComment()" class="text-xs text-muted hover:text-red-500">Delete</button></span>
+                                </template>
+                              </div>
+                              <template x-if="!editing"><p class="text-sm mt-0.5 leading-relaxed" x-text="c.comment"></p></template>
+                              <template x-if="editing">
+                                <div class="mt-1"><textarea x-model="editText" rows="2" @keydown.escape="cancelEdit()" class="w-full text-sm border border-[var(--border)] rounded-xl p-2 resize-none focus:outline-none focus:ring-2 focus:ring-accent/30"></textarea>
+                                  <div class="flex gap-2 justify-end mt-1"><button @click="cancelEdit()" class="text-xs text-muted hover:text-brand">Cancel</button><button @click="saveEdit()" :disabled="saving||!editText.trim()" class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="saving?'Saving…':'Save'"></span></button></div>
+                                </div>
+                              </template>
+                              <div class="flex items-center gap-3 mt-1">
+                                <template x-if="c.replycount > 0 && !showingReplies"><button @click="loadReplies()" class="text-xs text-accent hover:underline font-medium">Replies (<span x-text="c.replycount"></span>)</button></template>
+                                <template x-if="showingReplies"><button @click="showingReplies=false;replyOpen=false" class="text-xs text-muted hover:text-brand">Hide replies</button></template>
+                                <template x-if="canReply"><button @click="replyOpen=!replyOpen" class="text-xs text-muted hover:text-brand font-medium">Reply</button></template>
+                              </div>
+                              <template x-if="replyOpen && !showingReplies">
+                                <div class="mt-2 bg-gray-50 rounded-xl border border-[var(--border)] p-2"><textarea x-model="replyText" rows="2" placeholder="Write a reply…" class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea><div class="flex justify-end mt-1"><button @click="postReply()" :disabled="postingReply||!replyText.trim()" class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="postingReply?'Posting…':'Reply'"></span></button></div></div>
+                              </template>
+                              <template x-if="showingReplies">
+                                <div class="mt-2 space-y-3 border-l-2 border-[var(--border)] ml-2 pl-3">
+                                  <template x-if="canReply && replyOpen"><div class="bg-gray-50 rounded-xl border border-[var(--border)] p-2"><textarea x-model="replyText" rows="1" placeholder="Write a reply…" class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea><div class="flex justify-end mt-1"><button @click="postReply()" :disabled="postingReply||!replyText.trim()" class="bg-brand text-white text-xs px-2 py-0.5 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="postingReply?'Posting…':'Reply'"></span></button></div></div></template>
+                                  <div x-show="loadingReplies" class="flex justify-center py-1"><div class="w-4 h-4 border-2 border-accent/30 border-t-accent rounded-full animate-spin"></div></div>
+                                  <template x-for="r2 in replies" :key="r2.commentid">
+                                    <div x-data="commentItem(r2, photoid, getUser, getHeaders, depth + 1)">
+                                      <div class="flex gap-2">
+                                        <img :src="`https://i.pravatar.cc/28?u=${c.author.userid}`" class="w-7 h-7 rounded-full object-cover shrink-0" />
+                                        <div class="flex-1 min-w-0">
+                                          <div class="flex items-baseline gap-2 flex-wrap">
+                                            <span class="font-semibold text-xs" x-text="c.author.username"></span>
+                                            <span class="text-xs text-muted" x-text="formatDate(c.date)"></span>
+                                            <template x-if="testUser && testUser.userid === c.author.userid"><span class="flex gap-2 ml-auto"><button @click="startEdit()" class="text-xs text-muted hover:text-brand">Edit</button><button @click="deleteComment()" class="text-xs text-muted hover:text-red-500">Delete</button></span></template>
+                                          </div>
+                                          <template x-if="!editing"><p class="text-sm mt-0.5 leading-relaxed" x-text="c.comment"></p></template>
+                                          <template x-if="editing"><div class="mt-1"><textarea x-model="editText" rows="2" @keydown.escape="cancelEdit()" class="w-full text-sm border border-[var(--border)] rounded-xl p-2 resize-none focus:outline-none focus:ring-2 focus:ring-accent/30"></textarea><div class="flex gap-2 justify-end mt-1"><button @click="cancelEdit()" class="text-xs text-muted hover:text-brand">Cancel</button><button @click="saveEdit()" :disabled="saving||!editText.trim()" class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="saving?'Saving…':'Save'"></span></button></div></div></template>
+                                          <div class="flex items-center gap-3 mt-1">
+                                            <template x-if="c.replycount > 0 && !showingReplies"><button @click="loadReplies()" class="text-xs text-accent hover:underline font-medium">Replies (<span x-text="c.replycount"></span>)</button></template>
+                                            <template x-if="showingReplies"><button @click="showingReplies=false;replyOpen=false" class="text-xs text-muted hover:text-brand">Hide replies</button></template>
+                                            <template x-if="canReply"><button @click="replyOpen=!replyOpen" class="text-xs text-muted hover:text-brand font-medium">Reply</button></template>
+                                          </div>
+                                          <template x-if="replyOpen && !showingReplies"><div class="mt-2 bg-gray-50 rounded-xl border border-[var(--border)] p-2"><textarea x-model="replyText" rows="1" placeholder="Write a reply…" class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea><div class="flex justify-end mt-1"><button @click="postReply()" :disabled="postingReply||!replyText.trim()" class="bg-brand text-white text-xs px-2 py-0.5 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="postingReply?'Posting…':'Reply'"></span></button></div></div></template>
+                                          <template x-if="showingReplies">
+                                            <div class="mt-2 space-y-3 border-l-2 border-[var(--border)] ml-2 pl-3">
+                                              <template x-if="canReply && replyOpen"><div class="bg-gray-50 rounded-xl border border-[var(--border)] p-2"><textarea x-model="replyText" rows="1" placeholder="Write a reply…" class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea><div class="flex justify-end mt-1"><button @click="postReply()" :disabled="postingReply||!replyText.trim()" class="bg-brand text-white text-xs px-2 py-0.5 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="postingReply?'Posting…':'Reply'"></span></button></div></div></template>
+                                              <div x-show="loadingReplies" class="flex justify-center py-1"><div class="w-3 h-3 border-2 border-accent/30 border-t-accent rounded-full animate-spin"></div></div>
+                                              <template x-for="r3 in replies" :key="r3.commentid">
+                                                <div x-data="commentItem(r3, photoid, getUser, getHeaders, depth + 1)">
+                                                  <div class="flex gap-2">
+                                                    <img :src="`https://i.pravatar.cc/24?u=${c.author.userid}`" class="w-6 h-6 rounded-full object-cover shrink-0" />
+                                                    <div class="flex-1 min-w-0">
+                                                      <span class="font-semibold text-xs" x-text="c.author.username"></span>
+                                                      <span class="text-xs text-muted ml-1" x-text="formatDate(c.date)"></span>
+                                                      <template x-if="!editing"><p class="text-xs mt-0.5 leading-relaxed" x-text="c.comment"></p></template>
+                                                      <template x-if="editing"><div class="mt-1"><textarea x-model="editText" rows="2" @keydown.escape="cancelEdit()" class="w-full text-xs border border-[var(--border)] rounded-xl p-2 resize-none focus:outline-none"></textarea><div class="flex gap-2 justify-end mt-1"><button @click="cancelEdit()" class="text-xs text-muted hover:text-brand">Cancel</button><button @click="saveEdit()" :disabled="saving||!editText.trim()" class="bg-brand text-white text-xs px-2 py-0.5 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="saving?'Saving…':'Save'"></span></button></div></div></template>
+                                                      <div class="flex items-center gap-3 mt-0.5">
+                                                        <template x-if="c.replycount > 0 && !showingReplies"><button @click="loadReplies()" class="text-xs text-accent hover:underline">Replies (<span x-text="c.replycount"></span>)</button></template>
+                                                        <template x-if="showingReplies"><button @click="showingReplies=false;replyOpen=false" class="text-xs text-muted hover:text-brand">Hide</button></template>
+                                                        <template x-if="canReply"><button @click="replyOpen=!replyOpen" class="text-xs text-muted hover:text-brand">Reply</button></template>
+                                                      </div>
+                                                      <template x-if="replyOpen && !showingReplies"><div class="mt-1 bg-gray-50 rounded-xl border border-[var(--border)] p-2"><textarea x-model="replyText" rows="1" placeholder="Reply…" class="w-full text-xs resize-none focus:outline-none bg-transparent placeholder-muted"></textarea><div class="flex justify-end mt-1"><button @click="postReply()" :disabled="postingReply||!replyText.trim()" class="bg-brand text-white text-xs px-2 py-0.5 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="postingReply?'…':'Reply'"></span></button></div></div></template>
+                                                      <template x-if="showingReplies">
+                                                        <div class="mt-2 space-y-2 border-l-2 border-[var(--border)] ml-1 pl-2">
+                                                          <template x-if="canReply && replyOpen"><div class="bg-gray-50 rounded-lg border border-[var(--border)] p-1.5"><textarea x-model="replyText" rows="1" placeholder="Reply…" class="w-full text-xs resize-none focus:outline-none bg-transparent placeholder-muted"></textarea><div class="flex justify-end mt-0.5"><button @click="postReply()" :disabled="postingReply||!replyText.trim()" class="bg-brand text-white text-xs px-2 py-0.5 rounded-full hover:bg-accent disabled:opacity-40"><span x-text="postingReply?'…':'Reply'"></span></button></div></div></template>
+                                                          <div x-show="loadingReplies" class="flex justify-center"><div class="w-3 h-3 border-2 border-accent/30 border-t-accent rounded-full animate-spin"></div></div>
+                                                          <template x-for="r4 in replies" :key="r4.commentid">
+                                                            <div x-data="commentItem(r4, photoid, getUser, getHeaders, depth + 1)">
+                                                              <div class="flex gap-1.5">
+                                                                <img :src="`https://i.pravatar.cc/20?u=${c.author.userid}`" class="w-5 h-5 rounded-full object-cover shrink-0" />
+                                                                <div class="flex-1 min-w-0">
+                                                                  <span class="font-semibold text-xs" x-text="c.author.username"></span>
+                                                                  <span class="text-xs text-muted ml-1" x-text="formatDate(c.date)"></span>
+                                                                  <p class="text-xs leading-relaxed" x-text="c.comment"></p>
+                                                                  <div class="flex items-center gap-2 mt-0.5">
+                                                                    <template x-if="c.replycount > 0 && !showingReplies"><button @click="loadReplies()" class="text-xs text-accent hover:underline">Replies (<span x-text="c.replycount"></span>)</button></template>
+                                                                    <template x-if="showingReplies"><button @click="showingReplies=false;replyOpen=false" class="text-xs text-muted hover:text-brand">Hide</button></template>
+                                                                    <template x-if="canReply"><button @click="replyOpen=!replyOpen" class="text-xs text-muted hover:text-brand">Reply</button></template>
+                                                                  </div>
+                                                                  <template x-if="replyOpen && !showingReplies"><div class="mt-1 bg-gray-50 rounded-lg border border-[var(--border)] p-1.5"><textarea x-model="replyText" rows="1" placeholder="Reply…" class="w-full text-xs resize-none focus:outline-none bg-transparent"></textarea><div class="flex justify-end"><button @click="postReply()" :disabled="postingReply||!replyText.trim()" class="bg-brand text-white text-xs px-2 py-0.5 rounded-full hover:bg-accent disabled:opacity-40"><span x-text="postingReply?'…':'Reply'"></span></button></div></div></template>
+                                                                  <template x-if="showingReplies">
+                                                                    <div class="mt-1 space-y-2 border-l-2 border-[var(--border)] ml-1 pl-2">
+                                                                      <div x-show="loadingReplies" class="flex justify-center"><div class="w-3 h-3 border-2 border-accent/30 border-t-accent rounded-full animate-spin"></div></div>
+                                                                      <template x-for="r5 in replies" :key="r5.commentid">
+                                                                        <div x-data="commentItem(r5, photoid, getUser, getHeaders, depth + 1)" class="flex gap-1.5">
+                                                                          <img :src="`https://i.pravatar.cc/18?u=${c.author.userid}`" class="w-4 h-4 rounded-full object-cover shrink-0 mt-0.5" />
+                                                                          <div class="flex-1 min-w-0">
+                                                                            <span class="font-semibold text-xs" x-text="c.author.username"></span>
+                                                                            <span class="text-xs text-muted ml-1" x-text="formatDate(c.date)"></span>
+                                                                            <p class="text-xs leading-relaxed" x-text="c.comment"></p>
+                                                                          </div>
+                                                                        </div>
+                                                                      </template>
+                                                                    </div>
+                                                                  </template>
+                                                                </div>
+                                                              </div>
+                                                            </div>
+                                                          </template>
+                                                        </div>
+                                                      </template>
+                                                    </div>
+                                                  </div>
+                                                </div>
+                                              </template>
+                                            </div>
+                                          </template>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </template>
+                                </div>
+                              </template>
+                            </div>
+                          </div>
+                        </div>
+                      </template>
                     </div>
                   </template>
 
@@ -791,9 +893,14 @@
   }
 
   // commentItem manages a single comment row: editing, deleting, replies.
-  function commentItem(c, photoid, getUser, getHeaders) {
+  // depth is 0-based; Reply is hidden at depth >= 5 (enforcing a 6-level max).
+  function commentItem(c, photoid, getUser, getHeaders, depth = 0) {
     return {
       c,
+      depth,
+      photoid,
+      getUser,
+      getHeaders,
       expanded:     false,
       clampLines:   4,
       needsClamp:   false,
@@ -807,7 +914,8 @@
       postingReply: false,
       replies:      [],
 
-      get testUser() { return getUser(); },
+      get testUser()  { return getUser(); },
+      get canReply()  { return !!getUser() && depth < 5; },
 
       checkClamp() {
         this.$nextTick(() => {
