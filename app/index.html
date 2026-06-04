@@ -282,20 +282,24 @@
         <div class="flex flex-wrap items-center gap-2">
           <template x-for="em in photo.emojis" :key="em.emojiid">
             <div class="relative" x-data="{ holding: false, holdTimer: null }">
-              <button class="emoji-btn flex items-center gap-1.5 bg-white border border-[var(--border)] rounded-full px-3 py-1.5 text-sm shadow-sm select-none"
-                      @mousedown="holdTimer = setTimeout(() => holding = true, 400)"
+              <button class="emoji-btn flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm shadow-sm select-none border transition-colors"
+                      :class="testUser && em.users && em.users.some(u => u.id === testUser.userid)
+                        ? 'bg-teal-50 border-teal-300 text-teal-700'
+                        : 'bg-white border-[var(--border)]'"
+                      @click="toggleReaction(em)"
+                      @mousedown="holdTimer = setTimeout(() => holding = true, 600)"
                       @mouseup="clearTimeout(holdTimer)"
                       @mouseleave="clearTimeout(holdTimer)"
-                      @touchstart.prevent="holdTimer = setTimeout(() => holding = true, 400)"
+                      @touchstart.prevent="holdTimer = setTimeout(() => holding = true, 600)"
                       @touchend="clearTimeout(holdTimer)"
-                      title="Hold to see who reacted">
+                      :title="testUser && em.users && em.users.some(u => u.id === testUser.userid) ? 'Click to remove reaction' : 'Click to react · Hold to see who reacted'">
                 <template x-if="em.imageurl">
                   <img :src="em.imageurl" :alt="em.alttext" class="w-5 h-5 object-contain" />
                 </template>
                 <template x-if="!em.imageurl">
                   <span class="text-lg" x-text="em.emoji"></span>
                 </template>
-                <span class="font-medium text-muted text-xs" x-text="em.count"></span>
+                <span class="font-medium text-xs" x-text="em.count"></span>
               </button>
               <!-- Hold popup -->
               <div x-show="holding" @click.outside="holding=false"
@@ -455,7 +459,7 @@
      x-transition:leave="transition ease-in duration-150"
      x-transition:leave-start="opacity-100"
      x-transition:leave-end="opacity-0"
-     class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-brand text-white text-sm px-5 py-3 rounded-2xl shadow-xl"
+     class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] bg-brand text-white text-sm px-5 py-3 rounded-2xl shadow-xl"
      x-text="toast.message">
 </div>
 
@@ -575,7 +579,7 @@
 <template x-if="emojiPickerOpen">
   <div class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
        @click.self="emojiPickerOpen = false"
-       x-data="emojiPicker(photo, () => authHeaders())"
+       x-data="emojiPicker(photo)"
        x-init="init()">
     <div class="bg-white rounded-2xl shadow-2xl w-[28rem] p-5 animate-scalein flex flex-col" style="max-height:80vh">
 
@@ -743,10 +747,12 @@
     'dark':         '#4A2912',
   };
 
-  function emojiPicker(photo, getAuthHeaders) {
+  function emojiPicker(photo) {
+    function getAuthHeaders() {
+      return window._testUserID ? { 'X-User-ID': window._testUserID } : {};
+    }
     return {
       photo,
-      getAuthHeaders,
       search:     '',
       emojis:     [],
       total:      0,
@@ -821,7 +827,7 @@
       },
 
       async react(em) {
-        const headers = this.getAuthHeaders();
+        const headers = getAuthHeaders();
         if (!headers['X-User-ID']) {
           document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: 'Select a user to react.' }));
           return;
@@ -850,7 +856,7 @@
             if (existing) {
               existing.count++;
             } else {
-              this.photo.emojis.push({ emojiid: em.emojiid, emoji: em.emoji, alttext: em.alttext, count: 1, users: [] });
+              this.photo.emojis.push({ emojiid: em.emojiid, emoji: em.emoji, imageurl: em.imageurl, alttext: em.alttext, count: 1, users: [] });
             }
           }
         } catch(e) {
@@ -1061,6 +1067,7 @@
 
       selectTestUser(user) {
         this.testUser = user;
+        window._testUserID = user?.userid || null;
         if (this.photo) this.loadPhoto(this.photo.photoid);  // preserve activeLabelID
       },
 
@@ -1113,6 +1120,33 @@
         this.toast.message = message;
         this.toast.visible = true;
         this.toast.timer = setTimeout(() => { this.toast.visible = false; }, 3500);
+      },
+
+      async toggleReaction(em) {
+        if (!this.testUser) { this.showToast('Select a user to react.'); return; }
+        const uid = this.testUser.userid;
+        const alreadyReacted = em.users && em.users.some(u => u.id === uid);
+        const method = alreadyReacted ? 'DELETE' : 'POST';
+        try {
+          const resp = await fetch(
+            `/api/v1/emoji/react?photoid=${encodeURIComponent(this.photo.photoid)}&emojiid=${encodeURIComponent(em.emojiid)}`,
+            { method, headers: this.authHeaders() }
+          );
+          if (!resp.ok) {
+            const e = await resp.json().catch(() => ({}));
+            throw new Error(e.error || `HTTP ${resp.status}`);
+          }
+          if (alreadyReacted) {
+            em.count--;
+            em.users = (em.users || []).filter(u => u.id !== uid);
+            if (em.count <= 0) this.photo.emojis = this.photo.emojis.filter(e => e.emojiid !== em.emojiid);
+          } else {
+            em.count++;
+            em.users = [...(em.users || []), { id: uid, name: this.testUser.username, tn: null }];
+          }
+        } catch(e) {
+          this.showToast(`Reaction failed: ${e.message}`);
+        }
       },
 
       openLabelModal(label) {
