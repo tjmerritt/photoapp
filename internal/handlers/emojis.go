@@ -147,14 +147,62 @@ func (h *EmojisHandler) Unreact(w http.ResponseWriter, r *http.Request, _ httpro
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// GET /api/v1/emoji/types  – list all active emoji types (the picker palette)
+// GET /api/v1/emoji/types  – paginated, searchable list of active emoji types.
+//
+// Query params:
+//
+//	search  – filter by alt_text or tags (case-insensitive substring)
+//	group   – filter by emoji_group
+//	offset  – pagination offset (default 0)
+//	limit   – page size (default DefaultPageSize, max MaxPageSize)
 func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	rows, err := h.DB.Query(r.Context(), `
-		SELECT emojiid::text, emoji_char, image_url, alt_text, is_active
-		FROM   emoji_types
-		WHERE  is_active = TRUE
-		ORDER  BY sort_order, created_at
-	`)
+	q := r.URL.Query()
+	search := strings.TrimSpace(q.Get("search"))
+	group  := strings.TrimSpace(q.Get("group"))
+	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
+
+	// Build WHERE clause — only return base emojis (exclude skintone variants).
+	where := "is_active = TRUE AND base_hexcode IS NULL"
+	args  := []any{}
+	n     := 1
+	if search != "" {
+		where += fmt.Sprintf(" AND (alt_text ILIKE $%d OR tags ILIKE $%d)", n, n)
+		args   = append(args, "%"+search+"%")
+		n++
+	}
+	if group != "" {
+		where += fmt.Sprintf(" AND emoji_group = $%d", n)
+		args   = append(args, group)
+		n++
+	}
+
+	// Total count.
+	var total int
+	if err := h.DB.QueryRow(r.Context(),
+		"SELECT COUNT(*) FROM emoji_types WHERE "+where,
+		args...,
+	).Scan(&total); err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	// Page of results with has_skintones flag.
+	args = append(args, limit, offset)
+	rows, err := h.DB.Query(r.Context(),
+		fmt.Sprintf(`
+			SELECT et.emojiid::text, et.emoji_char, et.image_url, et.alt_text,
+			       et.is_active, COALESCE(et.hexcode,''),
+			       EXISTS (
+			           SELECT 1 FROM emoji_types v
+			           WHERE v.base_hexcode = et.hexcode AND v.is_active = TRUE
+			       ) AS has_skintones
+			FROM   emoji_types et
+			WHERE  %s
+			ORDER  BY et.sort_order, et.created_at
+			LIMIT  $%d OFFSET $%d
+		`, where, n, n+1),
+		args...,
+	)
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
@@ -164,7 +212,8 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 	types := make([]models.EmojiTypeResponse, 0)
 	for rows.Next() {
 		var et models.EmojiTypeResponse
-		if err := rows.Scan(&et.EmojiID, &et.EmojiChar, &et.ImageURL, &et.AltText, &et.IsActive); err != nil {
+		if err := rows.Scan(&et.EmojiID, &et.EmojiChar, &et.ImageURL, &et.AltText,
+			&et.IsActive, &et.Hexcode, &et.HasSkintones); err != nil {
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
 		}
@@ -175,7 +224,64 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 		return
 	}
 
-	middleware.WriteJSON(w, http.StatusOK, types)
+	baseURL := fmt.Sprintf("/api/v1/emoji/types?search=%s&group=%s&limit=%d", search, group, limit)
+	middleware.WriteJSON(w, http.StatusOK, map[string]any{
+		"total":  total,
+		"offset": offset,
+		"limit":  limit,
+		"pages":  buildPages(total, offset, limit, baseURL),
+		"emojis": types,
+	})
+}
+
+// GET /api/v1/emoji/variants?hexcode=  — returns all skintone variants for a base emoji.
+// The base emoji itself is included first so the picker can offer "no skintone" too.
+func (h *EmojisHandler) ListVariants(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	hexcode := strings.TrimSpace(r.URL.Query().Get("hexcode"))
+	if hexcode == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "hexcode is required")
+		return
+	}
+
+	// Fetch the base emoji first.
+	baseRows, err := h.DB.Query(r.Context(), `
+		SELECT emojiid::text, emoji_char, image_url, alt_text, is_active,
+		       COALESCE(hexcode,''), COALESCE(skintone,'')
+		FROM   emoji_types
+		WHERE  hexcode = $1 AND base_hexcode IS NULL AND is_active = TRUE
+		UNION ALL
+		SELECT emojiid::text, emoji_char, image_url, alt_text, is_active,
+		       COALESCE(hexcode,''), COALESCE(skintone,'')
+		FROM   emoji_types
+		WHERE  base_hexcode = $1 AND is_active = TRUE
+		ORDER  BY sort_order, created_at
+	`, hexcode)
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	defer baseRows.Close()
+
+	variants := make([]models.EmojiTypeResponse, 0)
+	for baseRows.Next() {
+		var et models.EmojiTypeResponse
+		var tone string
+		if err := baseRows.Scan(&et.EmojiID, &et.EmojiChar, &et.ImageURL, &et.AltText,
+			&et.IsActive, &et.Hexcode, &tone); err != nil {
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		if tone != "" {
+			et.Skintone = &tone
+		}
+		variants = append(variants, et)
+	}
+	if err := baseRows.Err(); err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, map[string]any{"variants": variants})
 }
 
 // POST /api/v1/emoji/types  – upload a new custom emoji image (requires auth)

@@ -44,6 +44,7 @@ func NewRouter(pool *db.Pool, cfg *config.Config) http.Handler {
 	r.GET("/api/v1/emojis",                               emojis.List)
 	r.GET("/api/v1/emoji/users",                          emojis.ListUsers)
 	r.GET("/api/v1/emoji/types",                          emojis.ListTypes)
+	r.GET("/api/v1/emoji/variants",                       emojis.ListVariants)
 	r.GET("/api/v1/comments",                             comments.List)
 
 	// ── Write endpoints (auth required) ───────────────────────────────────────
