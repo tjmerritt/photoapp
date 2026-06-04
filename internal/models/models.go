@@ -169,9 +169,12 @@ type UpdatePhotoTitleRequest struct {
 
 // EmojiTypeResponse is returned after uploading a new emoji type.
 type EmojiTypeResponse struct {
-	EmojiID   string  `json:"emojiid"`
-	EmojiChar *string `json:"emoji,omitempty"`
-	ImageURL  *string `json:"imageurl,omitempty"`
-	AltText   string  `json:"alttext"`
-	IsActive  bool    `json:"is_active"`
+	EmojiID      string  `json:"emojiid"`
+	EmojiChar    *string `json:"emoji,omitempty"`
+	ImageURL     *string `json:"imageurl,omitempty"`
+	AltText      string  `json:"alttext"`
+	IsActive     bool    `json:"is_active"`
+	HasSkintones bool    `json:"has_skintones,omitempty"` // true if skintone variants exist
+	Skintone     *string `json:"skintone,omitempty"`      // set on variant rows
+	Hexcode      string  `json:"hexcode,omitempty"`       // needed to fetch variants
 }

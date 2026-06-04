@@ -25,10 +25,13 @@ make migrate-up
 # 4. Seed with development data (optional)
 make seed
 
-# 5. Fetch dependencies
+# 5. Import the OpenMoji emoji set
+go run ./cmd/import-emojis
+
+# 6. Fetch dependencies
 make tidy
 
-# 6. Run the server
+# 7. Run the server
 make run
 # → listening on http://localhost:8080
 ```
@@ -73,7 +76,8 @@ Then reload: `service postgresql reload`
 photoapp/
 ├── cmd/
 │   ├── server/main.go              # Entrypoint — server setup & graceful shutdown
-│   └── import-photos/main.go      # CLI tool for bulk photo import
+│   ├── import-photos/main.go       # CLI tool for bulk photo import
+│   └── import-emojis/main.go       # CLI tool for importing OpenMoji emoji data
 ├── internal/
 │   ├── config/config.go            # Environment-based configuration
 │   ├── db/db.go                    # pgxpool wrapper + helpers
@@ -83,13 +87,15 @@ photoapp/
 │       ├── router.go               # Route wiring + static file serving
 │       ├── pagination.go           # parsePage / buildPages helpers
 │       ├── fetch.go                # Shared DB fetch functions
-│       ├── photo.go                # GET /api/v1/photo, GET /api/v1/user
-│       ├── labels.go               # Labels CRUD
-│       ├── emojis.go               # Emoji reactions + type upload
+│       ├── photo.go                # GET/PATCH /api/v1/photo, GET /api/v1/user
+│       ├── labels.go               # Labels CRUD + name/value suggestion endpoints
+│       ├── emojis.go               # Emoji reactions, types, upload
 │       └── comments.go             # Comments CRUD
 ├── migrations/
 │   ├── 001_initial.sql             # Full schema (idempotent)
-│   └── 002_seed.sql                # Development seed data
+│   ├── 002_seed.sql                # Development seed data
+│   ├── 003_view_count.sql          # Adds view_count to photos
+│   └── 004_emoji_unique.sql        # Unique index on emoji_char + group/tags columns
 ├── app/
 │   └── index.html                  # Frontend SPA (Alpine.js + Tailwind)
 ├── .env.example                    # Environment variable template
@@ -113,11 +119,13 @@ go run ./cmd/server --app-dir ./my-frontend
 APP_DIR=./my-frontend make run
 ```
 
-Open `http://localhost:8080/` to view the photo viewer. A specific photo can be loaded via the `photoid` query parameter:
+Open `http://localhost:8080/` to view the photo viewer. With no `photoid` in the URL a random photo is loaded. A specific photo can be linked directly:
 
 ```
 http://localhost:8080/?photoid=aaaaaaaa-0000-0000-0000-000000000001
 ```
+
+Clicking a label value adds `?label=<labelid>` to the URL and populates the Related sidebar with up to 8 photos that share the same label name and value (top 7 by view count + 1 random). Clicking the same label again clears the filter.
 
 ## API Reference
 
@@ -125,20 +133,24 @@ http://localhost:8080/?photoid=aaaaaaaa-0000-0000-0000-000000000001
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/photo?photoid=` | Full photo with labels, emojis, comments |
+| GET | `/api/v1/photo?photoid=&label=` | Full photo; `label` filters related photos by label |
+| GET | `/api/v1/photo?random=true` | Load a random photo |
 | GET | `/api/v1/user?userid=` | User profile |
 | GET | `/api/v1/labels?photoid=&offset=&limit=` | Paginated labels |
-| GET | `/api/v1/emojis?photoid=&offset=&limit=` | Paginated emojis with counts |
+| GET | `/api/v1/label-names` | Distinct label names across all photos |
+| GET | `/api/v1/label-values?name=` | Distinct values for a given label name |
+| GET | `/api/v1/emojis?photoid=&offset=&limit=` | Paginated emoji reactions with counts |
 | GET | `/api/v1/emoji/users?emoji=&photoid=&offset=&limit=` | Users who used an emoji |
-| GET | `/api/v1/emoji/types` | All active emoji types (picker palette) |
+| GET | `/api/v1/emoji/types?search=&group=&offset=&limit=` | Paginated, searchable emoji type catalogue |
 | GET | `/api/v1/comments?photoid=&parentid=&offset=&limit=` | Comments or replies |
 
 ### Write (auth required — pass `X-User-ID: <uuid>` header)
 
 | Method | Path | Description |
 |--------|------|-------------|
+| PATCH | `/api/v1/photo?photoid=` | Update photo title `{title}` |
 | POST | `/api/v1/labels?photoid=` | Add a label `{name, value}` |
-| PATCH | `/api/v1/labels/:labelid` | Edit your own label `{name?, value?}` |
+| PATCH | `/api/v1/labels/:labelid` | Edit your own label `{value}` |
 | DELETE | `/api/v1/labels/:labelid` | Delete your own label |
 | POST | `/api/v1/emoji/react?photoid=&emojiid=` | Add your emoji reaction |
 | DELETE | `/api/v1/emoji/react?photoid=&emojiid=` | Remove your emoji reaction |
@@ -165,11 +177,48 @@ curl -X POST http://localhost:8080/api/v1/labels?photoid=aaaaaaaa-0000-0000-0000
   -d '{"name":"Shutter","value":"1/250s"}'
 ```
 
-When real login is added, replace the `Auth` middleware in `internal/middleware/middleware.go` with JWT / session validation and remove the `X-User-ID` override.
+The frontend includes a test-user dropdown in the navbar for switching between the five seeded users while real login is not yet implemented. When real login is added, replace the `Auth` middleware in `internal/middleware/middleware.go` with JWT / session validation.
 
-## Emoji Upload
+## Emoji Setup
 
-Custom emoji images are uploaded as `multipart/form-data`:
+Emojis are stored in the `emoji_types` table and served from `GET /api/v1/emoji/types`. The full OpenMoji set (~3700 standard emoji, skintone variants excluded) is imported with the `import-emojis` command.
+
+### Initial import
+
+```sh
+go run ./cmd/import-emojis
+```
+
+### Incremental updates
+
+Re-running the command is safe — unchanged rows are skipped, modified annotations are updated, and new emoji are inserted:
+
+```sh
+# Update from latest OpenMoji master
+go run ./cmd/import-emojis
+
+# Also mark any emoji removed from the feed as inactive
+go run ./cmd/import-emojis --deactivate-removed
+
+# Preview without writing
+go run ./cmd/import-emojis --dry-run
+
+# Use a local or pinned JSON file
+go run ./cmd/import-emojis --url file:///path/to/openmoji.json
+```
+
+### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--db` | `$DATABASE_URL` | PostgreSQL DSN |
+| `--url` | GitHub master `openmoji.json` | OpenMoji JSON feed URL |
+| `--deactivate-removed` | `false` | Set `is_active=false` for emoji absent from feed |
+| `--dry-run` | `false` | Print what would change without writing to DB |
+
+### Custom emoji images
+
+Custom emoji images can be uploaded via the API:
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/emoji/types \
@@ -294,7 +343,7 @@ No ORM is used. All queries are plain SQL.
 4. **No search endpoint** — `/api/v1/search` is not yet implemented. The search box in the UI shows a placeholder toast.
 5. **No image resizing** — uploaded emoji images are stored as-is. Add a resizing step (e.g. using `vips` or `imaging`) for production.
 6. **No rate limiting** — add per-IP or per-user rate limiting before public deployment.
-7. **Pagination UI** — the API returns `pages` objects with `next`/`prev` URLs, but there is no "Load more" button or infinite scroll in the frontend yet.
-8. **`canedit` flag** — the title object exposes `canedit` but no editing UI is implemented. An edit control should appear when `canedit: true`.
-9. **Comment author thumbnails** — the comment author object includes `tn` (thumbnail). If absent, the UI falls back to a Pravatar placeholder derived from the user ID.
-10. **Image format support in import-photos** — dimension detection supports JPEG, PNG, and GIF only; other formats will be skipped with a warning.
+7. **Pagination UI** — labels and comments use server-side pagination but the frontend does not yet show "Load more" controls for these sections.
+8. **Comment author thumbnails** — the comment author object includes `tn` (thumbnail). If absent, the UI falls back to a Pravatar placeholder derived from the user ID.
+9. **Image format support in import-photos** — dimension detection and EXIF extraction support JPEG, PNG, and GIF only; other formats are skipped with a warning.
+10. **Skintone emoji variants** — the `import-emojis` tool skips skintone variants by default. To include them, remove the skintone filter in `cmd/import-emojis/main.go`.

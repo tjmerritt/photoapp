@@ -1,7 +1,7 @@
 // cmd/import-emojis/main.go
-// Imports OpenMoji emoji data into the emoji_types table.
-// Designed for incremental updates: new emojis are inserted, changed annotations
-// are updated, and unchanged rows are skipped.
+// Imports OpenMoji emoji data into the emoji_types table, including skintone variants.
+// Designed for incremental updates: new emojis are inserted, changed rows are updated,
+// and unchanged rows are skipped.
 //
 // Usage:
 //
@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -32,23 +33,63 @@ import (
 const defaultOpenMojiURL = "https://raw.githubusercontent.com/hfg-gmuend/openmoji/master/data/openmoji.json"
 
 // openMojiEntry mirrors the relevant fields in openmoji.json.
+// Several fields use interface{} because OpenMoji represents them inconsistently
+// (e.g. order and skintone can be strings, numbers, or empty strings).
 type openMojiEntry struct {
-	Emoji      string  `json:"emoji"`
-	Hexcode    string  `json:"hexcode"`
-	Group      string  `json:"group"`
-	Subgroups  string  `json:"subgroups"`
-	Annotation string  `json:"annotation"`
-	Tags       string  `json:"tags"`
-	Skintone   string  `json:"skintone"`
-	Order      float64 `json:"order"`
+	Emoji               string      `json:"emoji"`
+	Hexcode             string      `json:"hexcode"`
+	Group               string      `json:"group"`
+	Annotation          string      `json:"annotation"`
+	Tags                string      `json:"tags"`
+	Skintone            interface{} `json:"skintone"`             // "" | tone name | number
+	SkintoneBaseHexcode string      `json:"skintone_base_hexcode"` // non-empty = variant
+	Order               interface{} `json:"order"`                 // number or ""
+}
+
+// skintoneLabel normalises the raw skintone value to a human-readable name.
+// Returns "" for base emojis / unrecognised values.
+func skintoneLabel(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	s := strings.TrimSpace(fmt.Sprintf("%v", v))
+	switch s {
+	case "", "0":
+		return ""
+	case "light", "1", "1F3FB":
+		return "light"
+	case "medium-light", "2", "1F3FC":
+		return "medium-light"
+	case "medium", "3", "1F3FD":
+		return "medium"
+	case "medium-dark", "4", "1F3FE":
+		return "medium-dark"
+	case "dark", "5", "1F3FF":
+		return "dark"
+	default:
+		// Pass through any other string value (e.g. already a name we don't know)
+		return s
+	}
+}
+
+func toSortOrder(v interface{}) int {
+	switch v := v.(type) {
+	case float64:
+		return int(v)
+	case json.Number:
+		if f, err := v.Float64(); err == nil {
+			return int(f)
+		}
+	}
+	return 0
 }
 
 func main() {
 	var (
-		dbURL              string
-		feedURL            string
-		deactivateRemoved  bool
-		dryRun             bool
+		dbURL             string
+		feedURL           string
+		deactivateRemoved bool
+		dryRun            bool
 	)
 
 	flag.StringVar(&dbURL, "db", os.Getenv("DATABASE_URL"), "PostgreSQL DSN (env: DATABASE_URL)")
@@ -69,32 +110,43 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error fetching feed: %v\n", err)
 		os.Exit(1)
 	}
-	slog.Info("fetched entries", "count", len(entries))
 
-	// Filter: skip skintone variants and entries without an emoji character.
+	// Filter: skip entries without an emoji character.
 	filtered := make([]openMojiEntry, 0, len(entries))
+	baseCount, variantCount := 0, 0
 	for _, e := range entries {
-		if e.Emoji == "" || e.Skintone != "" {
+		if e.Emoji == "" {
 			continue
 		}
 		filtered = append(filtered, e)
+		if e.SkintoneBaseHexcode == "" {
+			baseCount++
+		} else {
+			variantCount++
+		}
 	}
-	slog.Info("after filtering skintone variants", "count", len(filtered))
+	slog.Info("entries to process", "base", baseCount, "skintone_variants", variantCount)
 
 	if dryRun {
-		fmt.Printf("[dry-run] would upsert %d emojis\n", len(filtered))
+		fmt.Printf("[dry-run] would upsert %d emojis (%d base + %d skintone variants)\n",
+			len(filtered), baseCount, variantCount)
 		for i, e := range filtered {
 			if i >= 10 {
 				fmt.Printf("  ... and %d more\n", len(filtered)-10)
 				break
 			}
-			fmt.Printf("  %s  %s  (%s)\n", e.Emoji, e.Annotation, e.Group)
+			tone := skintoneLabel(e.Skintone)
+			if tone != "" {
+				fmt.Printf("  %s  %s  [%s variant of %s]\n", e.Emoji, e.Annotation, tone, e.SkintoneBaseHexcode)
+			} else {
+				fmt.Printf("  %s  %s  (%s)\n", e.Emoji, e.Annotation, e.Group)
+			}
 		}
 		return
 	}
 
 	// ── Connect ───────────────────────────────────────────────────────────────
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	pool, err := pgxpool.New(ctx, dbURL)
@@ -104,21 +156,26 @@ func main() {
 	}
 	defer pool.Close()
 
-	// ── Load existing emoji chars from DB for change detection ────────────────
+	// ── Load existing rows for change detection ───────────────────────────────
 	type dbEmoji struct {
-		emojiid    string
-		altText    string
-		sortOrder  int
-		group      string
-		tags       string
-		hexcode    string
-		isActive   bool
+		emojiid      string
+		altText      string
+		sortOrder    int
+		group        string
+		tags         string
+		hexcode      string
+		imageURL     string
+		skintone     string
+		baseHexcode  string
+		isActive     bool
 	}
 	existing := make(map[string]dbEmoji) // keyed by emoji_char
 
 	rows, err := pool.Query(ctx, `
 		SELECT emojiid::text, emoji_char, alt_text, sort_order,
-		       COALESCE(emoji_group,''), COALESCE(tags,''), COALESCE(hexcode,''), is_active
+		       COALESCE(emoji_group,''), COALESCE(tags,''), COALESCE(hexcode,''),
+		       COALESCE(image_url,''), COALESCE(skintone,''), COALESCE(base_hexcode,''),
+		       is_active
 		FROM   emoji_types
 		WHERE  emoji_char IS NOT NULL
 	`)
@@ -130,7 +187,8 @@ func main() {
 		var emojiChar string
 		var d dbEmoji
 		if err := rows.Scan(&d.emojiid, &emojiChar, &d.altText, &d.sortOrder,
-			&d.group, &d.tags, &d.hexcode, &d.isActive); err != nil {
+			&d.group, &d.tags, &d.hexcode, &d.imageURL, &d.skintone, &d.baseHexcode,
+			&d.isActive); err != nil {
 			fmt.Fprintf(os.Stderr, "scan error: %v\n", err)
 			os.Exit(1)
 		}
@@ -145,25 +203,33 @@ func main() {
 
 	for _, e := range filtered {
 		seenChars[e.Emoji] = true
-		sortOrder := int(e.Order)
+		sortOrder  := toSortOrder(e.Order)
+		tone       := skintoneLabel(e.Skintone)
+		imageURL   := fmt.Sprintf("https://openmoji.org/data/color/svg/%s.svg", e.Hexcode)
+		baseHex    := e.SkintoneBaseHexcode
 
 		if d, exists := existing[e.Emoji]; exists {
-			// Check if anything changed.
 			if d.altText == e.Annotation && d.sortOrder == sortOrder &&
-				d.group == e.Group && d.tags == e.Tags && d.hexcode == e.Hexcode && d.isActive {
+				d.group == e.Group && d.tags == e.Tags && d.hexcode == e.Hexcode &&
+				d.imageURL == imageURL && d.skintone == tone && d.baseHexcode == baseHex &&
+				d.isActive {
 				skipped++
 				continue
 			}
 			_, err := pool.Exec(ctx, `
 				UPDATE emoji_types
-				SET    alt_text   = $1,
-				       sort_order = $2,
-				       emoji_group = $3,
-				       tags       = $4,
-				       hexcode    = $5,
-				       is_active  = TRUE
-				WHERE  emojiid = $6::uuid
-			`, e.Annotation, sortOrder, e.Group, e.Tags, e.Hexcode, d.emojiid)
+				SET    alt_text      = $1,
+				       sort_order    = $2,
+				       emoji_group   = $3,
+				       tags          = $4,
+				       hexcode       = $5,
+				       image_url     = $6,
+				       skintone      = NULLIF($7, ''),
+				       base_hexcode  = NULLIF($8, ''),
+				       is_active     = TRUE
+				WHERE  emojiid = $9::uuid
+			`, e.Annotation, sortOrder, e.Group, e.Tags, e.Hexcode,
+				imageURL, tone, baseHex, d.emojiid)
 			if err != nil {
 				slog.Warn("update failed", "emoji", e.Emoji, "error", err)
 				continue
@@ -171,17 +237,23 @@ func main() {
 			updated++
 		} else {
 			_, err := pool.Exec(ctx, `
-				INSERT INTO emoji_types (emoji_char, alt_text, sort_order, emoji_group, tags, hexcode, is_active)
-				VALUES ($1, $2, $3, $4, $5, $6, TRUE)
+				INSERT INTO emoji_types
+				       (emoji_char, image_url, alt_text, sort_order, emoji_group, tags,
+				        hexcode, skintone, base_hexcode, is_active)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8,''), NULLIF($9,''), TRUE)
 				ON CONFLICT (emoji_char) WHERE emoji_char IS NOT NULL
 				DO UPDATE SET
-					alt_text    = EXCLUDED.alt_text,
-					sort_order  = EXCLUDED.sort_order,
-					emoji_group = EXCLUDED.emoji_group,
-					tags        = EXCLUDED.tags,
-					hexcode     = EXCLUDED.hexcode,
-					is_active   = TRUE
-			`, e.Emoji, e.Annotation, sortOrder, e.Group, e.Tags, e.Hexcode)
+					image_url    = EXCLUDED.image_url,
+					alt_text     = EXCLUDED.alt_text,
+					sort_order   = EXCLUDED.sort_order,
+					emoji_group  = EXCLUDED.emoji_group,
+					tags         = EXCLUDED.tags,
+					hexcode      = EXCLUDED.hexcode,
+					skintone     = EXCLUDED.skintone,
+					base_hexcode = EXCLUDED.base_hexcode,
+					is_active    = TRUE
+			`, e.Emoji, imageURL, e.Annotation, sortOrder, e.Group, e.Tags,
+				e.Hexcode, tone, baseHex)
 			if err != nil {
 				slog.Warn("insert failed", "emoji", e.Emoji, "error", err)
 				continue

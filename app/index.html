@@ -289,13 +289,21 @@
                       @touchstart.prevent="holdTimer = setTimeout(() => holding = true, 400)"
                       @touchend="clearTimeout(holdTimer)"
                       title="Hold to see who reacted">
-                <span class="text-lg" x-text="em.emoji"></span>
+                <template x-if="em.imageurl">
+                  <img :src="em.imageurl" :alt="em.alttext" class="w-5 h-5 object-contain" />
+                </template>
+                <template x-if="!em.imageurl">
+                  <span class="text-lg" x-text="em.emoji"></span>
+                </template>
                 <span class="font-medium text-muted text-xs" x-text="em.count"></span>
               </button>
               <!-- Hold popup -->
               <div x-show="holding" @click.outside="holding=false"
                    class="absolute bottom-full mb-2 left-0 bg-white rounded-xl shadow-xl border border-[var(--border)] p-3 w-44 z-20 animate-scalein">
-                <p class="text-xs font-semibold text-muted mb-2">Reacted with <span x-text="em.emoji"></span></p>
+                <p class="text-xs font-semibold text-muted mb-2 flex items-center gap-1">Reacted with
+                  <template x-if="em.imageurl"><img :src="em.imageurl" :alt="em.alttext" class="w-4 h-4 object-contain inline" /></template>
+                  <template x-if="!em.imageurl"><span x-text="em.emoji"></span></template>
+                </p>
                 <template x-for="u in em.users" :key="u.id">
                   <div class="flex items-center gap-2 py-1">
                     <img :src="u.tn" :alt="u.name" class="w-6 h-6 rounded-full object-cover" />
@@ -594,21 +602,58 @@
       </div>
 
       <!-- Emoji grid -->
-      <div x-show="!loading" class="overflow-y-auto flex-1 min-h-0">
+      <div x-show="!loading" class="overflow-y-auto flex-1 min-h-0" @click.self="skintoneTarget = null">
         <div x-show="emojis.length === 0" class="text-center text-muted text-sm py-8">No emojis found.</div>
         <div class="grid grid-cols-8 gap-1">
           <template x-for="em in emojis" :key="em.emojiid">
-            <button @click="react(em)"
-                    :title="em.alttext"
-                    :class="reactedIds.has(em.emojiid) ? 'bg-accent/10 ring-1 ring-accent/40' : 'hover:bg-gray-100'"
-                    class="text-2xl w-12 h-12 flex items-center justify-center rounded-xl transition select-none">
-              <template x-if="em.emoji">
-                <span x-text="em.emoji"></span>
+            <div class="relative">
+              <button @click="handleEmojiClick(em)"
+                      :title="em.alttext"
+                      :class="[
+                        reactedIds.has(em.emojiid) ? 'bg-accent/10 ring-1 ring-accent/40' : 'hover:bg-gray-100',
+                        skintoneTarget?.emojiid === em.emojiid ? 'ring-2 ring-brand' : ''
+                      ]"
+                      class="w-12 h-12 flex items-center justify-center rounded-xl transition select-none relative">
+                <template x-if="em.imageurl">
+                  <img :src="em.imageurl" :alt="em.alttext" class="w-8 h-8 object-contain" />
+                </template>
+                <template x-if="!em.imageurl && em.emoji">
+                  <span class="text-2xl" x-text="em.emoji"></span>
+                </template>
+                <!-- Skintone indicator dot -->
+                <template x-if="em.has_skintones">
+                  <span class="absolute bottom-1 right-1 w-2 h-2 rounded-full border border-white"
+                        style="background: linear-gradient(135deg,#FFDBB4 0%,#C68642 50%,#4A2912 100%)"></span>
+                </template>
+              </button>
+
+              <!-- Skintone variant popover -->
+              <template x-if="skintoneTarget?.emojiid === em.emojiid">
+                <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-30
+                            bg-white border border-[var(--border)] rounded-xl shadow-xl p-2
+                            flex items-center gap-1 animate-scalein"
+                     style="min-width: max-content">
+                  <div x-show="skintoneLoading" class="px-3 py-1 text-xs text-muted">Loading…</div>
+                  <template x-if="!skintoneLoading">
+                    <div class="flex items-center gap-1">
+                      <template x-for="v in skintoneVariants" :key="v.emojiid">
+                        <button @click.stop="react(v); skintoneTarget = null"
+                                :title="v.skintone ? v.skintone + ' skin tone' : 'default'"
+                                :class="reactedIds.has(v.emojiid) ? 'ring-2 ring-accent' : 'hover:bg-gray-100'"
+                                class="w-10 h-10 flex items-center justify-center rounded-lg transition relative">
+                          <img :src="v.imageurl" :alt="v.alttext" class="w-7 h-7 object-contain" />
+                          <!-- Tone swatch dot -->
+                          <template x-if="v.skintone">
+                            <span class="absolute bottom-0.5 right-0.5 w-2 h-2 rounded-full border border-white"
+                                  :style="`background:${skintoneColor(v.skintone)}`"></span>
+                          </template>
+                        </button>
+                      </template>
+                    </div>
+                  </template>
+                </div>
               </template>
-              <template x-if="!em.emoji && em.imageurl">
-                <img :src="em.imageurl" :alt="em.alttext" class="w-8 h-8 object-contain" />
-              </template>
-            </button>
+            </div>
           </template>
         </div>
       </div>
@@ -689,6 +734,15 @@
     };
   }
 
+  // Skintone swatch colours in Fitzpatrick order.
+  const SKINTONE_COLORS = {
+    'light':        '#FFDBB4',
+    'medium-light': '#EAC085',
+    'medium':       '#C68642',
+    'medium-dark':  '#8D5524',
+    'dark':         '#4A2912',
+  };
+
   function emojiPicker(photo, getAuthHeaders) {
     return {
       photo,
@@ -701,8 +755,12 @@
       loading:    false,
       reactedIds: new Set(),
 
+      // Skintone picker state
+      skintoneTarget: null,    // the base emoji whose variants we're showing
+      skintoneVariants: [],    // loaded variant list (includes base at index 0)
+      skintoneLoading: false,
+
       async init() {
-        // Pre-build set of emojis the user has already reacted with.
         if (getAuthHeaders()['X-User-ID']) {
           const uid = getAuthHeaders()['X-User-ID'];
           (photo.emojis || []).forEach(em => {
@@ -729,9 +787,38 @@
         this.loading = false;
       },
 
-      doSearch() { this.offset = 0; this.load(); },
-      nextPage()  { this.offset += this.limit; this.load(); },
-      prevPage()  { this.offset = Math.max(0, this.offset - this.limit); this.load(); },
+      doSearch() { this.offset = 0; this.skintoneTarget = null; this.load(); },
+      nextPage()  { this.offset += this.limit; this.skintoneTarget = null; this.load(); },
+      prevPage()  { this.offset = Math.max(0, this.offset - this.limit); this.skintoneTarget = null; this.load(); },
+
+      skintoneColor(tone) { return SKINTONE_COLORS[tone] || '#FFD700'; },
+
+      async openSkintone(em) {
+        if (this.skintoneTarget?.emojiid === em.emojiid) {
+          this.skintoneTarget = null; // toggle off
+          return;
+        }
+        this.skintoneTarget  = em;
+        this.skintoneVariants = [];
+        this.skintoneLoading  = true;
+        try {
+          const resp = await fetch(`/api/v1/emoji/variants?hexcode=${encodeURIComponent(em.hexcode)}`);
+          const data = await resp.json();
+          this.skintoneVariants = data.variants || [];
+        } catch(e) {
+          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Failed to load variants: ${e.message}` }));
+        }
+        this.skintoneLoading = false;
+      },
+
+      handleEmojiClick(em) {
+        if (em.has_skintones) {
+          this.openSkintone(em);
+        } else {
+          this.skintoneTarget = null;
+          this.react(em);
+        }
+      },
 
       async react(em) {
         const headers = this.getAuthHeaders();
