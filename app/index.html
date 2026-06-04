@@ -323,71 +323,110 @@
       </div>
 
       <!-- Comments -->
-      <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-5">
+      <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-5"
+           x-data="commentsPanel(photo, () => testUser, () => authHeaders())">
+
         <h2 class="font-serif text-xl mb-4">Comments</h2>
 
-        <!-- New comment box -->
-        <div class="bg-white rounded-2xl border border-[var(--border)] p-4 shadow-sm mb-6">
-          <textarea rows="3" placeholder="Leave a comment…"
-                    class="w-full text-sm resize-none focus:outline-none text-brand placeholder-muted"></textarea>
-          <div class="flex justify-end mt-2">
-            <button @click="showToast('Posting comments is not yet available.')"
-                    class="bg-brand text-white text-sm px-4 py-1.5 rounded-full hover:bg-accent transition">Post</button>
+        <!-- New comment box (only when a user is selected) -->
+        <template x-if="testUser">
+          <div class="bg-gray-50 rounded-xl border border-[var(--border)] p-4 mb-6">
+            <textarea x-model="newText" rows="3" placeholder="Leave a comment…"
+                      @keydown.meta.enter="post()"
+                      class="w-full text-sm resize-none focus:outline-none bg-transparent text-brand placeholder-muted"></textarea>
+            <div class="flex justify-end mt-2">
+              <button @click="post()" :disabled="posting || !newText.trim()"
+                      class="bg-brand text-white text-sm px-4 py-1.5 rounded-full hover:bg-accent transition disabled:opacity-40 disabled:cursor-not-allowed">
+                <span x-text="posting ? 'Posting…' : 'Post'"></span>
+              </button>
+            </div>
           </div>
-        </div>
+        </template>
 
         <!-- Comment list -->
         <div class="space-y-6">
-          <template x-for="comment in photo.comments" :key="comment.commentid">
-            <div x-data="commentItem(comment)" x-init="init()" class="animate-fadein">
+          <template x-for="c in comments" :key="c.commentid">
+            <div class="animate-fadein" x-data="commentItem(c, photo.photoid, () => testUser, () => authHeaders())">
               <div class="flex gap-3">
-                <img :src="comment.author.tn || `https://i.pravatar.cc/48?u=${comment.author.userid}`"
-                     :alt="comment.author.username"
+                <img :src="c.author.tn || `https://i.pravatar.cc/48?u=${c.author.userid}`"
+                     :alt="c.author.username"
                      class="w-10 h-10 rounded-full object-cover shrink-0 mt-0.5 ring-2 ring-white shadow" />
                 <div class="flex-1 min-w-0">
+                  <!-- Header row -->
                   <div class="flex items-baseline gap-2 flex-wrap">
-                    <span class="font-semibold text-sm" x-text="comment.author.username"></span>
-                    <span class="text-xs text-muted" x-text="formatDate(comment.date)"></span>
-                  </div>
-
-                  <div class="mt-1 text-sm text-brand leading-relaxed">
-                    <div :class="expanded ? '' : 'comment-clamp'"
-                         :style="expanded ? '' : `-webkit-line-clamp: ${clampLines}`"
-                         x-ref="commentBody"
-                         x-text="comment.comment">
-                    </div>
-                    <template x-if="!expanded && needsClamp">
-                      <button @click="showMore()" class="text-accent text-xs mt-1 hover:underline">more</button>
+                    <span class="font-semibold text-sm" x-text="c.author.username"></span>
+                    <span class="text-xs text-muted" x-text="formatDate(c.date)"></span>
+                    <!-- Edit / Delete (own comments only) -->
+                    <template x-if="testUser && testUser.userid === c.author.userid">
+                      <span class="flex items-center gap-2 ml-auto">
+                        <button @click="startEdit()" class="text-xs text-muted hover:text-brand">Edit</button>
+                        <button @click="deleteComment()" class="text-xs text-muted hover:text-red-500">Delete</button>
+                      </span>
                     </template>
                   </div>
 
+                  <!-- Body / edit box -->
+                  <template x-if="!editing">
+                    <div class="mt-1 text-sm text-brand leading-relaxed">
+                      <div :class="expanded ? '' : 'comment-clamp'"
+                           :style="expanded ? '' : `-webkit-line-clamp: ${clampLines}`"
+                           x-ref="commentBody"
+                           x-init="checkClamp()"
+                           x-text="c.comment"></div>
+                      <template x-if="!expanded && needsClamp">
+                        <button @click="showMore()" class="text-accent text-xs mt-1 hover:underline">more</button>
+                      </template>
+                    </div>
+                  </template>
+                  <template x-if="editing">
+                    <div class="mt-1">
+                      <textarea x-model="editText" rows="3"
+                                @keydown.escape="cancelEdit()"
+                                class="w-full text-sm border border-[var(--border)] rounded-xl p-2 resize-none focus:outline-none focus:ring-2 focus:ring-accent/30"></textarea>
+                      <div class="flex gap-2 justify-end mt-1">
+                        <button @click="cancelEdit()" class="text-xs text-muted hover:text-brand">Cancel</button>
+                        <button @click="saveEdit()" :disabled="saving || !editText.trim()"
+                                class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition disabled:opacity-40">
+                          <span x-text="saving ? 'Saving…' : 'Save'"></span>
+                        </button>
+                      </div>
+                    </div>
+                  </template>
+
+                  <!-- Actions row -->
                   <div class="flex items-center gap-3 mt-2">
-                    <template x-if="comment.replycount > 0 && !showingReplies">
+                    <template x-if="c.replycount > 0 && !showingReplies">
                       <button @click="loadReplies()"
                               class="text-xs text-accent hover:underline font-medium">
-                        Replies (<span x-text="comment.replycount"></span>)
+                        Replies (<span x-text="c.replycount"></span>)
                       </button>
                     </template>
                     <template x-if="showingReplies">
                       <button @click="showingReplies = false; replyOpen = false"
                               class="text-xs text-muted hover:text-brand">Hide replies</button>
                     </template>
-                    <button @click="replyOpen = !replyOpen"
-                            class="text-xs text-muted hover:text-brand font-medium">Reply</button>
+                    <template x-if="testUser">
+                      <button @click="replyOpen = !replyOpen"
+                              class="text-xs text-muted hover:text-brand font-medium">Reply</button>
+                    </template>
                   </div>
 
                   <!-- Replies section -->
                   <template x-if="showingReplies">
                     <div class="mt-3 ml-2 pl-4 border-l-2 border-[var(--border)] space-y-4">
-                      <!-- Reply input always at top -->
-                      <div class="bg-gray-50 rounded-xl border border-[var(--border)] p-3">
-                        <textarea rows="2" placeholder="Write a reply…"
-                                  class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea>
-                        <div class="flex justify-end mt-1">
-                          <button @click="showToast('Posting replies is not yet available.')"
-                                  class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition">Reply</button>
+                      <!-- Reply input -->
+                      <template x-if="testUser">
+                        <div class="bg-gray-50 rounded-xl border border-[var(--border)] p-3">
+                          <textarea x-model="replyText" rows="2" placeholder="Write a reply…"
+                                    class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea>
+                          <div class="flex justify-end mt-1">
+                            <button @click="postReply()" :disabled="postingReply || !replyText.trim()"
+                                    class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition disabled:opacity-40">
+                              <span x-text="postingReply ? 'Posting…' : 'Reply'"></span>
+                            </button>
+                          </div>
                         </div>
-                      </div>
+                      </template>
                       <div x-show="loadingReplies" class="flex justify-center py-2">
                         <div class="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin"></div>
                       </div>
@@ -396,8 +435,8 @@
                           <img :src="reply.author.tn || `https://i.pravatar.cc/40?u=${reply.author.userid}`"
                                :alt="reply.author.username"
                                class="w-8 h-8 rounded-full object-cover shrink-0" />
-                          <div>
-                            <div class="flex items-baseline gap-2">
+                          <div class="flex-1 min-w-0">
+                            <div class="flex items-baseline gap-2 flex-wrap">
                               <span class="font-semibold text-xs" x-text="reply.author.username"></span>
                               <span class="text-xs text-muted" x-text="formatDate(reply.date)"></span>
                             </div>
@@ -408,14 +447,16 @@
                     </div>
                   </template>
 
-                  <!-- Inline reply box (when not showing full replies) -->
+                  <!-- Inline reply box (when replies not shown) -->
                   <template x-if="replyOpen && !showingReplies">
                     <div class="mt-3 bg-gray-50 rounded-xl border border-[var(--border)] p-3">
-                      <textarea rows="2" placeholder="Write a reply…"
+                      <textarea x-model="replyText" rows="2" placeholder="Write a reply…"
                                 class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea>
                       <div class="flex justify-end mt-1">
-                        <button @click="showToast('Posting replies is not yet available.')"
-                                class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition">Reply</button>
+                        <button @click="postReply()" :disabled="postingReply || !replyText.trim()"
+                                class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition disabled:opacity-40">
+                          <span x-text="postingReply ? 'Posting…' : 'Reply'"></span>
+                        </button>
                       </div>
                     </div>
                   </template>
@@ -425,6 +466,17 @@
             </div>
           </template>
         </div>
+
+        <!-- Load more -->
+        <template x-if="photo.commentsurl">
+          <div class="mt-6 text-center">
+            <button @click="loadMore()" :disabled="loadingMore"
+                    class="text-sm text-accent hover:underline disabled:opacity-40">
+              <span x-text="loadingMore ? 'Loading…' : 'Load more comments'"></span>
+            </button>
+          </div>
+        </template>
+
       </div>
 
     </div>
@@ -692,18 +744,72 @@
     } catch { return dateStr; }
   }
 
-  function commentItem(comment) {
+  // commentsPanel manages the top-level comment list + new comment posting.
+  function commentsPanel(photo, getUser, getHeaders) {
     return {
-      comment,
-      expanded: false,
-      clampLines: 4,
-      needsClamp: false,
+      comments:    photo.comments || [],
+      newText:     '',
+      posting:     false,
+      loadingMore: false,
+
+      get testUser() { return getUser(); },
+
+      async post() {
+        const text = this.newText.trim();
+        if (!text || !getUser()) return;
+        this.posting = true;
+        try {
+          const resp = await fetch(`/api/v1/comments?photoid=${encodeURIComponent(photo.photoid)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getHeaders() },
+            body: JSON.stringify({ comment: text }),
+          });
+          if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).error || `HTTP ${resp.status}`);
+          const c = await resp.json();
+          this.comments.unshift(c);
+          this.newText = '';
+        } catch(e) {
+          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Failed to post: ${e.message}` }));
+        }
+        this.posting = false;
+      },
+
+      async loadMore() {
+        if (!photo.commentsurl) return;
+        this.loadingMore = true;
+        try {
+          const resp = await fetch(photo.commentsurl);
+          const data = await resp.json();
+          this.comments.push(...(data.comments || []));
+          photo.commentsurl = data.pages?.next ? data.pages.next.replace('/api/v1/comments', '/api/v1/comments') : null;
+        } catch(e) {
+          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Failed to load more: ${e.message}` }));
+        }
+        this.loadingMore = false;
+      },
+    };
+  }
+
+  // commentItem manages a single comment row: editing, deleting, replies.
+  function commentItem(c, photoid, getUser, getHeaders) {
+    return {
+      c,
+      expanded:     false,
+      clampLines:   4,
+      needsClamp:   false,
+      editing:      false,
+      editText:     '',
+      saving:       false,
       showingReplies: false,
       loadingReplies: false,
-      replyOpen: false,
-      replies: [],
+      replyOpen:    false,
+      replyText:    '',
+      postingReply: false,
+      replies:      [],
 
-      init() {
+      get testUser() { return getUser(); },
+
+      checkClamp() {
         this.$nextTick(() => {
           const el = this.$refs.commentBody;
           if (el) {
@@ -717,20 +823,86 @@
         this.clampLines += 1;
         const el = this.$refs.commentBody;
         if (el) {
-          const lineH = parseFloat(getComputedStyle(el).lineHeight) || 20;
-          if (el.scrollHeight <= lineH * this.clampLines + 4) this.expanded = true;
+          const lh = parseFloat(getComputedStyle(el).lineHeight) || 20;
+          if (el.scrollHeight <= lh * this.clampLines + 4) this.expanded = true;
+        }
+      },
+
+      startEdit() {
+        this.editText = this.c.comment;
+        this.editing  = true;
+      },
+      cancelEdit() { this.editing = false; },
+
+      async saveEdit() {
+        const text = this.editText.trim();
+        if (!text) return;
+        this.saving = true;
+        try {
+          const resp = await fetch(`/api/v1/comments/${encodeURIComponent(this.c.commentid)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', ...getHeaders() },
+            body: JSON.stringify({ comment: text }),
+          });
+          if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).error || `HTTP ${resp.status}`);
+          const updated = await resp.json();
+          this.c.comment = updated.comment;
+          this.editing = false;
+        } catch(e) {
+          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Edit failed: ${e.message}` }));
+        }
+        this.saving = false;
+      },
+
+      async deleteComment() {
+        if (!confirm('Delete this comment?')) return;
+        try {
+          const resp = await fetch(`/api/v1/comments/${encodeURIComponent(this.c.commentid)}`, {
+            method: 'DELETE', headers: getHeaders(),
+          });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          // Remove from parent list via event
+          document.dispatchEvent(new CustomEvent('photoapp:comment-deleted', { detail: this.c.commentid }));
+        } catch(e) {
+          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Delete failed: ${e.message}` }));
         }
       },
 
       async loadReplies() {
-        this.showingReplies = true;
-        this.loadingReplies = true;
+        this.showingReplies  = true;
+        this.loadingReplies  = true;
         try {
-          const resp = await fetch(`/api/v1/comments?photoid=photo001&parentid=${this.comment.commentid}`);
+          const resp = await fetch(`/api/v1/comments?photoid=${encodeURIComponent(photoid)}&parentid=${encodeURIComponent(this.c.commentid)}`);
           const data = await resp.json();
           this.replies = data.comments || [];
-        } catch (e) { console.error('Failed to load replies', e); }
+        } catch(e) { console.error('Failed to load replies', e); }
         this.loadingReplies = false;
+      },
+
+      async postReply() {
+        const text = this.replyText.trim();
+        if (!text || !getUser()) return;
+        this.postingReply = true;
+        try {
+          const resp = await fetch(
+            `/api/v1/comments?photoid=${encodeURIComponent(photoid)}&parentid=${encodeURIComponent(this.c.commentid)}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', ...getHeaders() },
+              body: JSON.stringify({ comment: text }),
+            }
+          );
+          if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).error || `HTTP ${resp.status}`);
+          const reply = await resp.json();
+          this.replies.push(reply);
+          this.c.replycount = (this.c.replycount || 0) + 1;
+          this.replyText    = '';
+          this.replyOpen    = false;
+          this.showingReplies = true;
+        } catch(e) {
+          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Reply failed: ${e.message}` }));
+        }
+        this.postingReply = false;
       },
 
       formatDate,
@@ -1093,6 +1265,9 @@
         await this.loadPhoto(photoid, label);
         document.addEventListener('photoapp:toast', (e) => this.showToast(e.detail));
         document.addEventListener('photoapp:close-label-modal', () => { this.labelModal = false; });
+        document.addEventListener('photoapp:comment-deleted', (e) => {
+          if (this.photo) this.photo.comments = this.photo.comments.filter(c => c.commentid !== e.detail);
+        });
       },
 
       async loadPhoto(photoid, labelID) {
