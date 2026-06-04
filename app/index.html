@@ -194,7 +194,6 @@
         <template x-if="photo.related && photo.related.length">
           <div class="w-36 shrink-0 hidden md:flex flex-col gap-3 overflow-y-auto pr-1"
                :style="photo.image.height > photo.image.width ? 'max-height:85vh' : 'max-height:70vh'">
-            <h3 class="text-xs font-semibold uppercase tracking-widest text-muted sticky top-0 bg-[var(--surface)] py-1">Related</h3>
             <template x-for="rel in photo.related" :key="rel.photoid">
               <a href="#" @click.prevent="loadPhoto(rel.photoid)" class="block rounded-xl overflow-hidden ring-1 ring-[var(--border)] hover:ring-accent/60 transition shadow-sm shrink-0">
                 <img :src="rel.imageurl" :alt="rel.photoid" class="w-full h-24 object-cover hover:opacity-90 transition" />
@@ -845,18 +844,23 @@
           }
           if (alreadyReacted) {
             this.reactedIds.delete(em.emojiid);
+            const uid = window._testUserID;
             const existing = this.photo.emojis.find(e => e.emojiid === em.emojiid);
             if (existing) {
               existing.count--;
+              if (uid) existing.users = (existing.users || []).filter(u => u.id !== uid);
               if (existing.count <= 0) this.photo.emojis = this.photo.emojis.filter(e => e.emojiid !== em.emojiid);
             }
           } else {
             this.reactedIds.add(em.emojiid);
+            const uid = window._testUserID;
+            const userEntry = uid ? { id: uid, name: '', tn: null } : null;
             const existing = this.photo.emojis.find(e => e.emojiid === em.emojiid);
             if (existing) {
               existing.count++;
+              if (userEntry) existing.users = [...(existing.users || []), userEntry];
             } else {
-              this.photo.emojis.push({ emojiid: em.emojiid, emoji: em.emoji, imageurl: em.imageurl, alttext: em.alttext, count: 1, users: [] });
+              this.photo.emojis.push({ emojiid: em.emojiid, emoji: em.emoji, imageurl: em.imageurl, alttext: em.alttext, count: 1, users: userEntry ? [userEntry] : [] });
             }
           }
         } catch(e) {
