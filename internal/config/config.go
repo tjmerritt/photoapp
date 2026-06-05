@@ -26,10 +26,26 @@ type Config struct {
 	DefaultPageSize int
 	MaxPageSize     int
 
-	// Auth: X-User-ID header used for now (no real login yet).
-	// When a proper auth system is added, replace header-based identity
-	// with JWT / session middleware.
+	// Legacy dev header — kept for backwards-compat with the test-user dropdown.
 	AuthHeader string
+
+	// Session
+	SessionSecret string // used to sign session tokens; required in production
+
+	// Google OAuth2
+	GoogleClientID     string
+	GoogleClientSecret string
+	GoogleRedirectURL  string
+
+	// Apple Sign-In
+	AppleClientID      string // Services ID (e.g. com.example.photoapp.web)
+	AppleTeamID        string
+	AppleKeyID         string
+	ApplePrivateKey    string // PEM content of the .p8 key file
+	AppleRedirectURL   string
+
+	// Base URL (needed to build absolute redirect URIs)
+	BaseURL string
 }
 
 func Load() (*Config, error) {
@@ -67,6 +83,16 @@ func Load() (*Config, error) {
 		DefaultPageSize: defaultPage,
 		MaxPageSize:     maxPage,
 		AuthHeader:      envStr("AUTH_HEADER", "X-User-ID"),
+		SessionSecret:   envStr("SESSION_SECRET", "dev-secret-change-in-production"),
+		BaseURL:         envStr("BASE_URL", "http://localhost:8080"),
+		GoogleClientID:     envStr("GOOGLE_CLIENT_ID", ""),
+		GoogleClientSecret: envStr("GOOGLE_CLIENT_SECRET", ""),
+		GoogleRedirectURL:  envStr("GOOGLE_REDIRECT_URL", ""),
+		AppleClientID:   envStr("APPLE_CLIENT_ID", ""),
+		AppleTeamID:     envStr("APPLE_TEAM_ID", ""),
+		AppleKeyID:      envStr("APPLE_KEY_ID", ""),
+		ApplePrivateKey: envStr("APPLE_PRIVATE_KEY", ""),
+		AppleRedirectURL: envStr("APPLE_REDIRECT_URL", ""),
 	}, nil
 }
 
