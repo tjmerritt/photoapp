@@ -96,6 +96,8 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler) http
 	r.POST("/auth/apple/callback",       authHandler.AppleCallback)
 	r.POST("/auth/register",             authHandler.Register)
 	r.POST("/auth/login",                authHandler.Login)
+	r.PATCH("/auth/profile",             authHandler.UpdateProfile)
+	r.POST("/auth/profile/avatar",       authHandler.UploadProfileAvatar)
 
 	// Apply global middleware: CORS → Auth (session + header) → Logger → RequestID
 	var handler http.Handler = r

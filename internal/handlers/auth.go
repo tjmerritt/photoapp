@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -12,6 +13,8 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -206,6 +209,7 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request, _ httprouter.Pa
 		"username":     username,
 		"email":        email,
 		"profileImage": profileImage,
+		"avatarHash":   emailHash(email),
 	})
 }
 
@@ -562,4 +566,103 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request, _ httprouter
 		"username": username,
 		"email":    email,
 	})
+}
+
+// ── Profile settings ──────────────────────────────────────────────────────────
+
+// PATCH /auth/profile  — update profile_image to a preset avatar URL
+// Body: { "profileImage": "/avatars/..." }
+func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	userID, ok := middleware.UserID(r.Context())
+	if !ok || userID == "" {
+		middleware.WriteError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	var body struct {
+		ProfileImage string `json:"profileImage"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	body.ProfileImage = strings.TrimSpace(body.ProfileImage)
+	if body.ProfileImage == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "profileImage is required")
+		return
+	}
+	// Only allow /avatars/... paths or uploads from our own server.
+	if !strings.HasPrefix(body.ProfileImage, "/avatars/") &&
+		!strings.HasPrefix(body.ProfileImage, "/uploads/") &&
+		!strings.HasPrefix(body.ProfileImage, "https://") {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid profileImage URL")
+		return
+	}
+	_, err := h.DB.Exec(r.Context(),
+		`UPDATE users SET profile_image=$1, updated_at=NOW() WHERE userid=$2`,
+		body.ProfileImage, userID)
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	middleware.WriteJSON(w, http.StatusOK, map[string]string{"profileImage": body.ProfileImage})
+}
+
+// POST /auth/profile/avatar  — upload a custom profile image
+func (h *AuthHandler) UploadProfileAvatar(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	userID, ok := middleware.UserID(r.Context())
+	if !ok || userID == "" {
+		middleware.WriteError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if err := r.ParseMultipartForm(4 << 20); err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "could not parse form (max 4MB)")
+		return
+	}
+	file, _, err := r.FormFile("image")
+	if err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "image file is required")
+		return
+	}
+	defer file.Close()
+
+	buf := make([]byte, 512)
+	n, _ := file.Read(buf)
+	ct := http.DetectContentType(buf[:n])
+	allowed := map[string]string{
+		"image/png":  ".png",
+		"image/gif":  ".gif",
+		"image/webp": ".webp",
+		"image/jpeg": ".jpg",
+	}
+	ext, ok := allowed[ct]
+	if !ok {
+		middleware.WriteError(w, http.StatusBadRequest, "image must be PNG, GIF, WebP or JPEG")
+		return
+	}
+
+	// Reconstruct full file by prepending the already-read header bytes.
+	fullFile := io.MultiReader(bytes.NewReader(buf[:n]), file)
+	filename := uuid.New().String() + ext
+
+	if err := os.MkdirAll(h.Cfg.UploadDir, 0o755); err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, "could not create upload directory")
+		return
+	}
+	dest, err := os.Create(filepath.Join(h.Cfg.UploadDir, filename))
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, "could not save file")
+		return
+	}
+	defer dest.Close()
+	if _, err := io.Copy(dest, fullFile); err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, "could not save file")
+		return
+	}
+
+	imageURL := h.Cfg.UploadURLBase + "/" + filename
+	_, _ = h.DB.Exec(r.Context(),
+		`UPDATE users SET profile_image=$1, updated_at=NOW() WHERE userid=$2`,
+		imageURL, userID)
+
+	middleware.WriteJSON(w, http.StatusOK, map[string]string{"profileImage": imageURL})
 }

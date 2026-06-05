@@ -52,6 +52,9 @@
     .emoji-btn:active { transform: scale(1.05); }
 
     [x-cloak] { display: none !important; }
+
+    /* Show a neutral circle when a profile image is missing */
+    img.avatar { background-color: #e5e7eb; }
   </style>
 
   <script>
@@ -147,6 +150,102 @@
           </template>
         </div>
       </div>
+      <!-- Settings -->
+      <div class="relative" x-data="{ open: false }">
+        <button @click="loggedInUser && (open = !open)"
+                :class="loggedInUser ? 'hover:bg-gray-100 cursor-pointer' : 'cursor-default opacity-40'"
+                class="p-2 rounded-lg transition" title="Settings">
+          <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+        </button>
+
+        <!-- Settings popup -->
+        <div x-show="open" @click.outside="open = false" x-transition
+             class="absolute right-0 top-11 bg-white border border-[var(--border)] rounded-2xl shadow-2xl w-80 p-5 z-50 animate-scalein"
+             x-data="{
+               saving: false,
+               uploading: false,
+               get presets() {
+                 const h = loggedInUser?.avatarHash || '';
+                 return h ? [h, h+'1', h+'2', h+'3', h+'4', h+'5', h+'6', h+'7', h+'8'] : [];
+               },
+               async selectPreset(hash) {
+                 if (this.saving) return;
+                 this.saving = true;
+                 const url = '/avatars/' + hash;
+                 try {
+                   const r = await fetch('/auth/profile', {
+                     method: 'PATCH',
+                     headers: { 'Content-Type': 'application/json' },
+                     body: JSON.stringify({ profileImage: url })
+                   });
+                   if (!r.ok) throw new Error('Save failed');
+                   loggedInUser.profileImage = url;
+                   window._profileImage = url;
+                 } catch(e) {
+                   document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: e.message }));
+                 }
+                 this.saving = false;
+               },
+               async uploadCustom(e) {
+                 const file = e.target.files?.[0];
+                 if (!file) return;
+                 this.uploading = true;
+                 try {
+                   const fd = new FormData();
+                   fd.append('image', file);
+                   const r = await fetch('/auth/profile/avatar', { method: 'POST', body: fd });
+                   if (!r.ok) throw new Error('Upload failed');
+                   const d = await r.json();
+                   loggedInUser.profileImage = d.profileImage;
+                 } catch(e) {
+                   document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: e.message }));
+                 }
+                 this.uploading = false;
+                 e.target.value = '';
+               }
+             }">
+
+          <h2 class="font-serif text-xl mb-4">Settings</h2>
+
+          <!-- Current avatar -->
+          <div class="flex items-center gap-3 mb-4">
+            <img :src="loggedInUser?.profileImage || ''" class="avatar w-14 h-14 rounded-full object-cover ring-2 ring-[var(--border)]" />
+            <div>
+              <p class="text-sm font-semibold" x-text="loggedInUser?.username"></p>
+              <p class="text-xs text-muted">Profile image</p>
+            </div>
+          </div>
+
+          <!-- Preset avatars -->
+          <p class="text-xs font-semibold text-muted uppercase tracking-widest mb-2">Choose avatar</p>
+          <div class="grid grid-cols-5 gap-2 mb-4">
+            <template x-for="hash in presets" :key="hash">
+              <button @click="selectPreset(hash)" :disabled="saving"
+                      :class="loggedInUser?.profileImage === '/avatars/' + hash ? 'ring-2 ring-accent' : 'ring-1 ring-[var(--border)] hover:ring-accent/60'"
+                      class="rounded-xl overflow-hidden transition disabled:opacity-40">
+                <img :src="'/avatars/' + hash" class="w-full aspect-square object-cover" />
+              </button>
+            </template>
+          </div>
+
+          <!-- Custom upload -->
+          <p class="text-xs font-semibold text-muted uppercase tracking-widest mb-2">Custom image</p>
+          <label class="flex items-center justify-center gap-2 w-full border border-dashed border-[var(--border)] rounded-xl py-2.5 cursor-pointer hover:bg-gray-50 transition text-sm text-muted"
+                 :class="uploading ? 'opacity-40 cursor-wait' : ''">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+            </svg>
+            <span x-text="uploading ? 'Uploading…' : 'Upload image'"></span>
+            <input type="file" accept="image/*" class="hidden" @change="uploadCustom($event)" :disabled="uploading" />
+          </label>
+
+        </div>
+      </div>
+
       <!-- Profile / Auth -->
       <div class="relative" x-data="{ open: false }">
         <button @click="open = !open" class="p-1 rounded-lg hover:bg-gray-100 transition" title="Account">
@@ -432,9 +531,9 @@
                 </p>
                 <template x-for="u in em.users" :key="u.id">
                   <div class="flex items-center gap-2 py-1">
-                    <img :src="u.tn || `/avatars/${u.id}`"
+                    <img :src="u.tn || ''"
                          :alt="u.name || u.id"
-                         class="w-6 h-6 rounded-full object-cover" />
+                         class="avatar w-6 h-6 rounded-full object-cover" />
                     <span class="text-xs text-brand" x-text="u.name || u.id?.slice(0,8)"></span>
                   </div>
                 </template>
@@ -566,7 +665,7 @@
                       <template x-for="r1 in replies" :key="r1.commentid">
                         <div x-data="commentItem(r1, photoid, getUser, getHeaders, depth + 1)">
                           <div class="flex gap-2">
-                            <img :src="`https://i.pravatar.cc/32?u=${c.author.userid}`" class="w-8 h-8 rounded-full object-cover shrink-0" />
+                            <img :src="c.author.tn || ''" class="avatar w-8 h-8 rounded-full object-cover shrink-0" />
                             <div class="flex-1 min-w-0">
                               <div class="flex items-baseline gap-2 flex-wrap">
                                 <span class="font-semibold text-xs" x-text="c.author.username"></span>
@@ -596,7 +695,7 @@
                                   <template x-for="r2 in replies" :key="r2.commentid">
                                     <div x-data="commentItem(r2, photoid, getUser, getHeaders, depth + 1)">
                                       <div class="flex gap-2">
-                                        <img :src="`https://i.pravatar.cc/28?u=${c.author.userid}`" class="w-7 h-7 rounded-full object-cover shrink-0" />
+                                        <img :src="c.author.tn || ''" class="avatar w-7 h-7 rounded-full object-cover shrink-0" />
                                         <div class="flex-1 min-w-0">
                                           <div class="flex items-baseline gap-2 flex-wrap">
                                             <span class="font-semibold text-xs" x-text="c.author.username"></span>
@@ -618,7 +717,7 @@
                                               <template x-for="r3 in replies" :key="r3.commentid">
                                                 <div x-data="commentItem(r3, photoid, getUser, getHeaders, depth + 1)">
                                                   <div class="flex gap-2">
-                                                    <img :src="`https://i.pravatar.cc/24?u=${c.author.userid}`" class="w-6 h-6 rounded-full object-cover shrink-0" />
+                                                    <img :src="c.author.tn || ''" class="w-6 h-6 rounded-full object-cover shrink-0" />
                                                     <div class="flex-1 min-w-0">
                                                       <span class="font-semibold text-xs" x-text="c.author.username"></span>
                                                       <span class="text-xs text-muted ml-1" x-text="formatDate(c.date)"></span>
@@ -637,7 +736,7 @@
                                                           <template x-for="r4 in replies" :key="r4.commentid">
                                                             <div x-data="commentItem(r4, photoid, getUser, getHeaders, depth + 1)">
                                                               <div class="flex gap-1.5">
-                                                                <img :src="`https://i.pravatar.cc/20?u=${c.author.userid}`" class="w-5 h-5 rounded-full object-cover shrink-0" />
+                                                                <img :src="c.author.tn || ''" class="avatar w-5 h-5 rounded-full object-cover shrink-0" />
                                                                 <div class="flex-1 min-w-0">
                                                                   <span class="font-semibold text-xs" x-text="c.author.username"></span>
                                                                   <span class="text-xs text-muted ml-1" x-text="formatDate(c.date)"></span>
@@ -653,7 +752,7 @@
                                                                       <div x-show="loadingReplies" class="flex justify-center"><div class="w-3 h-3 border-2 border-accent/30 border-t-accent rounded-full animate-spin"></div></div>
                                                                       <template x-for="r5 in replies" :key="r5.commentid">
                                                                         <div x-data="commentItem(r5, photoid, getUser, getHeaders, depth + 1)" class="flex gap-1.5">
-                                                                          <img :src="`https://i.pravatar.cc/18?u=${c.author.userid}`" class="w-4 h-4 rounded-full object-cover shrink-0 mt-0.5" />
+                                                                          <img :src="c.author.tn || ''" class="avatar w-4 h-4 rounded-full object-cover shrink-0 mt-0.5" />
                                                                           <div class="flex-1 min-w-0">
                                                                             <span class="font-semibold text-xs" x-text="c.author.username"></span>
                                                                             <span class="text-xs text-muted ml-1" x-text="formatDate(c.date)"></span>
@@ -1455,17 +1554,13 @@
     };
   }
 
-  // Returns the avatar URL for a user object that may have .profileImage set.
-  // Falls back to the generated Codeberg-style avatar endpoint if none is set.
-  function avatarSrc(user, size = 48) {
-    if (!user) return `https://i.pravatar.cc/${size}`;
-    if (user.profileImage) return user.profileImage;
-    if (user.email) {
-      // Compute MD5 client-side for the generated avatar URL.
-      // (A simple approach: just use the userid as seed for pravatar as fallback.)
-      return `/avatars/${user.userid}`;
-    }
-    return `https://i.pravatar.cc/${size}?u=${user.userid || ''}`;
+  // Returns the avatar URL for a user object.
+  // Uses the stored profile_image URL (which the server sets at registration).
+  // Returns empty string when none is set — callers should handle missing images
+  // via CSS (bg-gray-200) or an x-if guard.
+  function avatarSrc(user) {
+    if (!user) return '';
+    return user.profileImage || '';
   }
 
   function photoApp() {
