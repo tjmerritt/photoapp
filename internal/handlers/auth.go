@@ -195,21 +195,25 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request, _ httprouter.Pa
 	}
 	var username, email string
 	var profileImage *string
-	err := h.DB.QueryRow(r.Context(),
-		`SELECT username, email, COALESCE(profile_image, '/avatars/' || md5(lower(trim(COALESCE(email, userid::text))))) FROM users WHERE userid=$1 AND deleted_at IS NULL`,
-		userID,
-	).Scan(&username, &email, &profileImage)
+	var allowMultiLogin bool
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT username, email,
+		       COALESCE(profile_image, '/avatars/' || md5(lower(trim(COALESCE(email, userid::text))))),
+		       allow_multi_login
+		FROM   users WHERE userid=$1 AND deleted_at IS NULL
+	`, userID).Scan(&username, &email, &profileImage, &allowMultiLogin)
 	if err != nil {
 		middleware.WriteJSON(w, http.StatusOK, map[string]any{"loggedIn": false})
 		return
 	}
 	middleware.WriteJSON(w, http.StatusOK, map[string]any{
-		"loggedIn":     true,
-		"userid":       userID,
-		"username":     username,
-		"email":        email,
-		"profileImage": profileImage,
-		"avatarHash":   emailHash(email),
+		"loggedIn":        true,
+		"userid":          userID,
+		"username":        username,
+		"email":           email,
+		"profileImage":    profileImage,
+		"avatarHash":      emailHash(email),
+		"allowMultiLogin": allowMultiLogin,
 	})
 }
 
@@ -566,6 +570,56 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request, _ httprouter
 		"username": username,
 		"email":    email,
 	})
+}
+
+// ── Multi-login user list ─────────────────────────────────────────────────────
+
+// GET /auth/users
+// Returns all active (non-deleted) users for the user-switcher dropdown.
+// Restricted to users whose allow_multi_login flag is set.
+func (h *AuthHandler) ListUsers(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	userID, ok := middleware.UserID(r.Context())
+	if !ok || userID == "" {
+		middleware.WriteError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	// Verify the caller has multi-login permission.
+	var allowed bool
+	_ = h.DB.QueryRow(r.Context(),
+		`SELECT allow_multi_login FROM users WHERE userid=$1 AND deleted_at IS NULL`, userID,
+	).Scan(&allowed)
+	if !allowed {
+		middleware.WriteError(w, http.StatusForbidden, "multi-login not enabled for this account")
+		return
+	}
+
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT userid::text, username,
+		       COALESCE(profile_image, '/avatars/' || md5(lower(trim(COALESCE(email, userid::text)))))
+		FROM   users
+		WHERE  deleted_at IS NULL
+		ORDER  BY username
+	`)
+	if err != nil {
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	defer rows.Close()
+
+	type userEntry struct {
+		UserID       string `json:"userid"`
+		Username     string `json:"username"`
+		ProfileImage string `json:"profileImage"`
+	}
+	users := []userEntry{}
+	for rows.Next() {
+		var u userEntry
+		if err := rows.Scan(&u.UserID, &u.Username, &u.ProfileImage); err != nil {
+			continue
+		}
+		users = append(users, u)
+	}
+	middleware.WriteJSON(w, http.StatusOK, map[string]any{"users": users})
 }
 
 // ── Profile settings ──────────────────────────────────────────────────────────

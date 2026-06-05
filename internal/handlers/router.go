@@ -89,6 +89,7 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler) http
 
 	// ── Auth routes ───────────────────────────────────────────────────────────
 	r.GET("/auth/me",                    authHandler.Me)
+	r.GET("/auth/users",                 authHandler.ListUsers)
 	r.POST("/auth/logout",               authHandler.Logout)
 	r.GET("/auth/google",                authHandler.GoogleLogin)
 	r.GET("/auth/google/callback",       authHandler.GoogleCallback)
