@@ -400,21 +400,19 @@
       </div>
 
       <!-- Emojis -->
-      <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-4">
+      <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-4"
+           x-data="{ hoverEmojiId: null, hoverTimer: null }">
         <div class="flex flex-wrap items-center gap-2">
           <template x-for="em in photo.emojis" :key="em.emojiid">
-            <div class="relative" x-data="{ holding: false, holdTimer: null }">
+            <div class="relative">
               <button class="emoji-btn flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm shadow-sm select-none border transition-colors"
                       :class="currentUser && em.users && em.users.some(u => u.id === currentUser.userid)
                         ? 'bg-teal-50 border-teal-300 text-teal-700'
                         : 'bg-white border-[var(--border)]'"
                       @click="toggleReaction(em)"
-                      @mousedown="holdTimer = setTimeout(() => holding = true, 600)"
-                      @mouseup="clearTimeout(holdTimer)"
-                      @mouseleave="clearTimeout(holdTimer)"
-                      @touchstart.prevent="holdTimer = setTimeout(() => holding = true, 600)"
-                      @touchend="clearTimeout(holdTimer)"
-                      :title="currentUser && em.users && em.users.some(u => u.id === currentUser.userid) ? 'Click to remove reaction' : 'Click to react · Hold to see who reacted'">
+                      @mouseenter="clearTimeout(hoverTimer); hoverTimer = setTimeout(() => hoverEmojiId = em.emojiid, 500)"
+                      @mouseleave="clearTimeout(hoverTimer); hoverTimer = setTimeout(() => hoverEmojiId = null, 150)"
+                      :title="currentUser && em.users && em.users.some(u => u.id === currentUser.userid) ? 'Click to remove reaction' : 'Click to react'">
                 <template x-if="em.imageurl">
                   <img :src="em.imageurl" :alt="em.alttext" class="w-5 h-5 object-contain" />
                 </template>
@@ -423,9 +421,11 @@
                 </template>
                 <span class="font-medium text-xs" x-text="em.count"></span>
               </button>
-              <!-- Hold popup -->
-              <div x-show="holding" @click.outside="holding=false"
-                   class="absolute bottom-full mb-2 left-0 bg-white rounded-xl shadow-xl border border-[var(--border)] p-3 w-44 z-20 animate-scalein">
+              <!-- Hover popup -->
+              <div x-show="hoverEmojiId === em.emojiid"
+                   @mouseenter="clearTimeout(hoverTimer)"
+                   @mouseleave="hoverTimer = setTimeout(() => hoverEmojiId = null, 150)"
+                   class="absolute bottom-full mb-1 left-0 bg-white rounded-xl shadow-xl border border-[var(--border)] p-3 w-44 z-20 animate-scalein">
                 <p class="text-xs font-semibold text-muted mb-2 flex items-center gap-1">Reacted with
                   <template x-if="em.imageurl"><img :src="em.imageurl" :alt="em.alttext" class="w-4 h-4 object-contain inline" /></template>
                   <template x-if="!em.imageurl"><span x-text="em.emoji"></span></template>
