@@ -410,7 +410,7 @@
                         ? 'bg-teal-50 border-teal-300 text-teal-700'
                         : 'bg-white border-[var(--border)]'"
                       @click="toggleReaction(em)"
-                      @mouseenter="clearTimeout(hoverTimer); hoverTimer = setTimeout(() => hoverEmojiId = em.emojiid, 500)"
+                      @mouseenter="clearTimeout(hoverTimer); hoverEmojiId ? hoverEmojiId = em.emojiid : hoverTimer = setTimeout(() => hoverEmojiId = em.emojiid, 500)"
                       @mouseleave="clearTimeout(hoverTimer); hoverTimer = setTimeout(() => hoverEmojiId = null, 150)"
                       :title="currentUser && em.users && em.users.some(u => u.id === currentUser.userid) ? 'Click to remove reaction' : 'Click to react'">
                 <template x-if="em.imageurl">
