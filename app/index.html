@@ -149,11 +149,11 @@
       </div>
       <!-- Profile / Auth -->
       <div class="relative" x-data="{ open: false }">
-        <button @click="open = !open" class="p-2 rounded-lg hover:bg-gray-100 transition" title="Account">
-          <template x-if="loggedInUser && loggedInUser.profileImage">
-            <img :src="loggedInUser.profileImage" class="w-6 h-6 rounded-full object-cover" />
+        <button @click="open = !open" class="p-1 rounded-lg hover:bg-gray-100 transition" title="Account">
+          <template x-if="loggedInUser">
+            <img :src="avatarSrc(loggedInUser, 32)" class="w-7 h-7 rounded-full object-cover" />
           </template>
-          <template x-if="!(loggedInUser && loggedInUser.profileImage)">
+          <template x-if="!loggedInUser">
             <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M5.121 17.804A4 4 0 019 16h6a4 4 0 013.879 1.804M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
             </svg>
@@ -168,7 +168,7 @@
           <template x-if="loggedInUser">
             <div>
               <div class="flex items-center gap-3 mb-4">
-                <img :src="loggedInUser.profileImage || `https://i.pravatar.cc/48?u=${loggedInUser.userid}`"
+                <img :src="avatarSrc(loggedInUser, 48)"
                      class="w-12 h-12 rounded-full object-cover" />
                 <div>
                   <div class="font-semibold text-sm" x-text="loggedInUser.username"></div>
@@ -432,8 +432,10 @@
                 </p>
                 <template x-for="u in em.users" :key="u.id">
                   <div class="flex items-center gap-2 py-1">
-                    <img :src="u.tn" :alt="u.name" class="w-6 h-6 rounded-full object-cover" />
-                    <span class="text-xs text-brand" x-text="u.name"></span>
+                    <img :src="u.tn || `/avatars/${u.id}`"
+                         :alt="u.name || u.id"
+                         class="w-6 h-6 rounded-full object-cover" />
+                    <span class="text-xs text-brand" x-text="u.name || u.id?.slice(0,8)"></span>
                   </div>
                 </template>
               </div>
@@ -1257,7 +1259,8 @@
           } else {
             this.reactedIds.add(em.emojiid);
             const uid = window._testUserID;
-            const userEntry = uid ? { id: uid, name: '', tn: null } : null;
+            const cu = this.currentUser;
+            const userEntry = uid ? { id: uid, name: cu?.username || '', tn: cu?.profileImage || null } : null;
             const existing = this.photo.emojis.find(e => e.emojiid === em.emojiid);
             if (existing) {
               existing.count++;
@@ -1452,6 +1455,19 @@
     };
   }
 
+  // Returns the avatar URL for a user object that may have .profileImage set.
+  // Falls back to the generated Codeberg-style avatar endpoint if none is set.
+  function avatarSrc(user, size = 48) {
+    if (!user) return `https://i.pravatar.cc/${size}`;
+    if (user.profileImage) return user.profileImage;
+    if (user.email) {
+      // Compute MD5 client-side for the generated avatar URL.
+      // (A simple approach: just use the userid as seed for pravatar as fallback.)
+      return `/avatars/${user.userid}`;
+    }
+    return `https://i.pravatar.cc/${size}?u=${user.userid || ''}`;
+  }
+
   function photoApp() {
     return {
       photo: null,
@@ -1584,7 +1600,8 @@
             if (em.count <= 0) this.photo.emojis = this.photo.emojis.filter(e => e.emojiid !== em.emojiid);
           } else {
             em.count++;
-            em.users = [...(em.users || []), { id: uid, name: this.testUser.username, tn: null }];
+            const cu2 = this.currentUser;
+            em.users = [...(em.users || []), { id: uid, name: cu2?.username || '', tn: cu2?.profileImage || null }];
           }
         } catch(e) {
           this.showToast(`Reaction failed: ${e.message}`);

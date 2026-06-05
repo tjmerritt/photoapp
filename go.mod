@@ -3,6 +3,7 @@ module github.com/tjmerritt/photoapp
 go 1.25.0
 
 require (
+	codeberg.org/Codeberg/avatars v0.0.0-20211228163022-8da63012fe69
 	github.com/golang-jwt/jwt/v5 v5.2.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.2

@@ -134,9 +134,14 @@ func (h *AuthHandler) findOrCreateOAuthUser(ctx context.Context, provider, sub, 
 	username := usernameFromName(name, email)
 	username = h.uniqueUsername(ctx, username)
 
+	// Use the provider's picture if available, otherwise generate one from email.
+	profileImage := picture
+	if profileImage == "" && email != "" {
+		profileImage = AvatarURL(email)
+	}
 	var picturePtr *string
-	if picture != "" {
-		picturePtr = &picture
+	if profileImage != "" {
+		picturePtr = &profileImage
 	}
 
 	err = h.DB.QueryRow(ctx, fmt.Sprintf(`
@@ -492,11 +497,12 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request, _ httprou
 	}
 
 	var userID string
+	avatarURL := AvatarURL(req.Email)
 	err = h.DB.QueryRow(r.Context(), `
-		INSERT INTO users (username, email, password_hash, provider)
-		VALUES ($1, $2, $3, 'local')
+		INSERT INTO users (username, email, password_hash, provider, profile_image)
+		VALUES ($1, $2, $3, 'local', $4)
 		RETURNING userid::text
-	`, req.Username, req.Email, string(hash)).Scan(&userID)
+	`, req.Username, req.Email, string(hash), avatarURL).Scan(&userID)
 	if err != nil {
 		slog.Error("user insert failed", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "registration failed")

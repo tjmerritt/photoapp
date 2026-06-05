@@ -84,6 +84,9 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler) http
 		middleware.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
+	// ── Avatar ────────────────────────────────────────────────────────────────
+	r.GET("/avatars/:hash", ServeAvatar)
+
 	// ── Auth routes ───────────────────────────────────────────────────────────
 	r.GET("/auth/me",                    authHandler.Me)
 	r.POST("/auth/logout",               authHandler.Logout)
