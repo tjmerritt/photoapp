@@ -196,7 +196,7 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request, _ httprouter.Pa
 	var username, email string
 	var profileImage *string
 	err := h.DB.QueryRow(r.Context(),
-		`SELECT username, email, profile_image FROM users WHERE userid=$1 AND deleted_at IS NULL`,
+		`SELECT username, email, COALESCE(profile_image, '/avatars/' || md5(lower(trim(COALESCE(email, userid::text))))) FROM users WHERE userid=$1 AND deleted_at IS NULL`,
 		userID,
 	).Scan(&username, &email, &profileImage)
 	if err != nil {

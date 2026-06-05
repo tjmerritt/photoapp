@@ -162,7 +162,8 @@ func (h *UserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	row := h.DB.QueryRow(r.Context(), `
 		SELECT userid::text, username, COALESCE(fullname,''),
-		       joined_at, profile_link, profile_image
+		       joined_at, profile_link,
+		       COALESCE(profile_image, '/avatars/' || md5(lower(trim(COALESCE(email, userid::text)))))
 		FROM   users
 		WHERE  userid = $1 AND deleted_at IS NULL
 	`, userid)
