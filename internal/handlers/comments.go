@@ -194,7 +194,8 @@ func (h *CommentsHandler) Update(w http.ResponseWriter, r *http.Request, ps http
 
 	row := h.DB.QueryRow(r.Context(), `
 		SELECT c.commentid::text, c.comment_text, c.reply_count, c.created_at,
-		       u.userid::text, u.username, u.profile_image
+		       u.userid::text, u.username,
+		       COALESCE(u.profile_image, '/avatars/' || md5(lower(trim(COALESCE(u.email, u.userid::text)))))
 		FROM   comments c
 		JOIN   users    u ON u.userid = c.author_userid
 		WHERE  c.commentid=$1

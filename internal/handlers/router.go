@@ -10,7 +10,7 @@ import (
 )
 
 // NewRouter builds and returns the fully configured HTTP router.
-func NewRouter(pool *db.Pool, cfg *config.Config) http.Handler {
+func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler) http.Handler {
 	r := httprouter.New()
 
 	// ── Handler instances ─────────────────────────────────────────────────────
@@ -84,10 +84,27 @@ func NewRouter(pool *db.Pool, cfg *config.Config) http.Handler {
 		middleware.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	// Apply global middleware: CORS → Auth → Logger → RequestID
+	// ── Avatar ────────────────────────────────────────────────────────────────
+	r.GET("/avatars/:hash", ServeAvatar)
+
+	// ── Auth routes ───────────────────────────────────────────────────────────
+	r.GET("/auth/config",                authHandler.Config)
+	r.GET("/auth/me",                    authHandler.Me)
+	r.GET("/auth/users",                 authHandler.ListUsers)
+	r.POST("/auth/logout",               authHandler.Logout)
+	r.GET("/auth/google",                authHandler.GoogleLogin)
+	r.GET("/auth/google/callback",       authHandler.GoogleCallback)
+	r.GET("/auth/apple",                 authHandler.AppleLogin)
+	r.POST("/auth/apple/callback",       authHandler.AppleCallback)
+	r.POST("/auth/register",             authHandler.Register)
+	r.POST("/auth/login",                authHandler.Login)
+	r.PATCH("/auth/profile",             authHandler.UpdateProfile)
+	r.POST("/auth/profile/avatar",       authHandler.UploadProfileAvatar)
+
+	// Apply global middleware: CORS → Auth (session + header) → Logger → RequestID
 	var handler http.Handler = r
 	handler = middleware.Logger(handler)
-	handler = middleware.Auth(cfg.AuthHeader)(handler)
+	handler = middleware.Auth(cfg.AuthHeader, authHandler.LookupSession)(handler)
 	handler = middleware.CORS(handler)
 	handler = middleware.RequestID(handler)
 

@@ -52,6 +52,9 @@
     .emoji-btn:active { transform: scale(1.05); }
 
     [x-cloak] { display: none !important; }
+
+    /* Show a neutral circle when a profile image is missing */
+    img.avatar { background-color: #e5e7eb; }
   </style>
 
   <script>
@@ -85,6 +88,15 @@
       <div x-show="open" @click.outside="open=false" x-transition
            class="absolute left-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-44 py-1 animate-scalein">
         <a href="#" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Photos</a>
+        <button @click="if(loggedInUser){ settingsOpen = !settingsOpen; } open = false"
+                :class="loggedInUser ? '' : 'opacity-40 cursor-default'"
+                class="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-center gap-3">
+          <svg class="w-4 h-4 text-muted shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+          Settings
+        </button>
       </div>
     </div>
 
@@ -115,55 +127,285 @@
           <path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0l2 2M4 4L2 6m16 2V4m0 0l2 2m-2-2l-2 2"/>
         </svg>
       </button>
-      <!-- Test user switcher (dev only, until real login is wired up) -->
-      <div class="relative" x-data="{ open: false }">
-        <button @click="open = !open"
-                class="flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-gray-100 transition text-xs font-medium text-muted border border-dashed border-gray-300"
-                title="Switch test user">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a4 4 0 00-5-4M9 20H4v-2a4 4 0 015-4m0 0a4 4 0 110-8 4 4 0 010 8zm8-8a4 4 0 110-8 4 4 0 010 8z"/>
-          </svg>
-          <span x-text="testUser ? testUser.username : 'Guest'"></span>
-          <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+      <!-- User switcher — only visible when logged-in user has allow_multi_login -->
+      <template x-if="loggedInUser && loggedInUser.allowMultiLogin">
+        <div class="relative" x-data="{ open: false, users: [], loaded: false }">
+          <button @click="if(!loaded){ fetch('/auth/users').then(r=>r.json()).then(d=>{ users=d.users||[]; loaded=true; }); } open = !open"
+                  class="flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-gray-100 transition text-xs font-medium text-muted border border-dashed border-gray-300"
+                  title="Switch acting user">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a4 4 0 00-5-4M9 20H4v-2a4 4 0 015-4m0 0a4 4 0 110-8 4 4 0 010 8zm8-8a4 4 0 110-8 4 4 0 010 8z"/>
+            </svg>
+            <span x-text="testUser ? testUser.username : loggedInUser.username"></span>
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+            </svg>
+          </button>
+          <div x-show="open" @click.outside="open = false" x-transition
+               class="absolute right-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-52 py-1 z-50 animate-scalein">
+            <p class="px-3 py-1 text-xs font-semibold text-muted uppercase tracking-widest">Act as user</p>
+            <!-- Self (no override) -->
+            <button @click="selectTestUser(null); open = false"
+                    :class="!testUser ? 'bg-gray-50 font-semibold' : ''"
+                    class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
+              <img :src="loggedInUser.profileImage || ''" class="avatar w-6 h-6 rounded-full object-cover shrink-0" />
+              <div>
+                <div x-text="loggedInUser.username"></div>
+                <div class="text-xs text-muted">You (self)</div>
+              </div>
+            </button>
+            <div class="border-t border-[var(--border)] my-1"></div>
+            <template x-for="u in users.filter(u => u.userid !== loggedInUser.userid)" :key="u.userid">
+              <button @click="selectTestUser({ userid: u.userid, username: u.username, profileImage: u.profileImage }); open = false"
+                      :class="testUser && testUser.userid === u.userid ? 'bg-accent/10 text-accent font-semibold' : ''"
+                      class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
+                <img :src="u.profileImage || ''" class="avatar w-6 h-6 rounded-full object-cover shrink-0" />
+                <span x-text="u.username"></span>
+              </button>
+            </template>
+          </div>
+        </div>
+      </template>
+      <!-- Settings -->
+      <div class="relative">
+        <button @click="loggedInUser && (settingsOpen = !settingsOpen)"
+                :class="loggedInUser ? 'hover:bg-gray-100 cursor-pointer' : 'cursor-default opacity-40'"
+                class="p-2 rounded-lg transition" title="Settings">
+          <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
           </svg>
         </button>
+
+        <!-- Settings popup -->
+        <div x-show="settingsOpen" @click.outside="settingsOpen = false" x-transition
+             class="absolute right-0 top-11 bg-white border border-[var(--border)] rounded-2xl shadow-2xl w-80 p-5 z-50 animate-scalein"
+             x-data="{
+               saving: false,
+               uploading: false,
+               get presets() {
+                 const h = loggedInUser?.avatarHash || '';
+                 return h ? Array.from({ length: 20 }, (_, i) => i === 0 ? h : h + i) : [];
+               },
+               async selectPreset(hash) {
+                 if (this.saving) return;
+                 this.saving = true;
+                 const url = '/avatars/' + hash;
+                 try {
+                   const r = await fetch('/auth/profile', {
+                     method: 'PATCH',
+                     headers: { 'Content-Type': 'application/json' },
+                     body: JSON.stringify({ profileImage: url })
+                   });
+                   if (!r.ok) throw new Error('Save failed');
+                   loggedInUser.profileImage = url;
+                   window._profileImage = url;
+                 } catch(e) {
+                   document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: e.message }));
+                 }
+                 this.saving = false;
+               },
+               async uploadCustom(e) {
+                 const file = e.target.files?.[0];
+                 if (!file) return;
+                 this.uploading = true;
+                 try {
+                   const fd = new FormData();
+                   fd.append('image', file);
+                   const r = await fetch('/auth/profile/avatar', { method: 'POST', body: fd });
+                   if (!r.ok) throw new Error('Upload failed');
+                   const d = await r.json();
+                   loggedInUser.profileImage = d.profileImage;
+                 } catch(e) {
+                   document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: e.message }));
+                 }
+                 this.uploading = false;
+                 e.target.value = '';
+               }
+             }">
+
+          <h2 class="font-serif text-xl mb-4">Settings</h2>
+
+          <!-- Current avatar -->
+          <div class="flex items-center gap-3 mb-4">
+            <img :src="loggedInUser?.profileImage || ''" class="avatar w-14 h-14 rounded-full object-cover ring-2 ring-[var(--border)]" />
+            <div>
+              <p class="text-sm font-semibold" x-text="loggedInUser?.username"></p>
+              <p class="text-xs text-muted">Profile image</p>
+            </div>
+          </div>
+
+          <!-- Preset avatars -->
+          <p class="text-xs font-semibold text-muted uppercase tracking-widest mb-2">Choose avatar</p>
+          <div class="grid grid-cols-5 gap-1.5 mb-4">
+            <template x-for="hash in presets" :key="hash">
+              <button @click="selectPreset(hash)" :disabled="saving"
+                      :class="loggedInUser?.profileImage === '/avatars/' + hash ? 'ring-2 ring-accent' : 'ring-1 ring-[var(--border)] hover:ring-accent/60'"
+                      class="rounded-xl overflow-hidden transition disabled:opacity-40">
+                <img :src="'/avatars/' + hash" class="w-full aspect-square object-cover" />
+              </button>
+            </template>
+          </div>
+
+          <!-- Custom upload -->
+          <p class="text-xs font-semibold text-muted uppercase tracking-widest mb-2">Custom image</p>
+          <label class="flex items-center justify-center gap-2 w-full border border-dashed border-[var(--border)] rounded-xl py-2.5 cursor-pointer hover:bg-gray-50 transition text-sm text-muted"
+                 :class="uploading ? 'opacity-40 cursor-wait' : ''">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+            </svg>
+            <span x-text="uploading ? 'Uploading…' : 'Upload image'"></span>
+            <input type="file" accept="image/*" class="hidden" @change="uploadCustom($event)" :disabled="uploading" />
+          </label>
+
+        </div>
+      </div>
+
+      <!-- Profile / Auth -->
+      <div class="relative" x-data="{ open: false }">
+        <button @click="open = !open" class="p-1 rounded-lg hover:bg-gray-100 transition" title="Account">
+          <template x-if="loggedInUser">
+            <img :src="avatarSrc(loggedInUser, 32)" class="w-7 h-7 rounded-full object-cover" />
+          </template>
+          <template x-if="!loggedInUser">
+            <svg class="w-7 h-7 text-muted" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5.121 17.804A4 4 0 019 16h6a4 4 0 013.879 1.804M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
+            </svg>
+          </template>
+        </button>
+
+        <!-- Auth panel -->
         <div x-show="open" @click.outside="open = false" x-transition
-             class="absolute right-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-48 py-1 z-50 animate-scalein">
-          <p class="px-3 py-1 text-xs font-semibold text-muted uppercase tracking-widest">Test Users</p>
-          <button @click="selectTestUser(null); open = false"
-                  :class="!testUser ? 'bg-gray-50 font-semibold' : ''"
-                  class="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-muted">
-            Guest (no auth)
-          </button>
-          <div class="border-t border-[var(--border)] my-1"></div>
-          <template x-for="u in cannedUsers" :key="u.userid">
-            <button @click="selectTestUser(u); open = false"
-                    :class="testUser && testUser.userid === u.userid ? 'bg-accent/10 font-semibold text-accent' : ''"
-                    class="w-full text-left px-4 py-2 text-sm hover:bg-gray-50">
-              <div x-text="u.username"></div>
-              <div class="text-xs text-muted" x-text="u.fullname"></div>
-            </button>
+             class="absolute right-0 top-11 bg-white border border-[var(--border)] rounded-2xl shadow-2xl w-80 p-5 z-50 animate-scalein">
+
+          <!-- Logged in state -->
+          <template x-if="loggedInUser">
+            <div>
+              <div class="flex items-center gap-3 mb-4">
+                <img :src="avatarSrc(loggedInUser, 48)"
+                     class="w-12 h-12 rounded-full object-cover" />
+                <div>
+                  <div class="font-semibold text-sm" x-text="loggedInUser.username"></div>
+                  <div class="text-xs text-muted" x-text="loggedInUser.email"></div>
+                </div>
+              </div>
+              <button @click="logout(); open = false"
+                      class="w-full bg-gray-100 hover:bg-gray-200 text-brand text-sm py-2 rounded-xl transition font-medium">
+                Sign Out
+              </button>
+            </div>
+          </template>
+
+          <!-- Logged out state -->
+          <template x-if="!loggedInUser">
+            <div x-data="{
+              authTab: 'login', authEmail: '', authUsername: '', authPassword: '',
+              authError: '', authLoading: false,
+              async doLogin() {
+                this.authError = ''; this.authLoading = true;
+                try {
+                  const r = await fetch('/auth/login', {
+                    method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ email: this.authEmail, password: this.authPassword })
+                  });
+                  const d = await r.json();
+                  if (!r.ok) throw new Error(d.error || 'Login failed');
+                  const me = await fetch('/auth/me').then(r => r.json());
+                  document.dispatchEvent(new CustomEvent('photoapp:auth-success', { detail: me }));
+                  this.authEmail = this.authPassword = '';
+                } catch(e) { this.authError = e.message; }
+                this.authLoading = false;
+              },
+              async doRegister() {
+                this.authError = ''; this.authLoading = true;
+                try {
+                  const r = await fetch('/auth/register', {
+                    method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ username: this.authUsername, email: this.authEmail, password: this.authPassword })
+                  });
+                  const d = await r.json();
+                  if (!r.ok) throw new Error(d.error || 'Registration failed');
+                  const me = await fetch('/auth/me').then(r => r.json());
+                  document.dispatchEvent(new CustomEvent('photoapp:auth-success', { detail: me }));
+                  this.authEmail = this.authUsername = this.authPassword = '';
+                } catch(e) { this.authError = e.message; }
+                this.authLoading = false;
+              }
+            }">
+
+              <!-- Google -->
+              <a x-show="authConfig.googleEnabled"
+                 href="/auth/google"
+                 class="flex items-center justify-center gap-3 w-full border border-[var(--border)] rounded-xl py-2.5 mb-3 hover:bg-gray-50 transition text-sm font-medium">
+                <svg class="w-5 h-5" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                Sign in with Google
+              </a>
+
+              <!-- Apple -->
+              <a x-show="authConfig.appleEnabled"
+                 href="/auth/apple"
+                 class="flex items-center justify-center gap-3 w-full bg-black text-white rounded-xl py-2.5 mb-4 hover:bg-gray-900 transition text-sm font-medium">
+                <svg class="w-5 h-5 fill-white" viewBox="0 0 24 24"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.7 9.05 7.07c1.22.07 2.08.67 2.82.68.96-.15 1.84-.78 2.96-.83 1.28-.07 2.5.54 3.24 1.52-2.79 1.68-2.32 5.34.28 6.66-.53 1.47-1.28 2.93-2.3 4.18zM12.03 7c-.09-2.29 1.79-4.27 3.97-4.35.28 2.51-2.3 4.43-3.97 4.35z"/></svg>
+                Sign in with Apple
+              </a>
+
+              <!-- Divider — only shown when at least one OAuth provider is available -->
+              <div x-show="authConfig.googleEnabled || authConfig.appleEnabled" class="flex items-center gap-2 mb-4">
+                <div class="flex-1 border-t border-[var(--border)]"></div>
+                <span class="text-xs text-muted">or</span>
+                <div class="flex-1 border-t border-[var(--border)]"></div>
+              </div>
+
+              <!-- Login / Register tabs -->
+              <div class="flex rounded-xl bg-gray-100 p-1 mb-4">
+                <button @click="authTab = 'login'; authError = ''"
+                        :class="authTab === 'login' ? 'bg-white shadow text-brand' : 'text-muted'"
+                        class="flex-1 text-sm py-1.5 rounded-lg font-medium transition">Login</button>
+                <button @click="authTab = 'register'; authError = ''"
+                        :class="authTab === 'register' ? 'bg-white shadow text-brand' : 'text-muted'"
+                        class="flex-1 text-sm py-1.5 rounded-lg font-medium transition">Register</button>
+              </div>
+
+              <!-- Error -->
+              <p x-show="authError" x-text="authError" class="text-xs text-red-500 mb-3 -mt-2"></p>
+
+              <!-- Login form -->
+              <template x-if="authTab === 'login'">
+                <div class="space-y-3">
+                  <input x-model="authEmail" type="text" placeholder="Email or username"
+                         class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  <input x-model="authPassword" type="password" placeholder="Password"
+                         @keydown.enter="doLogin()"
+                         class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  <button @click="doLogin()" :disabled="authLoading"
+                          class="w-full bg-brand text-white py-2.5 rounded-xl font-medium hover:bg-accent transition text-sm disabled:opacity-40">
+                    <span x-text="authLoading ? 'Signing in…' : 'Log In'"></span>
+                  </button>
+                </div>
+              </template>
+
+              <!-- Register form -->
+              <template x-if="authTab === 'register'">
+                <div class="space-y-3">
+                  <input x-model="authUsername" type="text" placeholder="Username"
+                         class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  <input x-model="authEmail" type="email" placeholder="Email"
+                         class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  <input x-model="authPassword" type="password" placeholder="Password (min 8 chars)"
+                         @keydown.enter="doRegister()"
+                         class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  <button @click="doRegister()" :disabled="authLoading"
+                          class="w-full bg-brand text-white py-2.5 rounded-xl font-medium hover:bg-accent transition text-sm disabled:opacity-40">
+                    <span x-text="authLoading ? 'Creating account…' : 'Create Account'"></span>
+                  </button>
+                </div>
+              </template>
+
+            </div>
           </template>
         </div>
       </div>
-      <!-- Settings -->
-      <button @click="showToast('No settings yet.')"
-              class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="Settings">
-        <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round"
-            d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
-          <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-        </svg>
-      </button>
-      <!-- User -->
-      <button @click="userModal = true"
-              class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="User">
-        <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round"
-            d="M5.121 17.804A4 4 0 019 16h6a4 4 0 013.879 1.804M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
-        </svg>
-      </button>
     </div>
   </div>
 </nav>
@@ -268,7 +510,7 @@
               </template>
             </div>
           </template>
-          <template x-if="testUser">
+          <template x-if="currentUser">
             <button @click="openLabelModal(null)"
                     class="w-8 h-8 rounded-full bg-gray-200 hover:bg-accent hover:text-white transition flex items-center justify-center text-lg font-light shadow-sm"
                     title="Add label">+</button>
@@ -277,21 +519,19 @@
       </div>
 
       <!-- Emojis -->
-      <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-4">
+      <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-4"
+           x-data="{ hoverEmojiId: null, hoverTimer: null }">
         <div class="flex flex-wrap items-center gap-2">
           <template x-for="em in photo.emojis" :key="em.emojiid">
-            <div class="relative" x-data="{ holding: false, holdTimer: null }">
+            <div class="relative">
               <button class="emoji-btn flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm shadow-sm select-none border transition-colors"
-                      :class="testUser && em.users && em.users.some(u => u.id === testUser.userid)
+                      :class="currentUser && em.users && em.users.some(u => u.id === currentUser.userid)
                         ? 'bg-teal-50 border-teal-300 text-teal-700'
                         : 'bg-white border-[var(--border)]'"
                       @click="toggleReaction(em)"
-                      @mousedown="holdTimer = setTimeout(() => holding = true, 600)"
-                      @mouseup="clearTimeout(holdTimer)"
-                      @mouseleave="clearTimeout(holdTimer)"
-                      @touchstart.prevent="holdTimer = setTimeout(() => holding = true, 600)"
-                      @touchend="clearTimeout(holdTimer)"
-                      :title="testUser && em.users && em.users.some(u => u.id === testUser.userid) ? 'Click to remove reaction' : 'Click to react · Hold to see who reacted'">
+                      @mouseenter="clearTimeout(hoverTimer); hoverEmojiId ? hoverEmojiId = em.emojiid : hoverTimer = setTimeout(() => hoverEmojiId = em.emojiid, 500)"
+                      @mouseleave="clearTimeout(hoverTimer); hoverTimer = setTimeout(() => hoverEmojiId = null, 150)"
+                      :title="currentUser && em.users && em.users.some(u => u.id === currentUser.userid) ? 'Click to remove reaction' : 'Click to react'">
                 <template x-if="em.imageurl">
                   <img :src="em.imageurl" :alt="em.alttext" class="w-5 h-5 object-contain" />
                 </template>
@@ -300,17 +540,21 @@
                 </template>
                 <span class="font-medium text-xs" x-text="em.count"></span>
               </button>
-              <!-- Hold popup -->
-              <div x-show="holding" @click.outside="holding=false"
-                   class="absolute bottom-full mb-2 left-0 bg-white rounded-xl shadow-xl border border-[var(--border)] p-3 w-44 z-20 animate-scalein">
+              <!-- Hover popup -->
+              <div x-show="hoverEmojiId === em.emojiid"
+                   @mouseenter="clearTimeout(hoverTimer)"
+                   @mouseleave="hoverTimer = setTimeout(() => hoverEmojiId = null, 150)"
+                   class="absolute bottom-full mb-1 left-0 bg-white rounded-xl shadow-xl border border-[var(--border)] p-3 w-44 z-20 animate-scalein">
                 <p class="text-xs font-semibold text-muted mb-2 flex items-center gap-1">Reacted with
                   <template x-if="em.imageurl"><img :src="em.imageurl" :alt="em.alttext" class="w-4 h-4 object-contain inline" /></template>
                   <template x-if="!em.imageurl"><span x-text="em.emoji"></span></template>
                 </p>
                 <template x-for="u in em.users" :key="u.id">
                   <div class="flex items-center gap-2 py-1">
-                    <img :src="u.tn" :alt="u.name" class="w-6 h-6 rounded-full object-cover" />
-                    <span class="text-xs text-brand" x-text="u.name"></span>
+                    <img :src="u.tn || ''"
+                         :alt="u.name || u.id"
+                         class="avatar w-6 h-6 rounded-full object-cover" />
+                    <span class="text-xs text-brand" x-text="u.name || u.id?.slice(0,8)"></span>
                   </div>
                 </template>
               </div>
@@ -324,12 +568,12 @@
 
       <!-- Comments -->
       <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-5"
-           x-data="commentsPanel(photo, () => testUser, () => authHeaders())">
+           x-data="commentsPanel(photo, () => currentUser, () => authHeaders())">
 
         <h2 class="font-serif text-xl mb-4">Comments</h2>
 
         <!-- New comment box (only when a user is selected) -->
-        <template x-if="testUser">
+        <template x-if="currentUser">
           <div class="bg-gray-50 rounded-xl border border-[var(--border)] p-4 mb-6">
             <textarea x-model="newText" rows="3" placeholder="Leave a comment…"
                       @keydown.meta.enter="post()"
@@ -346,7 +590,7 @@
         <!-- Comment list -->
         <div class="space-y-6">
           <template x-for="c in comments" :key="c.commentid">
-            <div class="animate-fadein" x-data="commentItem(c, photo.photoid, () => testUser, () => authHeaders(), 0)">
+            <div class="animate-fadein" x-data="commentItem(c, photo.photoid, () => currentUser, () => authHeaders(), 0)">
               <div class="flex gap-3">
                 <img :src="c.author.tn || `https://i.pravatar.cc/48?u=${c.author.userid}`"
                      :alt="c.author.username"
@@ -357,7 +601,7 @@
                     <span class="font-semibold text-sm" x-text="c.author.username"></span>
                     <span class="text-xs text-muted" x-text="formatDate(c.date)"></span>
                     <!-- Edit / Delete (own comments only) -->
-                    <template x-if="testUser && testUser.userid === c.author.userid">
+                    <template x-if="currentUser && currentUser.userid ===c.author.userid">
                       <span class="flex items-center gap-2 ml-auto">
                         <button @click="startEdit()" class="text-xs text-muted hover:text-brand">Edit</button>
                         <button @click="deleteComment()" class="text-xs text-muted hover:text-red-500">Delete</button>
@@ -441,12 +685,12 @@
                       <template x-for="r1 in replies" :key="r1.commentid">
                         <div x-data="commentItem(r1, photoid, getUser, getHeaders, depth + 1)">
                           <div class="flex gap-2">
-                            <img :src="`https://i.pravatar.cc/32?u=${c.author.userid}`" class="w-8 h-8 rounded-full object-cover shrink-0" />
+                            <img :src="c.author.tn || ''" class="avatar w-8 h-8 rounded-full object-cover shrink-0" />
                             <div class="flex-1 min-w-0">
                               <div class="flex items-baseline gap-2 flex-wrap">
                                 <span class="font-semibold text-xs" x-text="c.author.username"></span>
                                 <span class="text-xs text-muted" x-text="formatDate(c.date)"></span>
-                                <template x-if="testUser && testUser.userid === c.author.userid">
+                                <template x-if="currentUser && currentUser.userid ===c.author.userid">
                                   <span class="flex gap-2 ml-auto"><button @click="startEdit()" class="text-xs text-muted hover:text-brand">Edit</button><button @click="deleteComment()" class="text-xs text-muted hover:text-red-500">Delete</button></span>
                                 </template>
                               </div>
@@ -471,12 +715,12 @@
                                   <template x-for="r2 in replies" :key="r2.commentid">
                                     <div x-data="commentItem(r2, photoid, getUser, getHeaders, depth + 1)">
                                       <div class="flex gap-2">
-                                        <img :src="`https://i.pravatar.cc/28?u=${c.author.userid}`" class="w-7 h-7 rounded-full object-cover shrink-0" />
+                                        <img :src="c.author.tn || ''" class="avatar w-7 h-7 rounded-full object-cover shrink-0" />
                                         <div class="flex-1 min-w-0">
                                           <div class="flex items-baseline gap-2 flex-wrap">
                                             <span class="font-semibold text-xs" x-text="c.author.username"></span>
                                             <span class="text-xs text-muted" x-text="formatDate(c.date)"></span>
-                                            <template x-if="testUser && testUser.userid === c.author.userid"><span class="flex gap-2 ml-auto"><button @click="startEdit()" class="text-xs text-muted hover:text-brand">Edit</button><button @click="deleteComment()" class="text-xs text-muted hover:text-red-500">Delete</button></span></template>
+                                            <template x-if="currentUser && currentUser.userid ===c.author.userid"><span class="flex gap-2 ml-auto"><button @click="startEdit()" class="text-xs text-muted hover:text-brand">Edit</button><button @click="deleteComment()" class="text-xs text-muted hover:text-red-500">Delete</button></span></template>
                                           </div>
                                           <template x-if="!editing"><p class="text-sm mt-0.5 leading-relaxed" x-text="c.comment"></p></template>
                                           <template x-if="editing"><div class="mt-1"><textarea x-model="editText" rows="2" @keydown.escape="cancelEdit()" class="w-full text-sm border border-[var(--border)] rounded-xl p-2 resize-none focus:outline-none focus:ring-2 focus:ring-accent/30"></textarea><div class="flex gap-2 justify-end mt-1"><button @click="cancelEdit()" class="text-xs text-muted hover:text-brand">Cancel</button><button @click="saveEdit()" :disabled="saving||!editText.trim()" class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="saving?'Saving…':'Save'"></span></button></div></div></template>
@@ -493,7 +737,7 @@
                                               <template x-for="r3 in replies" :key="r3.commentid">
                                                 <div x-data="commentItem(r3, photoid, getUser, getHeaders, depth + 1)">
                                                   <div class="flex gap-2">
-                                                    <img :src="`https://i.pravatar.cc/24?u=${c.author.userid}`" class="w-6 h-6 rounded-full object-cover shrink-0" />
+                                                    <img :src="c.author.tn || ''" class="w-6 h-6 rounded-full object-cover shrink-0" />
                                                     <div class="flex-1 min-w-0">
                                                       <span class="font-semibold text-xs" x-text="c.author.username"></span>
                                                       <span class="text-xs text-muted ml-1" x-text="formatDate(c.date)"></span>
@@ -512,7 +756,7 @@
                                                           <template x-for="r4 in replies" :key="r4.commentid">
                                                             <div x-data="commentItem(r4, photoid, getUser, getHeaders, depth + 1)">
                                                               <div class="flex gap-1.5">
-                                                                <img :src="`https://i.pravatar.cc/20?u=${c.author.userid}`" class="w-5 h-5 rounded-full object-cover shrink-0" />
+                                                                <img :src="c.author.tn || ''" class="avatar w-5 h-5 rounded-full object-cover shrink-0" />
                                                                 <div class="flex-1 min-w-0">
                                                                   <span class="font-semibold text-xs" x-text="c.author.username"></span>
                                                                   <span class="text-xs text-muted ml-1" x-text="formatDate(c.date)"></span>
@@ -528,7 +772,7 @@
                                                                       <div x-show="loadingReplies" class="flex justify-center"><div class="w-3 h-3 border-2 border-accent/30 border-t-accent rounded-full animate-spin"></div></div>
                                                                       <template x-for="r5 in replies" :key="r5.commentid">
                                                                         <div x-data="commentItem(r5, photoid, getUser, getHeaders, depth + 1)" class="flex gap-1.5">
-                                                                          <img :src="`https://i.pravatar.cc/18?u=${c.author.userid}`" class="w-4 h-4 rounded-full object-cover shrink-0 mt-0.5" />
+                                                                          <img :src="c.author.tn || ''" class="avatar w-4 h-4 rounded-full object-cover shrink-0 mt-0.5" />
                                                                           <div class="flex-1 min-w-0">
                                                                             <span class="font-semibold text-xs" x-text="c.author.username"></span>
                                                                             <span class="text-xs text-muted ml-1" x-text="formatDate(c.date)"></span>
@@ -1134,7 +1378,8 @@
           } else {
             this.reactedIds.add(em.emojiid);
             const uid = window._testUserID;
-            const userEntry = uid ? { id: uid, name: '', tn: null } : null;
+            const cu = this.currentUser;
+            const userEntry = uid ? { id: uid, name: cu?.username || '', tn: cu?.profileImage || null } : null;
             const existing = this.photo.emojis.find(e => e.emojiid === em.emojiid);
             if (existing) {
               existing.count++;
@@ -1329,33 +1574,55 @@
     };
   }
 
+  // Returns the avatar URL for a user object.
+  // Uses the stored profile_image URL (which the server sets at registration).
+  // Returns empty string when none is set — callers should handle missing images
+  // via CSS (bg-gray-200) or an x-if guard.
+  function avatarSrc(user) {
+    if (!user) return '';
+    return user.profileImage || '';
+  }
+
   function photoApp() {
     return {
       photo: null,
       loading: true,
       error: null,
 
-      // Test user switcher — replaced by real auth once login is implemented
-      testUser: null,
-      cannedUsers: [
-        { userid: '11111111-0000-0000-0000-000000000001', username: 'ansel_b',  fullname: 'Ansel Blackwood' },
-        { userid: '11111111-0000-0000-0000-000000000002', username: 'lena_ray', fullname: 'Lena Raynor'     },
-        { userid: '11111111-0000-0000-0000-000000000003', username: 'marco_v',  fullname: 'Marco Vidal'     },
-        { userid: '11111111-0000-0000-0000-000000000004', username: 'suki_tm',  fullname: 'Suki Tamamoto'   },
-        { userid: '11111111-0000-0000-0000-000000000005', username: 'dev_null', fullname: 'Dev Null'        },
-      ],
+      // Real auth — populated from /auth/me on page load.
+      loggedInUser: null,
+      authConfig: { googleEnabled: false, appleEnabled: false },
 
+      // User switcher — populated from /auth/users when allow_multi_login is set.
+      testUser: null,
+
+      // Returns auth headers: real session is a cookie (transparent to JS);
+      // fall back to X-User-ID for the dev test-user switcher.
       authHeaders() {
+        if (this.loggedInUser) return {}; // cookie is sent automatically
         return this.testUser ? { 'X-User-ID': this.testUser.userid } : {};
+      },
+
+      // Effective user for UI decisions (edit/delete controls, reaction ownership).
+      get currentUser() {
+        return this.loggedInUser || this.testUser || null;
       },
 
       selectTestUser(user) {
         this.testUser = user;
         window._testUserID = user?.userid || null;
-        if (this.photo) this.loadPhoto(this.photo.photoid);  // preserve activeLabelID
+        if (this.photo) this.loadPhoto(this.photo.photoid);
       },
 
-      userModal: false,
+      async logout() {
+        await fetch('/auth/logout', { method: 'POST' });
+        this.loggedInUser = null;
+        window._testUserID = null;
+        if (this.photo) this.loadPhoto(this.photo.photoid);
+      },
+
+
+      settingsOpen: false,
       labelModal: false,
       labelModalData: null,   // null = add, label object = edit
       emojiPickerOpen: false,
@@ -1366,6 +1633,19 @@
       activeLabelID: null,
 
       async init() {
+        // Load auth provider config and current session in parallel.
+        try {
+          const [cfg, me] = await Promise.all([
+            fetch('/auth/config').then(r => r.json()),
+            fetch('/auth/me').then(r => r.json()),
+          ]);
+          this.authConfig = cfg;
+          if (me.loggedIn) {
+            this.loggedInUser = me;
+            window._testUserID = me.userid;
+          }
+        } catch { /* non-fatal */ }
+
         const params = new URLSearchParams(window.location.search);
         const photoid = params.get('photoid') || 'random';
         const label   = params.get('label') || null;
@@ -1375,6 +1655,11 @@
         document.addEventListener('photoapp:close-label-modal', () => { this.labelModal = false; });
         document.addEventListener('photoapp:comment-deleted', (e) => {
           if (this.photo) this.photo.comments = this.photo.comments.filter(c => c.commentid !== e.detail);
+        });
+        document.addEventListener('photoapp:auth-success', (e) => {
+          this.loggedInUser = e.detail;
+          window._testUserID = e.detail.userid;
+          if (this.photo) this.loadPhoto(this.photo.photoid);
         });
       },
 
@@ -1410,8 +1695,8 @@
       },
 
       async toggleReaction(em) {
-        if (!this.testUser) { this.showToast('Select a user to react.'); return; }
-        const uid = this.testUser.userid;
+        if (!this.currentUser) { this.showToast('Select a user to react.'); return; }
+        const uid = this.currentUser.userid;
         const alreadyReacted = em.users && em.users.some(u => u.id === uid);
         const method = alreadyReacted ? 'DELETE' : 'POST';
         try {
@@ -1429,7 +1714,8 @@
             if (em.count <= 0) this.photo.emojis = this.photo.emojis.filter(e => e.emojiid !== em.emojiid);
           } else {
             em.count++;
-            em.users = [...(em.users || []), { id: uid, name: this.testUser.username, tn: null }];
+            const cu2 = this.currentUser;
+            em.users = [...(em.users || []), { id: uid, name: cu2?.username || '', tn: cu2?.profileImage || null }];
           }
         } catch(e) {
           this.showToast(`Reaction failed: ${e.message}`);

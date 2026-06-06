@@ -102,7 +102,8 @@ func fetchEmojis(ctx context.Context, pool *db.Pool, photoid string, offset, lim
 // fetchEmojiUsers returns a page of users who reacted with a specific emoji on a photo.
 func fetchEmojiUsers(ctx context.Context, pool *db.Pool, photoid, emojiid string, offset, limit int) ([]models.EmojiUser, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT u.userid::text, u.username, u.profile_image
+		SELECT u.userid::text, u.username,
+		       COALESCE(u.profile_image, '/avatars/' || md5(lower(trim(COALESCE(u.email, u.userid::text)))))
 		FROM   emoji_reactions er
 		JOIN   users           u  ON u.userid = er.userid
 		WHERE  er.photoid = $1 AND er.emojiid = $2
@@ -228,7 +229,8 @@ func fetchComments(ctx context.Context, pool *db.Pool, photoid, parentID string,
 	if parentID == "" {
 		rows, err = pool.Query(ctx, `
 			SELECT c.commentid::text, c.comment_text, c.reply_count, c.created_at,
-			       u.userid::text, u.username, u.profile_image
+			       u.userid::text, u.username,
+			       COALESCE(u.profile_image, '/avatars/' || md5(lower(trim(COALESCE(u.email, u.userid::text)))))
 			FROM   comments c
 			JOIN   users    u ON u.userid = c.author_userid
 			WHERE  c.photoid = $1
@@ -240,7 +242,8 @@ func fetchComments(ctx context.Context, pool *db.Pool, photoid, parentID string,
 	} else {
 		rows, err = pool.Query(ctx, `
 			SELECT c.commentid::text, c.comment_text, c.reply_count, c.created_at,
-			       u.userid::text, u.username, u.profile_image
+			       u.userid::text, u.username,
+			       COALESCE(u.profile_image, '/avatars/' || md5(lower(trim(COALESCE(u.email, u.userid::text)))))
 			FROM   comments c
 			JOIN   users    u ON u.userid = c.author_userid
 			WHERE  c.parent_commentid = $1

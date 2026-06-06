@@ -83,13 +83,33 @@ func Logger(next http.Handler) http.Handler {
 	})
 }
 
-// Auth reads the X-User-ID header and injects the user ID into the context.
-// This is a placeholder; replace with real JWT / session validation later.
-// Requests without the header are treated as anonymous (user ID = "").
-func Auth(headerName string) func(http.Handler) http.Handler {
+// SessionLookup is a function that resolves a session token to a user ID.
+// Returning "" means the session is invalid or not found.
+type SessionLookup func(ctx context.Context, token string) string
+
+// Auth resolves the acting user from:
+//  1. The session cookie (real auth), via the provided lookup function.
+//  2. The X-User-ID header (dev/test fallback), only when no cookie is present.
+//
+// Unauthenticated requests pass through with an empty user ID in context.
+func Auth(headerName string, sessionLookup SessionLookup) func(http.Handler) http.Handler {
+	const cookieName = "photoapp_session"
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			uid := r.Header.Get(headerName)
+			var uid string
+
+			// 1. Session cookie.
+			if cookie, err := r.Cookie(cookieName); err == nil && cookie.Value != "" {
+				if sessionLookup != nil {
+					uid = sessionLookup(r.Context(), cookie.Value)
+				}
+			}
+
+			// 2. Dev/test header fallback (only when no valid session cookie).
+			if uid == "" {
+				uid = r.Header.Get(headerName)
+			}
+
 			if uid != "" {
 				r = r.WithContext(context.WithValue(r.Context(), ctxUserID, uid))
 			}

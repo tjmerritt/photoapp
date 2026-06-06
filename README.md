@@ -36,6 +36,130 @@ make run
 # → listening on http://localhost:8080
 ```
 
+## Authentication
+
+PhotoApp supports three login methods: Google, Apple, and local email/password. Each requires configuration before use.
+
+### Google OAuth2 Setup
+
+**1. Create a Google Cloud project**
+
+1. Go to [https://console.cloud.google.com](https://console.cloud.google.com) and create a new project (or select an existing one).
+2. In the left menu navigate to **APIs & Services → Library**. Search for and enable the **Google People API**.
+
+**2. Create OAuth credentials**
+
+1. Go to **APIs & Services → Credentials** and click **Create Credentials → OAuth client ID**.
+2. If prompted, configure the OAuth consent screen first:
+   - Choose **External** (or Internal for private apps).
+   - Fill in the app name, support email, and developer contact.
+   - Add the scope `openid`, `email`, `profile`.
+   - Add your domain under **Authorized domains** (use `localhost` is not required for development).
+3. Back in Create Credentials, choose **Web application**.
+4. Under **Authorised redirect URIs** add:
+   - Development: `http://localhost:8080/auth/google/callback`
+   - Production: `https://yourdomain.com/auth/google/callback`
+5. Click **Create**. Copy the **Client ID** and **Client Secret**.
+
+**3. Set environment variables**
+
+```env
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-client-secret
+GOOGLE_REDIRECT_URL=http://localhost:8080/auth/google/callback
+```
+
+---
+
+### Apple Sign-In Setup
+
+Apple Sign-In requires an active Apple Developer account ($99/year) and HTTPS in production. For local development you can use a tool like [ngrok](https://ngrok.com) to expose a local HTTPS endpoint.
+
+**1. Register an App ID**
+
+1. Go to [https://developer.apple.com/account/resources/identifiers](https://developer.apple.com/account/resources/identifiers) and click **+**.
+2. Select **App IDs** → **App**, click **Continue**.
+3. Fill in a description and Bundle ID (e.g. `com.example.photoapp`).
+4. Scroll down to **Capabilities** and check **Sign In with Apple**. Click **Continue** then **Register**.
+
+**2. Create a Services ID**
+
+1. Back in Identifiers, click **+** again.
+2. Select **Services IDs**, click **Continue**.
+3. Fill in a description and an identifier (e.g. `com.example.photoapp.web`). This becomes your `APPLE_CLIENT_ID`.
+4. Click **Register**, then click the newly created Services ID to edit it.
+5. Check **Sign In with Apple**, click **Configure**.
+6. Select your App ID as the **Primary App ID**.
+7. Under **Web Domain** add your domain (e.g. `yourdomain.com` or your ngrok domain for dev).
+8. Under **Return URLs** add:
+   - `https://yourdomain.com/auth/apple/callback` (must be HTTPS)
+9. Click **Save**, then **Continue**, then **Save** again.
+
+**3. Create a private key**
+
+1. Go to **Certificates, Identifiers & Profiles → Keys** and click **+**.
+2. Enter a key name, check **Sign In with Apple**, click **Configure**.
+3. Select your App ID as the primary App ID, click **Save**.
+4. Click **Continue** then **Register**.
+5. **Download the key** (`.p8` file). You can only download it once — keep it safe.
+6. Note the **Key ID** shown on the confirmation page.
+
+**4. Gather your credentials**
+
+From the Apple Developer portal collect:
+
+| Value | Where to find it |
+|-------|-----------------|
+| **Team ID** | Top-right of any developer.apple.com page, or under Membership |
+| **Client ID** | The Services ID identifier, e.g. `com.example.photoapp.web` |
+| **Key ID** | Shown when you created the key |
+| **Private key** | Contents of the downloaded `.p8` file |
+
+**5. Set environment variables**
+
+The private key value should be the full PEM content of the `.p8` file, with newlines replaced by `\n`:
+
+```env
+APPLE_CLIENT_ID=com.example.photoapp.web
+APPLE_TEAM_ID=ABCD1234EF
+APPLE_KEY_ID=AB12CD34EF
+APPLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIGH...\n-----END PRIVATE KEY-----"
+APPLE_REDIRECT_URL=https://yourdomain.com/auth/apple/callback
+```
+
+> **Note:** Apple requires the redirect URL to be HTTPS. For local development use ngrok: `ngrok http 8080` gives you an `https://xxxx.ngrok.io` URL — use that as your `BASE_URL` and `APPLE_REDIRECT_URL`.
+
+---
+
+### Local Email/Password Auth
+
+No external setup required. Registration is rate-limited per IP: the first attempt is allowed immediately, then the wait doubles on each subsequent attempt (10 s → 20 s → 40 s → …).
+
+Set a strong session secret in production:
+
+```env
+SESSION_SECRET=a-long-random-string-at-least-32-chars
+```
+
+---
+
+### Full auth environment variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SESSION_SECRET` | Yes (prod) | Signs session tokens. Default is `dev-secret-change-in-production`. |
+| `BASE_URL` | Yes | Full origin URL, e.g. `https://yourdomain.com`. Used to build redirect URIs. |
+| `GOOGLE_CLIENT_ID` | For Google login | OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | For Google login | OAuth client secret |
+| `GOOGLE_REDIRECT_URL` | Optional | Overrides `BASE_URL + /auth/google/callback` |
+| `APPLE_CLIENT_ID` | For Apple login | Services ID identifier |
+| `APPLE_TEAM_ID` | For Apple login | 10-character team identifier |
+| `APPLE_KEY_ID` | For Apple login | Key identifier from developer portal |
+| `APPLE_PRIVATE_KEY` | For Apple login | PEM content of the `.p8` private key |
+| `APPLE_REDIRECT_URL` | Optional | Overrides `BASE_URL + /auth/apple/callback` |
+
+---
+
 ## Installing PostgreSQL on FreeBSD
 
 ```sh

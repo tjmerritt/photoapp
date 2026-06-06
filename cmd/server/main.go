@@ -46,8 +46,11 @@ func main() {
 	defer pool.Close()
 	slog.Info("connected to database")
 
+	// ── Auth handler (needed before router so session lookup is wired) ────────
+	authHandler := &handlers.AuthHandler{DB: pool, Cfg: cfg}
+
 	// ── Router ────────────────────────────────────────────────────────────────
-	router := handlers.NewRouter(pool, cfg)
+	router := handlers.NewRouter(pool, cfg, authHandler)
 
 	// ── HTTP server ───────────────────────────────────────────────────────────
 	srv := &http.Server{
