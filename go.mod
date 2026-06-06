@@ -9,6 +9,7 @@ require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/julienschmidt/httprouter v1.3.0
 	github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd
+	gocv.io/x/gocv v0.43.0
 	golang.org/x/crypto v0.32.0
 	golang.org/x/oauth2 v0.24.0
 )

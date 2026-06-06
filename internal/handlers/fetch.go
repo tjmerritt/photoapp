@@ -127,7 +127,8 @@ func fetchEmojiUsers(ctx context.Context, pool *db.Pool, photoid, emojiid string
 }
 
 // fetchRelated returns all related photos for a given photo, scoped to the exhibition.
-func fetchRelated(ctx context.Context, pool *db.Pool, photoid, exhibitionID string) ([]models.RelatedPhoto, error) {
+// canSeeNonPublic controls whether non-public photos are included in results.
+func fetchRelated(ctx context.Context, pool *db.Pool, photoid, exhibitionID string, canSeeNonPublic bool) ([]models.RelatedPhoto, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT rp.related_photoid::text,
 		       COALESCE(rp.scaled_image_url, p.image_url),
@@ -138,8 +139,9 @@ func fetchRelated(ctx context.Context, pool *db.Pool, photoid, exhibitionID stri
 		WHERE  rp.photoid = $1
 		  AND  p.deleted_at IS NULL
 		  AND  ($2 = '' OR p.exhibitionid::text = $2)
+		  AND  (p.is_public OR $3)
 		ORDER  BY rp.sort_order
-	`, photoid, exhibitionID)
+	`, photoid, exhibitionID, canSeeNonPublic)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +160,8 @@ func fetchRelated(ctx context.Context, pool *db.Pool, photoid, exhibitionID stri
 
 // fetchRelatedByLabel returns up to 8 photos that share the same label name+value
 // as the given labelID, excluding the current photo, scoped to the exhibition.
-func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID, exhibitionID string) ([]models.RelatedPhoto, error) {
+// canSeeNonPublic controls whether non-public photos are included in results.
+func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID, exhibitionID string, canSeeNonPublic bool) ([]models.RelatedPhoto, error) {
 	rows, err := pool.Query(ctx, `
 		WITH label_info AS (
 			SELECT name, value FROM labels WHERE labelid = $1 AND deleted_at IS NULL
@@ -172,6 +175,7 @@ func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID, e
 			  AND  p.deleted_at IS NULL
 			  AND  l.deleted_at IS NULL
 			  AND  ($3 = '' OR p.exhibitionid::text = $3)
+			  AND  (p.is_public OR $4)
 		),
 		top_seven AS (
 			SELECT * FROM candidates ORDER BY view_count DESC LIMIT 7
@@ -185,7 +189,7 @@ func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID, e
 		SELECT photoid, image_url, image_width, image_height FROM random_extra
 		UNION ALL
 		SELECT photoid, image_url, image_width, image_height FROM top_seven
-	`, labelID, photoid)
+	`, labelID, photoid, exhibitionID, canSeeNonPublic)
 	if err != nil {
 		return nil, err
 	}

@@ -104,7 +104,7 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	// Apply global middleware: CORS → Exhibition → Auth → Logger → RequestID
 	var handler http.Handler = r
 	handler = middleware.Logger(handler)
-	handler = middleware.Auth(cfg.AuthHeader, authHandler.LookupSession)(handler)
+	handler = middleware.Auth(cfg.AuthHeader, authHandler.LookupSession, authHandler.LookupUserFlags)(handler)
 	handler = middleware.Exhibition(exhibitionHandler.LookupByHostname)(handler)
 	handler = middleware.CORS(handler)
 	handler = middleware.RequestID(handler)

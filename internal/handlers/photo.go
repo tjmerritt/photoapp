@@ -32,6 +32,7 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	currentUser, _ := middleware.UserID(r.Context())
 	exhibitionID := middleware.ExhibitionID(r.Context())
+	canSeeNonPublic := middleware.AuthorizedNonPublic(r.Context())
 	ctx := r.Context()
 
 	// ── Core photo row ────────────────────────────────────────────────────────
@@ -47,9 +48,10 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			LEFT  JOIN users tu ON tu.userid = p.title_userid
 			WHERE p.deleted_at IS NULL
 			  AND ($1 = '' OR p.exhibitionid::text = $1)
+			  AND (p.is_public OR $2)
 			ORDER BY random()
 			LIMIT 1
-		`, exhibitionID)
+		`, exhibitionID, canSeeNonPublic)
 	} else {
 		row = h.DB.QueryRow(ctx, `
 			SELECT
@@ -61,7 +63,8 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			LEFT  JOIN users tu ON tu.userid = p.title_userid
 			WHERE p.photoid = $1 AND p.deleted_at IS NULL
 			  AND ($2 = '' OR p.exhibitionid::text = $2)
-		`, photoid, exhibitionID)
+			  AND (p.is_public OR $3)
+		`, photoid, exhibitionID, canSeeNonPublic)
 	}
 
 	var (
@@ -128,9 +131,9 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// ── Related photos ────────────────────────────────────────────────────────
 	var related []models.RelatedPhoto
 	if labelID != "" {
-		related, err = fetchRelatedByLabel(ctx, h.DB, photoid, labelID, exhibitionID)
+		related, err = fetchRelatedByLabel(ctx, h.DB, photoid, labelID, exhibitionID, canSeeNonPublic)
 	} else {
-		related, err = fetchRelated(ctx, h.DB, photoid, exhibitionID)
+		related, err = fetchRelated(ctx, h.DB, photoid, exhibitionID, canSeeNonPublic)
 	}
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
