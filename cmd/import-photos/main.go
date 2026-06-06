@@ -263,7 +263,14 @@ func main() {
 		}
 
 		exifLabels := extractEXIF(imgBytes)
-		allLabels := mergeLabels(exifLabels, []label(extraLabels))
+		resolutionLabel := []label{
+			label{
+				name: "Resolution",
+				value: fmt.Sprintf("%dx%d", w, h),
+			},
+		}
+		allLabels := mergeLabels(exifLabels, resolutionLabel)
+		allLabels = mergeLabels(allLabels, []label(extraLabels))
 
 		isPublic := detectIsPublic(imgBytes, classifier)
 
