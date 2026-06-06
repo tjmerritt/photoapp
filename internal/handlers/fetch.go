@@ -126,8 +126,8 @@ func fetchEmojiUsers(ctx context.Context, pool *db.Pool, photoid, emojiid string
 	return users, rows.Err()
 }
 
-// fetchRelated returns all related photos for a given photo.
-func fetchRelated(ctx context.Context, pool *db.Pool, photoid string) ([]models.RelatedPhoto, error) {
+// fetchRelated returns all related photos for a given photo, scoped to the exhibition.
+func fetchRelated(ctx context.Context, pool *db.Pool, photoid, exhibitionID string) ([]models.RelatedPhoto, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT rp.related_photoid::text,
 		       COALESCE(rp.scaled_image_url, p.image_url),
@@ -137,8 +137,9 @@ func fetchRelated(ctx context.Context, pool *db.Pool, photoid string) ([]models.
 		JOIN   photos         p  ON p.photoid = rp.related_photoid
 		WHERE  rp.photoid = $1
 		  AND  p.deleted_at IS NULL
+		  AND  ($2 = '' OR p.exhibitionid::text = $2)
 		ORDER  BY rp.sort_order
-	`, photoid)
+	`, photoid, exhibitionID)
 	if err != nil {
 		return nil, err
 	}
@@ -156,10 +157,8 @@ func fetchRelated(ctx context.Context, pool *db.Pool, photoid string) ([]models.
 }
 
 // fetchRelatedByLabel returns up to 8 photos that share the same label name+value
-// as the given labelID, excluding the current photo.
-// The top 7 are chosen by view_count DESC; one additional is chosen at random
-// from the remaining candidates (if any exist beyond the top 7).
-func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID string) ([]models.RelatedPhoto, error) {
+// as the given labelID, excluding the current photo, scoped to the exhibition.
+func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID, exhibitionID string) ([]models.RelatedPhoto, error) {
 	rows, err := pool.Query(ctx, `
 		WITH label_info AS (
 			SELECT name, value FROM labels WHERE labelid = $1 AND deleted_at IS NULL
@@ -172,6 +171,7 @@ func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID st
 			WHERE  p.photoid != $2::uuid
 			  AND  p.deleted_at IS NULL
 			  AND  l.deleted_at IS NULL
+			  AND  ($3 = '' OR p.exhibitionid::text = $3)
 		),
 		top_seven AS (
 			SELECT * FROM candidates ORDER BY view_count DESC LIMIT 7

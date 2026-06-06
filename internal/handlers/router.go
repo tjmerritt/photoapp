@@ -10,7 +10,7 @@ import (
 )
 
 // NewRouter builds and returns the fully configured HTTP router.
-func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler) http.Handler {
+func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhibitionHandler *ExhibitionHandler) http.Handler {
 	r := httprouter.New()
 
 	// ── Handler instances ─────────────────────────────────────────────────────
@@ -101,10 +101,11 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler) http
 	r.PATCH("/auth/profile",             authHandler.UpdateProfile)
 	r.POST("/auth/profile/avatar",       authHandler.UploadProfileAvatar)
 
-	// Apply global middleware: CORS → Auth (session + header) → Logger → RequestID
+	// Apply global middleware: CORS → Exhibition → Auth → Logger → RequestID
 	var handler http.Handler = r
 	handler = middleware.Logger(handler)
 	handler = middleware.Auth(cfg.AuthHeader, authHandler.LookupSession)(handler)
+	handler = middleware.Exhibition(exhibitionHandler.LookupByHostname)(handler)
 	handler = middleware.CORS(handler)
 	handler = middleware.RequestID(handler)
 

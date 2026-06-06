@@ -31,6 +31,7 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	currentUser, _ := middleware.UserID(r.Context())
+	exhibitionID := middleware.ExhibitionID(r.Context())
 	ctx := r.Context()
 
 	// ── Core photo row ────────────────────────────────────────────────────────
@@ -45,9 +46,10 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			FROM  photos p
 			LEFT  JOIN users tu ON tu.userid = p.title_userid
 			WHERE p.deleted_at IS NULL
+			  AND ($1 = '' OR p.exhibitionid::text = $1)
 			ORDER BY random()
 			LIMIT 1
-		`)
+		`, exhibitionID)
 	} else {
 		row = h.DB.QueryRow(ctx, `
 			SELECT
@@ -58,7 +60,8 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			FROM  photos p
 			LEFT  JOIN users tu ON tu.userid = p.title_userid
 			WHERE p.photoid = $1 AND p.deleted_at IS NULL
-		`, photoid)
+			  AND ($2 = '' OR p.exhibitionid::text = $2)
+		`, photoid, exhibitionID)
 	}
 
 	var (
@@ -117,14 +120,17 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── Increment view count ──────────────────────────────────────────────────
-	_, _ = h.DB.Exec(ctx, `UPDATE photos SET view_count = view_count + 1 WHERE photoid = $1`, photoid)
+	_, _ = h.DB.Exec(ctx, `
+		UPDATE photos SET view_count = view_count + 1
+		WHERE  photoid = $1 AND ($2 = '' OR exhibitionid::text = $2)
+	`, photoid, exhibitionID)
 
 	// ── Related photos ────────────────────────────────────────────────────────
 	var related []models.RelatedPhoto
 	if labelID != "" {
-		related, err = fetchRelatedByLabel(ctx, h.DB, photoid, labelID)
+		related, err = fetchRelatedByLabel(ctx, h.DB, photoid, labelID, exhibitionID)
 	} else {
-		related, err = fetchRelated(ctx, h.DB, photoid)
+		related, err = fetchRelated(ctx, h.DB, photoid, exhibitionID)
 	}
 	if err != nil {
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")

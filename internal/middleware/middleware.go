@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
@@ -15,9 +16,44 @@ import (
 type ctxKey string
 
 const (
-	ctxUserID    ctxKey = "userid"
-	ctxRequestID ctxKey = "requestid"
+	ctxUserID       ctxKey = "userid"
+	ctxRequestID    ctxKey = "requestid"
+	ctxExhibitionID ctxKey = "exhibitionid"
 )
+
+// ExhibitionID retrieves the current exhibition ID from the context.
+// Returns "" when no exhibition was resolved for this request.
+func ExhibitionID(ctx context.Context) string {
+	v, _ := ctx.Value(ctxExhibitionID).(string)
+	return v
+}
+
+// ExhibitionLookup resolves an exhibition ID from a hostname.
+type ExhibitionLookup func(ctx context.Context, hostname string) string
+
+// Exhibition extracts the Host header and looks up the corresponding
+// exhibitionid. Tries the full host:port first, then host only.
+// The result is injected into the context; requests with no match get "".
+func Exhibition(lookup ExhibitionLookup) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if lookup != nil {
+				hostport := r.Host
+				id := lookup(r.Context(), hostport)
+				if id == "" {
+					// Strip port and try bare hostname.
+					if host, _, err := net.SplitHostPort(hostport); err == nil {
+						id = lookup(r.Context(), host)
+					}
+				}
+				if id != "" {
+					r = r.WithContext(context.WithValue(r.Context(), ctxExhibitionID, id))
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
 
 // UserID retrieves the authenticated user ID from the request context.
 // Returns ("", false) when no user is present (unauthenticated request).

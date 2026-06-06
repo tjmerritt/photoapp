@@ -16,6 +16,7 @@
 //
 //	--db              PostgreSQL DSN (default: $DATABASE_URL)
 //	--owner           UUID of the owning user (required)
+//	--exhibition      Exhibition UUID or name to associate photos with (required)
 //	--title           Fixed title text for every photo (optional)
 //	--title-from-url  Derive title from the URL path basename (default true)
 //	--label           Extra label in Name=Value format; may be repeated
@@ -67,6 +68,7 @@ func main() {
 	var (
 		dbURL        string
 		ownerID      string
+		exhibition   string
 		fixedTitle   string
 		titleFromURL bool
 		dryRun       bool
@@ -77,6 +79,7 @@ func main() {
 
 	flag.StringVar(&dbURL, "db", os.Getenv("DATABASE_URL"), "PostgreSQL DSN (env: DATABASE_URL)")
 	flag.StringVar(&ownerID, "owner", "", "UUID of the photo owner (required)")
+	flag.StringVar(&exhibition, "exhibition", "", "Exhibition UUID or name to assign photos to (required)")
 	flag.StringVar(&fixedTitle, "title", "", "Fixed title for every photo (overrides --title-from-url)")
 	flag.BoolVar(&titleFromURL, "title-from-url", true, "Derive title from URL basename")
 	flag.BoolVar(&dryRun, "dry-run", false, "Print rows without inserting")
@@ -87,6 +90,11 @@ func main() {
 
 	if ownerID == "" {
 		fmt.Fprintln(os.Stderr, "error: --owner is required")
+		flag.Usage()
+		os.Exit(1)
+	}
+	if exhibition == "" {
+		fmt.Fprintln(os.Stderr, "error: --exhibition is required")
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -136,6 +144,19 @@ func main() {
 			os.Exit(1)
 		}
 		defer pool.Close()
+
+		// Resolve --exhibition: try as UUID first, then as name.
+		var exhibitionID string
+		err = pool.QueryRow(ctx,
+			`SELECT exhibitionid::text FROM exhibitions WHERE exhibitionid::text = $1 OR name = $1 AND deleted_at IS NULL`,
+			exhibition,
+		).Scan(&exhibitionID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: exhibition %q not found in database\n", exhibition)
+			os.Exit(1)
+		}
+		exhibition = exhibitionID
+		slog.Info("exhibition resolved", "id", exhibition)
 	}
 
 	// ── Process URLs ──────────────────────────────────────────────────────────
@@ -240,13 +261,14 @@ func main() {
 		}
 
 		photoID, action, err := upsertPhoto(ctx, pool, upsertParams{
-			hintID:  hintID,
-			rawURL:  rawURL,
-			ownerID: ownerID,
-			title:   titleFor(rawURL, fixedTitle, titleFromURL),
-			width:   w,
-			height:  h,
-			labels:  allLabels,
+			hintID:       hintID,
+			rawURL:       rawURL,
+			ownerID:      ownerID,
+			exhibitionID: exhibition,
+			title:        titleFor(rawURL, fixedTitle, titleFromURL),
+			width:        w,
+			height:       h,
+			labels:       allLabels,
 		})
 		if err != nil {
 			slog.Warn("skipping URL", "url", rawURL, "error", err)
@@ -271,13 +293,14 @@ func main() {
 }
 
 type upsertParams struct {
-	hintID  string
-	rawURL  string
-	ownerID string
-	title   string
-	width   int
-	height  int
-	labels  []label
+	hintID       string
+	rawURL       string
+	ownerID      string
+	exhibitionID string
+	title        string
+	width        int
+	height       int
+	labels       []label
 }
 
 // upsertPhoto either inserts a new photo or, when hintID is supplied and the
@@ -310,10 +333,10 @@ func upsertPhoto(ctx context.Context, pool *pgxpool.Pool, p upsertParams) (strin
 	// Insert new photo.
 	var photoID string
 	err := pool.QueryRow(ctx, `
-		INSERT INTO photos (owner_userid, image_url, image_width, image_height, title_text, title_userid)
-		VALUES ($1, $2, $3, $4, $5, $1)
+		INSERT INTO photos (owner_userid, image_url, image_width, image_height, title_text, title_userid, exhibitionid)
+		VALUES ($1, $2, $3, $4, $5, $1, NULLIF($6,'')::uuid)
 		RETURNING photoid::text
-	`, p.ownerID, p.rawURL, p.width, p.height, p.title).Scan(&photoID)
+	`, p.ownerID, p.rawURL, p.width, p.height, p.title, p.exhibitionID).Scan(&photoID)
 	if err != nil {
 		return "", "", fmt.Errorf("inserting photo: %w", err)
 	}
