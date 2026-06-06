@@ -311,7 +311,8 @@
                   });
                   const d = await r.json();
                   if (!r.ok) throw new Error(d.error || 'Login failed');
-                  document.dispatchEvent(new CustomEvent('photoapp:auth-success', { detail: { ...d, loggedIn: true, profileImage: null } }));
+                  const me = await fetch('/auth/me').then(r => r.json());
+                  document.dispatchEvent(new CustomEvent('photoapp:auth-success', { detail: me }));
                   this.authEmail = this.authPassword = '';
                 } catch(e) { this.authError = e.message; }
                 this.authLoading = false;
@@ -325,7 +326,8 @@
                   });
                   const d = await r.json();
                   if (!r.ok) throw new Error(d.error || 'Registration failed');
-                  document.dispatchEvent(new CustomEvent('photoapp:auth-success', { detail: { ...d, loggedIn: true, profileImage: null } }));
+                  const me = await fetch('/auth/me').then(r => r.json());
+                  document.dispatchEvent(new CustomEvent('photoapp:auth-success', { detail: me }));
                   this.authEmail = this.authUsername = this.authPassword = '';
                 } catch(e) { this.authError = e.message; }
                 this.authLoading = false;
