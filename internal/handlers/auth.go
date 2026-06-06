@@ -185,6 +185,17 @@ func (h *AuthHandler) uniqueUsername(ctx context.Context, base string) string {
 	return base + uuid.New().String()[:6]
 }
 
+// ── GET /auth/config ──────────────────────────────────────────────────────────
+
+// GET /auth/config — returns which OAuth providers are configured.
+// Public endpoint; no authentication required.
+func (h *AuthHandler) Config(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	middleware.WriteJSON(w, http.StatusOK, map[string]bool{
+		"googleEnabled": h.Cfg.GoogleClientID != "",
+		"appleEnabled":  h.Cfg.AppleClientID != "",
+	})
+}
+
 // ── GET /auth/me ──────────────────────────────────────────────────────────────
 
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {

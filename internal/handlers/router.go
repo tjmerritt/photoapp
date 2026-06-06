@@ -88,6 +88,7 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler) http
 	r.GET("/avatars/:hash", ServeAvatar)
 
 	// ── Auth routes ───────────────────────────────────────────────────────────
+	r.GET("/auth/config",                authHandler.Config)
 	r.GET("/auth/me",                    authHandler.Me)
 	r.GET("/auth/users",                 authHandler.ListUsers)
 	r.POST("/auth/logout",               authHandler.Logout)
