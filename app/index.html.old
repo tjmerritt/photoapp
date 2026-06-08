@@ -1,0 +1,1129 @@
+<!DOCTYPE html>
+<html lang="en" x-data="photoApp()" x-init="init()">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PhotoApp</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Alpine.js -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap');
+
+    :root {
+      --brand:  #1a1a2e;
+      --accent: #e94560;
+      --surface:#f7f5f2;
+      --card:   #ffffff;
+      --muted:  #6b7280;
+      --border: #e5e1db;
+    }
+
+    body { font-family: 'DM Sans', sans-serif; background: var(--surface); color: var(--brand); }
+    h1,h2,h3 { font-family: 'DM Serif Display', serif; }
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+
+    .label-chip:nth-child(1)  .label-name { background: hsl(210 70% 55%); }
+    .label-chip:nth-child(2)  .label-name { background: hsl(257 70% 55%); }
+    .label-chip:nth-child(3)  .label-name { background: hsl(330 70% 55%); }
+    .label-chip:nth-child(4)  .label-name { background: hsl(30  70% 55%); }
+    .label-chip:nth-child(5)  .label-name { background: hsl(160 60% 40%); }
+    .label-chip:nth-child(6)  .label-name { background: hsl(15  70% 55%); }
+    .label-chip:nth-child(7)  .label-name { background: hsl(190 70% 45%); }
+    .label-chip:nth-child(8)  .label-name { background: hsl(280 60% 55%); }
+    .label-chip:nth-child(n+9).label-name { background: hsl(45  70% 50%); }
+
+    @keyframes fadeIn  { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes scaleIn { from { opacity:0; transform:scale(.95);      } to { opacity:1; transform:scale(1);      } }
+    .animate-fadein  { animation: fadeIn  .25s ease both; }
+    .animate-scalein { animation: scaleIn .2s  ease both; }
+
+    .backdrop { background: rgba(26,26,46,.55); backdrop-filter: blur(3px); }
+    .comment-clamp { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+
+    .emoji-btn { cursor: pointer; transition: transform .15s; }
+    .emoji-btn:hover  { transform: scale(1.2);  }
+    .emoji-btn:active { transform: scale(1.05); }
+
+    [x-cloak] { display: none !important; }
+  </style>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { brand: '#1a1a2e', accent: '#e94560', muted: '#6b7280' },
+          fontFamily: {
+            serif: ['"DM Serif Display"', 'serif'],
+            sans:  ['"DM Sans"', 'sans-serif'],
+          },
+        },
+      },
+    };
+  </script>
+</head>
+
+<body class="min-h-screen flex flex-col">
+
+<!-- ══ NAVBAR ══════════════════════════════════════════════════════════════ -->
+<nav class="sticky top-0 z-40 bg-white border-b border-[var(--border)] shadow-sm">
+  <div class="max-w-7xl mx-auto px-4 flex items-center gap-3 h-14">
+
+    <!-- Hamburger -->
+    <div class="relative" x-data="{ open: false }">
+      <button @click="open = !open" class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="Menu">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+      <div x-show="open" @click.outside="open=false" x-transition
+           class="absolute left-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-44 py-1 animate-scalein">
+        <a href="#" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Photos</a>
+      </div>
+    </div>
+
+    <!-- Site icon -->
+    <a href="/" class="flex items-center gap-2 shrink-0">
+      <div class="w-8 h-8 rounded-lg bg-brand flex items-center justify-center">
+        <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/>
+        </svg>
+      </div>
+      <span class="font-serif text-lg font-bold text-brand hidden sm:block">Phōtos</span>
+    </a>
+
+    <!-- Search -->
+    <div class="flex-1 max-w-sm mx-2">
+      <input type="search" placeholder="Search photos…"
+             class="w-full px-3 py-1.5 text-sm border border-[var(--border)] rounded-full bg-gray-50 focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition"
+             @keydown.enter.prevent="showToast('Search is not yet implemented.')" />
+    </div>
+
+    <div class="ml-auto flex items-center gap-1">
+      <!-- Random photo -->
+      <button @click="loadPhoto('random', null)"
+              class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="Random photo" title="Random photo">
+        <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M4 16v-4a8 8 0 0116 0v4M4 16l-2 2m2-2l2 2m12-2l-2 2m2-2l2 2"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0l2 2M4 4L2 6m16 2V4m0 0l2 2m-2-2l-2 2"/>
+        </svg>
+      </button>
+      <!-- Test user switcher (dev only, until real login is wired up) -->
+      <div class="relative" x-data="{ open: false }">
+        <button @click="open = !open"
+                class="flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-gray-100 transition text-xs font-medium text-muted border border-dashed border-gray-300"
+                title="Switch test user">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a4 4 0 00-5-4M9 20H4v-2a4 4 0 015-4m0 0a4 4 0 110-8 4 4 0 010 8zm8-8a4 4 0 110-8 4 4 0 010 8z"/>
+          </svg>
+          <span x-text="testUser ? testUser.username : 'Guest'"></span>
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </button>
+        <div x-show="open" @click.outside="open = false" x-transition
+             class="absolute right-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-48 py-1 z-50 animate-scalein">
+          <p class="px-3 py-1 text-xs font-semibold text-muted uppercase tracking-widest">Test Users</p>
+          <button @click="selectTestUser(null); open = false"
+                  :class="!testUser ? 'bg-gray-50 font-semibold' : ''"
+                  class="w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-muted">
+            Guest (no auth)
+          </button>
+          <div class="border-t border-[var(--border)] my-1"></div>
+          <template x-for="u in cannedUsers" :key="u.userid">
+            <button @click="selectTestUser(u); open = false"
+                    :class="testUser && testUser.userid === u.userid ? 'bg-accent/10 font-semibold text-accent' : ''"
+                    class="w-full text-left px-4 py-2 text-sm hover:bg-gray-50">
+              <div x-text="u.username"></div>
+              <div class="text-xs text-muted" x-text="u.fullname"></div>
+            </button>
+          </template>
+        </div>
+      </div>
+      <!-- Settings -->
+      <button @click="showToast('No settings yet.')"
+              class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="Settings">
+        <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+        </svg>
+      </button>
+      <!-- User -->
+      <button @click="userModal = true"
+              class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="User">
+        <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M5.121 17.804A4 4 0 019 16h6a4 4 0 013.879 1.804M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<!-- ══ MAIN ═════════════════════════════════════════════════════════════════ -->
+<main class="flex-1 max-w-7xl w-full mx-auto px-4 py-8" x-cloak>
+
+  <!-- Loading -->
+  <div x-show="loading" class="flex items-center justify-center py-32">
+    <div class="w-10 h-10 border-4 border-accent/30 border-t-accent rounded-full animate-spin"></div>
+  </div>
+
+  <template x-if="photo && !loading">
+    <div class="animate-fadein space-y-4">
+
+      <!-- Photo + Related -->
+      <div class="flex gap-4 items-start">
+        <div class="flex-1 min-w-0 bg-white rounded-2xl overflow-hidden ring-1 ring-[var(--border)] shadow-sm">
+          <div class="bg-gray-100">
+            <img :src="photo.image.url" :alt="photo.title.text"
+                 :class="photo.image.height > photo.image.width
+                   ? 'w-full object-contain max-h-[85vh]'
+                   : 'w-full object-cover max-h-[70vh]'"
+                 loading="eager" />
+          </div>
+        </div>
+
+        <template x-if="photo.related && photo.related.length">
+          <div class="w-36 shrink-0 hidden md:flex flex-col gap-3 overflow-y-auto pr-1"
+               :style="photo.image.height > photo.image.width ? 'max-height:85vh' : 'max-height:70vh'">
+<template x-for="rel in photo.related" :key="rel.photoid">
+              <a href="#" @click.prevent="loadPhoto(rel.photoid)" class="block rounded-xl overflow-hidden ring-1 ring-[var(--border)] hover:ring-accent/60 transition shadow-sm shrink-0">
+                <img :src="rel.imageurl" :alt="rel.photoid" class="w-full h-24 object-cover hover:opacity-90 transition" />
+              </a>
+            </template>
+          </div>
+        </template>
+      </div>
+
+      <!-- Title + Description -->
+      <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-5"
+           x-data="titleEditor(photo, () => authHeaders())">
+        <!-- View mode -->
+        <template x-if="!editing">
+          <h1 class="text-3xl font-serif"
+              :class="photo.title.canedit ? 'cursor-pointer hover:text-gray-400 transition-colors' : ''"
+              :title="photo.title.canedit ? 'Click to edit title' : ''"
+              @click="photo.title.canedit && startEdit()"
+              x-text="photo.title.text">
+          </h1>
+        </template>
+        <!-- Edit mode -->
+        <template x-if="editing">
+          <div class="flex items-center gap-2">
+            <input x-ref="titleInput"
+                   x-model="draft"
+                   @keydown.enter.prevent="save()"
+                   @keydown.escape.prevent="cancel()"
+                   @blur="save()"
+                   class="flex-1 text-3xl font-serif bg-transparent border-b-2 border-gray-300 focus:outline-none" />
+            <button @mousedown.prevent="cancel()"
+                    class="text-muted hover:text-accent transition text-2xl leading-none flex-shrink-0"
+                    title="Cancel">&times;</button>
+          </div>
+        </template>
+        <p class="mt-2 text-muted leading-relaxed text-sm" x-text="photo.description"></p>
+      </div>
+
+      <!-- Labels -->
+      <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-4">
+        <div class="flex flex-wrap gap-2 items-center">
+          <template x-for="label in photo.labels" :key="label.labelid">
+            <div class="label-chip relative flex items-stretch rounded-full overflow-visible shadow-sm text-sm transition-shadow"
+                 :class="activeLabelID === label.labelid
+                   ? 'ring-2 ring-accent'
+                   : 'ring-1 ring-[var(--border)]'"
+                 x-data="{ hovered: false }" @mouseenter="hovered = true" @mouseleave="hovered = false">
+              <span class="label-name flex items-center px-3 py-1 text-white font-medium text-xs rounded-l-full" x-text="label.name"></span>
+              <span class="flex items-center px-3 py-1 bg-white text-brand font-medium rounded-r-full cursor-pointer hover:bg-gray-50 transition-colors"
+                    @click.stop="loadPhoto(photo.photoid, activeLabelID === label.labelid ? null : label.labelid)"
+                    :title="activeLabelID === label.labelid ? 'Clear label filter' : 'Find photos with this label'"
+                    x-text="label.value"></span>
+              <template x-if="testUser && hovered">
+                <span class="absolute left-1/2 -translate-x-1/2 top-full flex flex-col items-center z-10" style="padding-top:3px">
+                  <span class="flex items-center gap-1 bg-white border border-[var(--border)] rounded-lg shadow-md px-1 py-0.5">
+                    <button @click.stop="openLabelModal(label)"
+                            class="w-6 h-6 flex items-center justify-center rounded hover:bg-gray-100 text-muted hover:text-brand transition"
+                            title="Edit">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 112.828 2.828L11.828 15.828a2 2 0 01-1.414.586H9v-2a2 2 0 01.586-1.414z"/>
+                      </svg>
+                    </button>
+                    <button @click.stop="deleteLabel(label)"
+                            class="w-6 h-6 flex items-center justify-center rounded hover:bg-red-50 text-muted hover:text-red-500 transition"
+                            title="Delete">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                      </svg>
+                    </button>
+                  </span>
+                </span>
+              </template>
+            </div>
+          </template>
+          <template x-if="testUser">
+            <button @click="openLabelModal(null)"
+                    class="w-8 h-8 rounded-full bg-gray-200 hover:bg-accent hover:text-white transition flex items-center justify-center text-lg font-light shadow-sm"
+                    title="Add label">+</button>
+          </template>
+        </div>
+      </div>
+
+      <!-- Emojis -->
+      <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-4">
+        <div class="flex flex-wrap items-center gap-2">
+          <template x-for="em in photo.emojis" :key="em.emojiid">
+            <div class="relative" x-data="{ holding: false, holdTimer: null }">
+              <button class="emoji-btn flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm shadow-sm select-none border transition-colors"
+                      :class="testUser && em.users && em.users.some(u => u.id === testUser.userid)
+                        ? 'bg-teal-50 border-teal-300 text-teal-700'
+                        : 'bg-white border-[var(--border)]'"
+                      @click="toggleReaction(em)"
+                      @mousedown="holdTimer = setTimeout(() => holding = true, 600)"
+                      @mouseup="clearTimeout(holdTimer)"
+                      @mouseleave="clearTimeout(holdTimer)"
+                      @touchstart.prevent="holdTimer = setTimeout(() => holding = true, 600)"
+                      @touchend="clearTimeout(holdTimer)"
+<<<<<<< Updated upstream
+                      :title="testUser && em.users && em.users.some(u => u.id === testUser.userid) ? 'Click to remove reaction' : 'Click to react · Hold to see who reacted'">
+                <template x-if="em.imageurl">
+                  <img :src="em.imageurl" :alt="em.alttext" class="w-5 h-5 object-contain" />
+                </template>
+                <template x-if="!em.imageurl">
+                  <span class="text-lg" x-text="em.emoji"></span>
+                </template>
+                <span class="font-medium text-xs" x-text="em.count"></span>
+=======
+                      title="Hold to see who reacted">
+                <span class="text-lg" x-text="em.emoji"></span>
+                <span class="font-medium text-muted text-xs" x-text="em.count"></span>
+>>>>>>> Stashed changes
+              </button>
+              <!-- Hold popup -->
+              <div x-show="holding" @click.outside="holding=false"
+                   class="absolute bottom-full mb-2 left-0 bg-white rounded-xl shadow-xl border border-[var(--border)] p-3 w-44 z-20 animate-scalein">
+                <p class="text-xs font-semibold text-muted mb-2">Reacted with <span x-text="em.emoji"></span></p>
+                <template x-for="u in em.users" :key="u.id">
+                  <div class="flex items-center gap-2 py-1">
+                    <img :src="u.tn" :alt="u.name" class="w-6 h-6 rounded-full object-cover" />
+                    <span class="text-xs text-brand" x-text="u.name"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+          <button @click="emojiPickerOpen = true"
+                  class="w-8 h-8 rounded-full bg-gray-200 hover:bg-accent hover:text-white transition flex items-center justify-center text-lg font-light shadow-sm"
+                  title="Add emoji">+</button>
+        </div>
+      </div>
+
+      <!-- Comments -->
+      <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-5">
+        <h2 class="font-serif text-xl mb-4">Comments</h2>
+
+        <!-- New comment box -->
+        <div class="bg-white rounded-2xl border border-[var(--border)] p-4 shadow-sm mb-6">
+          <textarea rows="3" placeholder="Leave a comment…"
+                    class="w-full text-sm resize-none focus:outline-none text-brand placeholder-muted"></textarea>
+          <div class="flex justify-end mt-2">
+            <button @click="showToast('Posting comments is not yet available.')"
+                    class="bg-brand text-white text-sm px-4 py-1.5 rounded-full hover:bg-accent transition">Post</button>
+          </div>
+        </div>
+
+        <!-- Comment list -->
+        <div class="space-y-6">
+          <template x-for="comment in photo.comments" :key="comment.commentid">
+            <div x-data="commentItem(comment)" x-init="init()" class="animate-fadein">
+              <div class="flex gap-3">
+                <img :src="comment.author.tn || `https://i.pravatar.cc/48?u=${comment.author.userid}`"
+                     :alt="comment.author.username"
+                     class="w-10 h-10 rounded-full object-cover shrink-0 mt-0.5 ring-2 ring-white shadow" />
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-baseline gap-2 flex-wrap">
+                    <span class="font-semibold text-sm" x-text="comment.author.username"></span>
+                    <span class="text-xs text-muted" x-text="formatDate(comment.date)"></span>
+                  </div>
+
+                  <div class="mt-1 text-sm text-brand leading-relaxed">
+                    <div :class="expanded ? '' : 'comment-clamp'"
+                         :style="expanded ? '' : `-webkit-line-clamp: ${clampLines}`"
+                         x-ref="commentBody"
+                         x-text="comment.comment">
+                    </div>
+                    <template x-if="!expanded && needsClamp">
+                      <button @click="showMore()" class="text-accent text-xs mt-1 hover:underline">more</button>
+                    </template>
+                  </div>
+
+                  <div class="flex items-center gap-3 mt-2">
+                    <template x-if="comment.replycount > 0 && !showingReplies">
+                      <button @click="loadReplies()"
+                              class="text-xs text-accent hover:underline font-medium">
+                        Replies (<span x-text="comment.replycount"></span>)
+                      </button>
+                    </template>
+                    <template x-if="showingReplies">
+                      <button @click="showingReplies = false; replyOpen = false"
+                              class="text-xs text-muted hover:text-brand">Hide replies</button>
+                    </template>
+                    <button @click="replyOpen = !replyOpen"
+                            class="text-xs text-muted hover:text-brand font-medium">Reply</button>
+                  </div>
+
+                  <!-- Replies section -->
+                  <template x-if="showingReplies">
+                    <div class="mt-3 ml-2 pl-4 border-l-2 border-[var(--border)] space-y-4">
+                      <!-- Reply input always at top -->
+                      <div class="bg-gray-50 rounded-xl border border-[var(--border)] p-3">
+                        <textarea rows="2" placeholder="Write a reply…"
+                                  class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea>
+                        <div class="flex justify-end mt-1">
+                          <button @click="showToast('Posting replies is not yet available.')"
+                                  class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition">Reply</button>
+                        </div>
+                      </div>
+                      <div x-show="loadingReplies" class="flex justify-center py-2">
+                        <div class="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin"></div>
+                      </div>
+                      <template x-for="reply in replies" :key="reply.commentid">
+                        <div class="flex gap-2">
+                          <img :src="reply.author.tn || `https://i.pravatar.cc/40?u=${reply.author.userid}`"
+                               :alt="reply.author.username"
+                               class="w-8 h-8 rounded-full object-cover shrink-0" />
+                          <div>
+                            <div class="flex items-baseline gap-2">
+                              <span class="font-semibold text-xs" x-text="reply.author.username"></span>
+                              <span class="text-xs text-muted" x-text="formatDate(reply.date)"></span>
+                            </div>
+                            <p class="text-sm leading-relaxed mt-0.5" x-text="reply.comment"></p>
+                          </div>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+
+                  <!-- Inline reply box (when not showing full replies) -->
+                  <template x-if="replyOpen && !showingReplies">
+                    <div class="mt-3 bg-gray-50 rounded-xl border border-[var(--border)] p-3">
+                      <textarea rows="2" placeholder="Write a reply…"
+                                class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea>
+                      <div class="flex justify-end mt-1">
+                        <button @click="showToast('Posting replies is not yet available.')"
+                                class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition">Reply</button>
+                      </div>
+                    </div>
+                  </template>
+
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+    </div>
+  </template>
+
+  <div x-show="error && !loading" class="text-center py-32">
+    <p class="text-accent text-lg font-serif" x-text="error"></p>
+  </div>
+</main>
+
+<!-- ══ FOOTER ════════════════════════════════════════════════════════════════ -->
+<footer class="mt-16 border-t border-[var(--border)] bg-white">
+  <div class="max-w-7xl mx-auto px-4 py-5 flex flex-wrap items-center justify-between gap-3 text-xs text-muted">
+    <span>© 2024 Phōtos. All rights reserved.</span>
+    <div class="flex gap-4">
+      <a href="#" @click.prevent="showToast('Terms of Service not yet available.')"
+         class="hover:text-brand underline underline-offset-2">Terms of Service</a>
+      <a href="#" @click.prevent="showToast('Privacy Policy not yet available.')"
+         class="hover:text-brand underline underline-offset-2">Privacy Policy</a>
+    </div>
+  </div>
+</footer>
+
+<!-- ══ MODALS ════════════════════════════════════════════════════════════════ -->
+
+<!-- Toast -->
+<div x-show="toast.visible" x-cloak
+     x-transition:enter="transition ease-out duration-200"
+     x-transition:enter-start="opacity-0 translate-y-2"
+     x-transition:enter-end="opacity-100 translate-y-0"
+     x-transition:leave="transition ease-in duration-150"
+     x-transition:leave-start="opacity-100"
+     x-transition:leave-end="opacity-0"
+     class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] bg-brand text-white text-sm px-5 py-3 rounded-2xl shadow-xl"
+     x-text="toast.message">
+</div>
+
+<!-- User login modal -->
+<template x-if="userModal">
+  <div class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4" @click.self="userModal = false">
+    <div class="bg-white rounded-2xl shadow-2xl w-80 p-6 animate-scalein">
+      <div class="flex items-center justify-between mb-5">
+        <h2 class="font-serif text-xl">Sign In</h2>
+        <button @click="userModal = false" class="text-muted hover:text-brand text-2xl leading-none">&times;</button>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs font-medium text-muted block mb-1">Username</label>
+          <input type="text" placeholder="your_username"
+                 class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+        </div>
+        <div>
+          <label class="text-xs font-medium text-muted block mb-1">Password</label>
+          <input type="password" placeholder="••••••••"
+                 class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+        </div>
+        <button @click="userModal = false; showToast('Login is not yet available.')"
+                class="w-full bg-brand text-white py-2.5 rounded-xl font-medium hover:bg-accent transition text-sm mt-2">
+          Log In
+        </button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- Add / Edit label modal -->
+<template x-if="labelModal">
+  <div class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
+       @click.self="labelModal = false"
+       x-data="labelEditor(labelModalData, photo, () => authHeaders())"
+       x-init="init()">
+    <div class="bg-white rounded-2xl shadow-2xl w-96 p-6 animate-scalein">
+      <div class="flex items-center justify-between mb-5">
+        <h2 class="font-serif text-xl" x-text="editingLabel ? 'Edit Label' : 'Add Label'"></h2>
+        <button @click="labelModal = false" class="text-muted hover:text-brand text-2xl leading-none">&times;</button>
+      </div>
+
+      <div class="space-y-4">
+        <!-- Name -->
+        <div>
+          <label class="text-xs font-medium text-muted block mb-1">Name</label>
+          <!-- Editing: name is fixed, shown as read-only -->
+          <template x-if="editingLabel">
+            <div class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm bg-gray-50 text-brand font-medium" x-text="editingLabel.name"></div>
+          </template>
+          <!-- Adding: full name picker -->
+          <template x-if="!editingLabel">
+            <div>
+              <select x-show="!nameIsOther"
+                      x-model="selectedName"
+                      @change="onNameChange()"
+                      class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 bg-white">
+                <option value="" disabled>— choose a name —</option>
+                <template x-for="n in knownNames" :key="n">
+                  <option :value="n" x-text="n"></option>
+                </template>
+                <option value="__other__">Other…</option>
+              </select>
+              <input x-show="nameIsOther"
+                     x-model="customName"
+                     x-ref="customNameInput"
+                     type="text" placeholder="Enter label name"
+                     class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 mt-1" />
+              <button x-show="nameIsOther"
+                      @click="nameIsOther = false; selectedName = ''"
+                      class="text-xs text-accent mt-1 hover:underline">← back to list</button>
+            </div>
+          </template>
+        </div>
+
+        <!-- Value -->
+        <div>
+          <label class="text-xs font-medium text-muted block mb-1">Value</label>
+          <div x-show="loadingValues" class="text-xs text-muted py-2">Loading…</div>
+          <template x-if="!loadingValues">
+            <div>
+              <select x-show="!valueIsOther"
+                      x-model="selectedValue"
+                      class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 bg-white"
+                      @change="if (selectedValue === '__other__') { customValue = editingLabel ? editingLabel.value : ''; valueIsOther = true; selectedValue = ''; $nextTick(() => { $refs.customValueInput?.focus(); $refs.customValueInput?.select(); }); }">
+                <option value="" disabled>— choose a value —</option>
+                <template x-for="v in knownValues" :key="v">
+                  <option :value="v" x-text="v"></option>
+                </template>
+                <option value="__other__">Other…</option>
+              </select>
+              <input x-show="valueIsOther"
+                     x-model="customValue"
+                     x-ref="customValueInput"
+                     type="text" placeholder="Enter label value"
+                     class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 mt-1"
+                     @keydown.enter.prevent="save()" />
+              <button x-show="valueIsOther && knownValues.length > 0"
+                      @click="valueIsOther = false; selectedValue = ''"
+                      class="text-xs text-accent mt-1 hover:underline">← back to list</button>
+            </div>
+          </template>
+        </div>
+
+        <button @click="save()"
+                :disabled="saving || !effectiveName || !effectiveValue"
+                class="w-full bg-brand text-white py-2.5 rounded-xl font-medium hover:bg-accent transition text-sm disabled:opacity-40 disabled:cursor-not-allowed">
+          <span x-text="saving ? 'Saving…' : (editingLabel ? 'Save Changes' : 'Add Label')"></span>
+        </button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- Emoji picker modal -->
+<template x-if="emojiPickerOpen">
+<<<<<<< Updated upstream
+  <div class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
+       @click.self="emojiPickerOpen = false"
+       x-data="emojiPicker(photo)"
+       x-init="init()">
+    <div class="bg-white rounded-2xl shadow-2xl w-[28rem] p-5 animate-scalein flex flex-col" style="max-height:80vh">
+
+      <!-- Header -->
+      <div class="flex items-center justify-between mb-3 shrink-0">
+=======
+  <div class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4" @click.self="emojiPickerOpen = false">
+    <div class="bg-white rounded-2xl shadow-2xl w-80 p-5 animate-scalein">
+      <div class="flex items-center justify-between mb-4">
+>>>>>>> Stashed changes
+        <h2 class="font-serif text-xl">Add Reaction</h2>
+        <button @click="emojiPickerOpen = false" class="text-muted hover:text-brand text-2xl leading-none">&times;</button>
+      </div>
+      <p class="text-xs text-muted mb-3">Tap an emoji to react to this photo.</p>
+      <div class="grid grid-cols-7 gap-2">
+        <template x-for="emoji in emojiPalette" :key="emoji">
+          <button @click="addEmoji(emoji)"
+                  class="text-2xl w-10 h-10 flex items-center justify-center rounded-xl hover:bg-gray-100 transition"
+                  x-text="emoji"></button>
+        </template>
+      </div>
+    </div>
+  </div>
+</template>
+
+<!-- ══ ALPINE.JS ═════════════════════════════════════════════════════════════ -->
+<script>
+  function formatDate(dateStr) {
+    if (!dateStr) return '';
+    try {
+      const d = new Date(dateStr), now = new Date(), diff = (now - d) / 1000;
+      if (diff < 5)     return 'just now';
+      if (diff < 60)     return `${diff}s ago`;
+      if (diff < 3600)   return `${Math.floor(diff/60)}m ago`;
+      if (diff < 86400)  return `${Math.floor(diff/3600)}h ago`;
+      if (diff < 604800) return `${Math.floor(diff/86400)}d ago`;
+      return d.toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' });
+    } catch { return dateStr; }
+  }
+
+  function commentItem(comment) {
+    return {
+      comment,
+      expanded: false,
+      clampLines: 4,
+      needsClamp: false,
+      showingReplies: false,
+      loadingReplies: false,
+      replyOpen: false,
+      replies: [],
+
+      init() {
+        this.$nextTick(() => {
+          const el = this.$refs.commentBody;
+          if (el) {
+            const lineH = parseFloat(getComputedStyle(el).lineHeight) || 20;
+            this.needsClamp = el.scrollHeight > lineH * this.clampLines + 4;
+          }
+        });
+      },
+
+      showMore() {
+        this.clampLines += 1;
+        const el = this.$refs.commentBody;
+        if (el) {
+          const lineH = parseFloat(getComputedStyle(el).lineHeight) || 20;
+          if (el.scrollHeight <= lineH * this.clampLines + 4) this.expanded = true;
+        }
+      },
+
+      async loadReplies() {
+        this.showingReplies = true;
+        this.loadingReplies = true;
+        try {
+          const resp = await fetch(`/api/v1/comments?photoid=photo001&parentid=${this.comment.commentid}`);
+          const data = await resp.json();
+          this.replies = data.comments || [];
+        } catch (e) { console.error('Failed to load replies', e); }
+        this.loadingReplies = false;
+      },
+
+      formatDate,
+    };
+  }
+
+  // Skintone swatch colours in Fitzpatrick order.
+  const SKINTONE_COLORS = {
+    'light':        '#FFDBB4',
+    'medium-light': '#EAC085',
+    'medium':       '#C68642',
+    'medium-dark':  '#8D5524',
+    'dark':         '#4A2912',
+  };
+
+  function emojiPicker(photo) {
+    function getAuthHeaders() {
+      return window._testUserID ? { 'X-User-ID': window._testUserID } : {};
+    }
+    return {
+      photo,
+      search:     '',
+      emojis:     [],
+      total:      0,
+      offset:     0,
+      limit:      64,
+      loading:    false,
+      reactedIds: new Set(),
+
+      // Skintone picker state
+      skintoneTarget: null,    // the base emoji whose variants we're showing
+      skintoneVariants: [],    // loaded variant list (includes base at index 0)
+      skintoneLoading: false,
+
+      async init() {
+        if (getAuthHeaders()['X-User-ID']) {
+          const uid = getAuthHeaders()['X-User-ID'];
+          (photo.emojis || []).forEach(em => {
+            if (em.users && em.users.some(u => u.id === uid)) {
+              this.reactedIds.add(em.emojiid);
+            }
+          });
+        }
+        await this.load();
+      },
+
+      async load() {
+        this.loading = true;
+        try {
+          const params = new URLSearchParams({ limit: this.limit, offset: this.offset });
+          if (this.search) params.set('search', this.search);
+          const resp = await fetch(`/api/v1/emoji/types?${params}`);
+          const data = await resp.json();
+          this.emojis = data.emojis || [];
+          this.total  = data.total  || 0;
+        } catch(e) {
+          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Failed to load emojis: ${e.message}` }));
+        }
+        this.loading = false;
+      },
+
+      doSearch() { this.offset = 0; this.skintoneTarget = null; this.load(); },
+      nextPage()  { this.offset += this.limit; this.skintoneTarget = null; this.load(); },
+      prevPage()  { this.offset = Math.max(0, this.offset - this.limit); this.skintoneTarget = null; this.load(); },
+
+      skintoneColor(tone) { return SKINTONE_COLORS[tone] || '#FFD700'; },
+
+      async openSkintone(em) {
+        if (this.skintoneTarget?.emojiid === em.emojiid) {
+          this.skintoneTarget = null; // toggle off
+          return;
+        }
+        this.skintoneTarget  = em;
+        this.skintoneVariants = [];
+        this.skintoneLoading  = true;
+        try {
+          const resp = await fetch(`/api/v1/emoji/variants?hexcode=${encodeURIComponent(em.hexcode)}`);
+          const data = await resp.json();
+          this.skintoneVariants = data.variants || [];
+        } catch(e) {
+          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Failed to load variants: ${e.message}` }));
+        }
+        this.skintoneLoading = false;
+      },
+
+      handleEmojiClick(em) {
+        if (em.has_skintones) {
+          this.openSkintone(em);
+        } else {
+          this.skintoneTarget = null;
+          this.react(em);
+        }
+      },
+
+      async react(em) {
+        const headers = getAuthHeaders();
+        if (!headers['X-User-ID']) {
+          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: 'Select a user to react.' }));
+          return;
+        }
+        const alreadyReacted = this.reactedIds.has(em.emojiid);
+        const method = alreadyReacted ? 'DELETE' : 'POST';
+        try {
+          const resp = await fetch(
+            `/api/v1/emoji/react?photoid=${encodeURIComponent(this.photo.photoid)}&emojiid=${encodeURIComponent(em.emojiid)}`,
+            { method, headers }
+          );
+          if (!resp.ok) {
+            const e = await resp.json().catch(() => ({}));
+            throw new Error(e.error || `HTTP ${resp.status}`);
+          }
+          if (alreadyReacted) {
+            this.reactedIds.delete(em.emojiid);
+            const uid = window._testUserID;
+            const existing = this.photo.emojis.find(e => e.emojiid === em.emojiid);
+            if (existing) {
+              existing.count--;
+              if (uid) existing.users = (existing.users || []).filter(u => u.id !== uid);
+              if (existing.count <= 0) this.photo.emojis = this.photo.emojis.filter(e => e.emojiid !== em.emojiid);
+            }
+          } else {
+            this.reactedIds.add(em.emojiid);
+            const uid = window._testUserID;
+            const userEntry = uid ? { id: uid, name: '', tn: null } : null;
+            const existing = this.photo.emojis.find(e => e.emojiid === em.emojiid);
+            if (existing) {
+              existing.count++;
+              if (userEntry) existing.users = [...(existing.users || []), userEntry];
+            } else {
+<<<<<<< Updated upstream
+              this.photo.emojis.push({ emojiid: em.emojiid, emoji: em.emoji, imageurl: em.imageurl, alttext: em.alttext, count: 1, users: [] });
+=======
+              this.photo.emojis.push({ emojiid: em.emojiid, emoji: em.emoji, imageurl: em.imageurl, alttext: em.alttext, count: 1, users: userEntry ? [userEntry] : [] });
+>>>>>>> Stashed changes
+            }
+          }
+        } catch(e) {
+          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Reaction failed: ${e.message}` }));
+        }
+      },
+    };
+  }
+
+  function labelEditor(data, photo, getAuthHeaders) {
+    return {
+      photo,
+      getAuthHeaders,
+      editingLabel: data,        // null = new, object = edit existing
+
+      knownNames:  [],
+      knownValues: [],
+      loadingValues: false,
+
+      selectedName:  data ? data.name  : '',
+      customName:    '',
+      nameIsOther:   false,
+
+      selectedValue: '',
+      customValue:   '',
+      valueIsOther:  false,
+
+      saving: false,
+
+      get effectiveName()  { return this.nameIsOther  ? this.customName.trim()  : this.selectedName; },
+      get effectiveValue() { return this.valueIsOther ? this.customValue.trim() : this.selectedValue; },
+
+      async init() {
+        // Load known names.
+        try {
+          const r = await fetch('/api/v1/label-names');
+          const d = await r.json();
+          this.knownNames = d.names || [];
+        } catch { this.knownNames = []; }
+
+        // If editing, pre-select name and load its values.
+        if (this.editingLabel) {
+          if (!this.knownNames.includes(this.editingLabel.name)) {
+            this.knownNames = [this.editingLabel.name, ...this.knownNames];
+          }
+          await this.loadValues(this.editingLabel.name);
+          // Pre-select value or fall back to "other".
+          if (this.knownValues.includes(this.editingLabel.value)) {
+            this.selectedValue = this.editingLabel.value;
+          } else {
+            this.valueIsOther = true;
+            this.customValue  = this.editingLabel.value;
+          }
+        } else if (this.knownNames.length === 0) {
+          // No known names yet — go straight to free-text.
+          this.nameIsOther = true;
+          this.$nextTick(() => this.$refs.customNameInput?.focus());
+        }
+      },
+
+      async onNameChange() {
+        if (this.selectedName === '__other__') {
+          this.nameIsOther  = true;
+          this.selectedName = '';
+          this.$nextTick(() => this.$refs.customNameInput?.focus());
+          return;
+        }
+        this.selectedValue = '';
+        this.valueIsOther  = false;
+        this.customValue   = '';
+        await this.loadValues(this.selectedName);
+      },
+
+      async loadValues(name) {
+        if (!name) return;
+        this.loadingValues = true;
+        try {
+          const r = await fetch(`/api/v1/label-values?name=${encodeURIComponent(name)}`);
+          const d = await r.json();
+          this.knownValues = d.values || [];
+        } catch { this.knownValues = []; }
+        this.loadingValues = false;
+        // If only one known value, pre-select it.
+        if (this.knownValues.length === 1) this.selectedValue = this.knownValues[0];
+        // If no known values go straight to free-text.
+        if (this.knownValues.length === 0) this.valueIsOther = true;
+      },
+
+      async save() {
+        const name  = this.effectiveName;
+        const value = this.effectiveValue;
+        if (!name || !value) return;
+        this.saving = true;
+        try {
+          let resp;
+          if (this.editingLabel) {
+            resp = await fetch(`/api/v1/labels/${encodeURIComponent(this.editingLabel.labelid)}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+              body: JSON.stringify({ value }),  // name is immutable when editing
+            });
+          } else {
+            resp = await fetch(`/api/v1/labels?photoid=${encodeURIComponent(this.photo.photoid)}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+              body: JSON.stringify({ name, value }),
+            });
+          }
+          if (!resp.ok) {
+            const e = await resp.json().catch(() => ({}));
+            throw new Error(e.error || `HTTP ${resp.status}`);
+          }
+          const saved = await resp.json();
+          if (this.editingLabel) {
+            const idx = this.photo.labels.findIndex(l => l.labelid === saved.labelid);
+            if (idx !== -1) this.photo.labels[idx] = saved;
+          } else {
+            this.photo.labels.push(saved);
+          }
+          document.dispatchEvent(new CustomEvent('photoapp:close-label-modal'));
+        } catch(e) {
+          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Save failed: ${e.message}` }));
+        }
+        this.saving = false;
+      },
+    };
+  }
+
+  function titleEditor(photo, getAuthHeaders) {
+    return {
+      photo,
+      getAuthHeaders,
+      editing: false,
+      draft: '',
+      original: '',
+
+      startEdit() {
+        this.original = this.photo.title.text;
+        this.draft    = this.photo.title.text;
+        this.editing  = true;
+        this.$nextTick(() => {
+          const el = this.$refs.titleInput;
+          if (el) { el.focus(); el.select(); }
+        });
+      },
+
+      cancel() {
+        this.draft   = this.original;
+        this.editing = false;
+      },
+
+      async save() {
+        if (!this.editing) return;
+        const newTitle = this.draft.trim();
+        // Treat empty or unchanged as a cancel.
+        if (!newTitle || newTitle === this.original) {
+          this.cancel();
+          return;
+        }
+        this.editing = false;
+        try {
+          const resp = await fetch(
+            `/api/v1/photo?photoid=${encodeURIComponent(this.photo.photoid)}`,
+            {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                ...this.getAuthHeaders(),
+              },
+              body: JSON.stringify({ title: newTitle }),
+            }
+          );
+          if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.error || `HTTP ${resp.status}`);
+          }
+          this.photo.title.text = newTitle;
+          this.original         = newTitle;
+        } catch (e) {
+          // Roll back on failure and show error.
+          this.photo.title.text = this.original;
+          // Bubble up to parent photoApp showToast if accessible.
+          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Save failed: ${e.message}` }));
+        }
+      },
+    };
+  }
+
+  function photoApp() {
+    return {
+      photo: null,
+      loading: true,
+      error: null,
+
+      // Test user switcher — replaced by real auth once login is implemented
+      testUser: null,
+      cannedUsers: [
+        { userid: '11111111-0000-0000-0000-000000000001', username: 'ansel_b',  fullname: 'Ansel Blackwood' },
+        { userid: '11111111-0000-0000-0000-000000000002', username: 'lena_ray', fullname: 'Lena Raynor'     },
+        { userid: '11111111-0000-0000-0000-000000000003', username: 'marco_v',  fullname: 'Marco Vidal'     },
+        { userid: '11111111-0000-0000-0000-000000000004', username: 'suki_tm',  fullname: 'Suki Tamamoto'   },
+        { userid: '11111111-0000-0000-0000-000000000005', username: 'dev_null', fullname: 'Dev Null'        },
+      ],
+
+      authHeaders() {
+        return this.testUser ? { 'X-User-ID': this.testUser.userid } : {};
+      },
+
+      selectTestUser(user) {
+        this.testUser = user;
+        window._testUserID = user?.userid || null;
+        if (this.photo) this.loadPhoto(this.photo.photoid);  // preserve activeLabelID
+      },
+
+      userModal: false,
+      labelModal: false,
+      labelModalData: null,   // null = add, label object = edit
+      emojiPickerOpen: false,
+
+      toast: { visible: false, message: '', timer: null },
+
+      emojiPalette: [
+        '❤️','🔥','😍','🏔️','✨','👏','🎉','😮','😂','😢',
+        '😎','🤩','💯','🙌','👍','👎','💪','🌟','🌈','⚡',
+        '🍀','🎵','🌸','🦋','🌊','🚀','🌙','☀️','❄️','🌿',
+      ],
+
+      activeLabelID: null,
+
+      async init() {
+        const params = new URLSearchParams(window.location.search);
+        const photoid = params.get('photoid') || 'random';
+        const label   = params.get('label') || null;
+        this.activeLabelID = label;
+        await this.loadPhoto(photoid, label);
+        document.addEventListener('photoapp:toast', (e) => this.showToast(e.detail));
+        document.addEventListener('photoapp:close-label-modal', () => { this.labelModal = false; });
+      },
+
+      async loadPhoto(photoid, labelID) {
+        // labelID=undefined preserves activeLabelID; null clears it explicitly.
+        if (labelID !== undefined) this.activeLabelID = labelID || null;
+        this.loading = true;
+        this.error = null;
+        try {
+          let url;
+          if (photoid === 'random') {
+            url = '/api/v1/photo?random=true';
+          } else {
+            url = `/api/v1/photo?photoid=${encodeURIComponent(photoid)}`;
+            if (this.activeLabelID) url += `&label=${encodeURIComponent(this.activeLabelID)}`;
+          }
+          const resp = await fetch(url, { headers: this.authHeaders() });
+          if (!resp.ok) throw new Error(`Photo not found (${resp.status})`);
+          this.photo = await resp.json();
+          // Keep the URL in sync so bookmarks and the back button work.
+          const qs = new URLSearchParams({ photoid: this.photo.photoid });
+          if (this.activeLabelID) qs.set('label', this.activeLabelID);
+          window.history.replaceState(null, '', `?${qs}`);
+        } catch (e) { this.error = e.message; }
+        this.loading = false;
+      },
+
+      showToast(message) {
+        clearTimeout(this.toast.timer);
+        this.toast.message = message;
+        this.toast.visible = true;
+        this.toast.timer = setTimeout(() => { this.toast.visible = false; }, 3500);
+      },
+
+      async toggleReaction(em) {
+        if (!this.testUser) { this.showToast('Select a user to react.'); return; }
+        const uid = this.testUser.userid;
+        const alreadyReacted = em.users && em.users.some(u => u.id === uid);
+        const method = alreadyReacted ? 'DELETE' : 'POST';
+        try {
+          const resp = await fetch(
+            `/api/v1/emoji/react?photoid=${encodeURIComponent(this.photo.photoid)}&emojiid=${encodeURIComponent(em.emojiid)}`,
+            { method, headers: this.authHeaders() }
+          );
+          if (!resp.ok) {
+            const e = await resp.json().catch(() => ({}));
+            throw new Error(e.error || `HTTP ${resp.status}`);
+          }
+          if (alreadyReacted) {
+            em.count--;
+            em.users = (em.users || []).filter(u => u.id !== uid);
+            if (em.count <= 0) this.photo.emojis = this.photo.emojis.filter(e => e.emojiid !== em.emojiid);
+          } else {
+            em.count++;
+            em.users = [...(em.users || []), { id: uid, name: this.testUser.username, tn: null }];
+          }
+        } catch(e) {
+          this.showToast(`Reaction failed: ${e.message}`);
+        }
+      },
+
+      openLabelModal(label) {
+        this.labelModalData = label;
+        this.labelModal = true;
+      },
+
+      async deleteLabel(label) {
+        if (!this.currentUser) { this.showToast('Select a user to delete labels.'); return; }
+        try {
+          const resp = await fetch(`/api/v1/labels/${encodeURIComponent(label.labelid)}`, {
+            method: 'DELETE',
+            headers: this.authHeaders(),
+          });
+          if (!resp.ok) {
+            const e = await resp.json().catch(() => ({}));
+            throw new Error(e.error || `HTTP ${resp.status}`);
+          }
+          this.photo.labels = this.photo.labels.filter(l => l.labelid !== label.labelid);
+        } catch(e) {
+          this.showToast(`Delete failed: ${e.message}`);
+        }
+      },
+
+      addEmoji(emoji) {
+        this.emojiPickerOpen = false;
+        const existing = this.photo.emojis.find(e => e.emoji === emoji);
+        if (existing) { existing.count++; }
+        else { this.photo.emojis.push({ emojiid: 'local-' + Date.now(), emoji, count: 1, users: [] }); }
+        this.showToast(`Reacted with ${emoji}  (saving not yet available)`);
+      },
+    };
+  }
+</script>
+</body>
+</html>

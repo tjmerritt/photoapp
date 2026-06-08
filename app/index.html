@@ -329,7 +329,7 @@
                   const me = await fetch('/auth/me').then(r => r.json());
                   document.dispatchEvent(new CustomEvent('photoapp:auth-success', { detail: me }));
                   this.authEmail = this.authUsername = this.authPassword = '';
-		  open = false;
+                  open = false;
                 } catch(e) { this.authError = e.message; }
                 this.authLoading = false;
               }
