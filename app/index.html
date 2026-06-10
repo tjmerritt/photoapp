@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" x-data="photoApp()" x-init="init()">
+<html lang="en" x-data="photoApp()" x-init="init()" @open-emoji-picker.window="emojiPickerOpen = true">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -561,7 +561,7 @@
               </div>
             </div>
           </template>
-          <button @click="emojiPickerOpen = true"
+          <button @click="$dispatch('open-emoji-picker')"
                   class="w-8 h-8 rounded-full bg-gray-200 hover:bg-accent hover:text-white transition flex items-center justify-center text-lg font-light shadow-sm"
                   title="Add emoji">+</button>
         </div>
