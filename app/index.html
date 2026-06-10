@@ -6,9 +6,9 @@
   <title>PhotoApp</title>
 
   <!-- Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/tailwindcss.js"></script>
   <!-- Alpine.js -->
-  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script defer src="/alpinejs.min.js"></script>
 
   <style>
     @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap');
@@ -180,8 +180,8 @@
 
         <!-- Settings popup -->
         <div x-show="settingsOpen" @click.outside="settingsOpen = false" x-transition
-             class="absolute right-0 top-11 bg-white border border-[var(--border)] rounded-2xl shadow-2xl w-80 p-5 z-50 animate-scalein"
-             x-data="{
+             class="absolute right-0 top-11 bg-white border border-[var(--border)] rounded-2xl shadow-2xl w-80 p-5 z-50 animate-scalein">
+        <div x-data="{
                saving: false,
                uploading: false,
                get presets() {
@@ -259,7 +259,7 @@
             <input type="file" accept="image/*" class="hidden" @change="uploadCustom($event)" :disabled="uploading" />
           </label>
 
-        </div>
+        </div></div>
       </div>
 
       <!-- Profile / Auth -->
@@ -892,13 +892,13 @@
 <!-- Add / Edit label modal -->
 <template x-if="labelModal">
   <div class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
-       @click.self="labelModal = false"
-       x-data="labelEditor(labelModalData, photo, () => authHeaders())"
-       x-init="init()">
-    <div class="bg-white rounded-2xl shadow-2xl w-96 p-6 animate-scalein">
+       @click.self="labelModal = false">
+    <div class="bg-white rounded-2xl shadow-2xl w-96 p-6 animate-scalein"
+         x-data="labelEditor(labelModalData, photo, () => authHeaders())"
+         x-init="init()">
       <div class="flex items-center justify-between mb-5">
         <h2 class="font-serif text-xl" x-text="editingLabel ? 'Edit Label' : 'Add Label'"></h2>
-        <button @click="labelModal = false" class="text-muted hover:text-brand text-2xl leading-none">&times;</button>
+        <button @click="$dispatch('photoapp:close-label-modal')" class="text-muted hover:text-brand text-2xl leading-none">&times;</button>
       </div>
 
       <div class="space-y-4">
@@ -977,14 +977,15 @@
 <template x-if="emojiPickerOpen">
   <div class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
        @click.self="emojiPickerOpen = false"
-       x-data="emojiPicker(photo)"
-       x-init="init()">
-    <div class="bg-white rounded-2xl shadow-2xl w-[28rem] p-5 animate-scalein flex flex-col" style="max-height:80vh">
+       @close-emoji-picker="emojiPickerOpen = false">
+    <div class="bg-white rounded-2xl shadow-2xl w-[28rem] p-5 animate-scalein flex flex-col" style="max-height:80vh"
+         x-data="emojiPicker(photo)"
+         x-init="init()">
 
       <!-- Header -->
       <div class="flex items-center justify-between mb-3 shrink-0">
         <h2 class="font-serif text-xl">Add Reaction</h2>
-        <button @click="emojiPickerOpen = false" class="text-muted hover:text-brand text-2xl leading-none">&times;</button>
+        <button @click="$dispatch('close-emoji-picker')" class="text-muted hover:text-brand text-2xl leading-none">&times;</button>
       </div>
 
       <!-- Search -->
