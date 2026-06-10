@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" x-data="photoApp()" x-init="init()" @open-emoji-picker.window="$store.ui.emojiPickerOpen = true">
+<html lang="en" x-data="photoApp" x-init="init()" @open-emoji-picker.window="$store.ui.emojiPickerOpen = true">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,7 +7,9 @@
 
   <!-- Tailwind CSS -->
   <script src="/tailwindcss.js"></script>
-  <!-- Alpine.js -->
+  <!-- App logic (must come before Alpine so alpine:init listener is registered) -->
+  <script src="/app.js"></script>
+  <!-- Alpine.js CSP build -->
   <script defer src="/alpinejs.min.js"></script>
 
   <style>
@@ -129,7 +131,7 @@
       </button>
       <!-- User switcher — only visible when logged-in user has allow_multi_login -->
       <template x-if="loggedInUser && loggedInUser.allowMultiLogin">
-        <div class="relative" x-data="userSwitcher()">
+        <div class="relative" x-data="userSwitcher">
           <button @click="toggle()"
                   class="flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-gray-100 transition text-xs font-medium text-muted border border-dashed border-gray-300"
                   title="Switch acting user">
@@ -155,7 +157,7 @@
               </div>
             </button>
             <div class="border-t border-[var(--border)] my-1"></div>
-            <template x-for="u in users.filter(u => u.userid !== loggedInUser.userid)" :key="u.userid">
+            <template x-for="u in displayUsers" :key="u.userid">
               <button @click="selectTestUser({ userid: u.userid, username: u.username, profileImage: u.profileImage }) || (open = false)"
                       :class="testUser && testUser.userid === u.userid ? 'bg-accent/10 text-accent font-semibold' : ''"
                       class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
@@ -181,49 +183,7 @@
         <!-- Settings popup -->
         <div x-show="$store.ui.settingsOpen" @click.outside="$store.ui.settingsOpen = false" x-transition
              class="absolute right-0 top-11 bg-white border border-[var(--border)] rounded-2xl shadow-2xl w-80 p-5 z-50 animate-scalein">
-        <div x-data="{
-               saving: false,
-               uploading: false,
-               get presets() {
-                 const h = (loggedInUser && loggedInUser.avatarHash) || '';
-                 return h ? Array.from({ length: 20 }, (_, i) => i === 0 ? h : h + i) : [];
-               },
-               async selectPreset(hash) {
-                 if (this.saving) return;
-                 this.saving = true;
-                 const url = '/avatars/' + hash;
-                 try {
-                   const r = await fetch('/auth/profile', {
-                     method: 'PATCH',
-                     headers: { 'Content-Type': 'application/json' },
-                     body: JSON.stringify({ profileImage: url })
-                   });
-                   if (!r.ok) throw new Error('Save failed');
-                   loggedInUser.profileImage = url;
-                   window._profileImage = url;
-                 } catch(e) {
-                   document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: e.message }));
-                 }
-                 this.saving = false;
-               },
-               async uploadCustom(e) {
-                 const file = e.target.files && e.target.files[0];
-                 if (!file) return;
-                 this.uploading = true;
-                 try {
-                   const fd = new FormData();
-                   fd.append('image', file);
-                   const r = await fetch('/auth/profile/avatar', { method: 'POST', body: fd });
-                   if (!r.ok) throw new Error('Upload failed');
-                   const d = await r.json();
-                   loggedInUser.profileImage = d.profileImage;
-                 } catch(e) {
-                   document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: e.message }));
-                 }
-                 this.uploading = false;
-                 e.target.value = '';
-               }
-             }">
+        <div x-data="avatarSettings">
 
           <h2 class="font-serif text-xl mb-4">Settings</h2>
 
@@ -299,41 +259,7 @@
 
           <!-- Logged out state -->
           <template x-if="!loggedInUser">
-            <div x-data="{
-              authTab: 'login', authEmail: '', authUsername: '', authPassword: '',
-              authError: '', authLoading: false,
-              async doLogin() {
-                this.authError = ''; this.authLoading = true;
-                try {
-                  const r = await fetch('/auth/login', {
-                    method: 'POST', headers: {'Content-Type':'application/json'},
-                    body: JSON.stringify({ email: this.authEmail, password: this.authPassword })
-                  });
-                  const d = await r.json();
-                  if (!r.ok) throw new Error(d.error || 'Login failed');
-                  const me = await fetch('/auth/me').then(r => r.json());
-                  document.dispatchEvent(new CustomEvent('photoapp:auth-success', { detail: me }));
-                  this.authEmail = this.authPassword = '';
-                } catch(e) { this.authError = e.message; }
-                this.authLoading = false;
-              },
-              async doRegister() {
-                this.authError = ''; this.authLoading = true;
-                try {
-                  const r = await fetch('/auth/register', {
-                    method: 'POST', headers: {'Content-Type':'application/json'},
-                    body: JSON.stringify({ username: this.authUsername, email: this.authEmail, password: this.authPassword })
-                  });
-                  const d = await r.json();
-                  if (!r.ok) throw new Error(d.error || 'Registration failed');
-                  const me = await fetch('/auth/me').then(r => r.json());
-                  document.dispatchEvent(new CustomEvent('photoapp:auth-success', { detail: me }));
-                  this.authEmail = this.authUsername = this.authPassword = '';
-                  open = false;
-                } catch(e) { this.authError = e.message; }
-                this.authLoading = false;
-              }
-            }">
+            <div x-data="authModal">
 
               <!-- Google -->
               <a x-show="authConfig.googleEnabled"
@@ -448,7 +374,7 @@
 
       <!-- Title + Description -->
       <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-5"
-           x-data="titleEditor(photo, () => authHeaders())">
+           x-data="titleEditor(photo)">
         <!-- View mode -->
         <template x-if="!editing">
           <h1 class="text-3xl font-serif"
@@ -521,18 +447,16 @@
 
       <!-- Emojis -->
       <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-4"
-           x-data="{ hoverEmojiId: null, hoverTimer: null }">
+           x-data="emojiHover">
         <div class="flex flex-wrap items-center gap-2">
           <template x-for="em in photo.emojis" :key="em.emojiid">
             <div class="relative">
               <button class="emoji-btn flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm shadow-sm select-none border transition-colors"
-                      :class="currentUser && em.users && em.users.some(u => u.id === currentUser.userid)
-                        ? 'bg-teal-50 border-teal-300 text-teal-700'
-                        : 'bg-white border-[var(--border)]'"
+                      :class="hasReacted(em) ? 'bg-teal-50 border-teal-300 text-teal-700' : 'bg-white border-[var(--border)]'"
                       @click="toggleReaction(em)"
-                      @mouseenter="clearTimeout(hoverTimer); hoverEmojiId ? hoverEmojiId = em.emojiid : hoverTimer = setTimeout(() => hoverEmojiId = em.emojiid, 500)"
-                      @mouseleave="clearTimeout(hoverTimer); hoverTimer = setTimeout(() => hoverEmojiId = null, 150)"
-                      :title="currentUser && em.users && em.users.some(u => u.id === currentUser.userid) ? 'Click to remove reaction' : 'Click to react'">
+                      @mouseenter="onEmojiEnter(em)"
+                      @mouseleave="onEmojiLeave()"
+                      :title="reactionTitle(em)">
                 <template x-if="em.imageurl">
                   <img :src="em.imageurl" :alt="em.alttext" class="w-5 h-5 object-contain" />
                 </template>
@@ -543,8 +467,8 @@
               </button>
               <!-- Hover popup -->
               <div x-show="hoverEmojiId === em.emojiid"
-                   @mouseenter="clearTimeout(hoverTimer)"
-                   @mouseleave="hoverTimer = setTimeout(() => hoverEmojiId = null, 150)"
+                   @mouseenter="stopHover()"
+                   @mouseleave="onEmojiLeave()"
                    class="absolute bottom-full mb-1 left-0 bg-white rounded-xl shadow-xl border border-[var(--border)] p-3 w-44 z-20 animate-scalein">
                 <p class="text-xs font-semibold text-muted mb-2 flex items-center gap-1">Reacted with
                   <template x-if="em.imageurl"><img :src="em.imageurl" :alt="em.alttext" class="w-4 h-4 object-contain inline" /></template>
@@ -569,7 +493,7 @@
 
       <!-- Comments -->
       <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-5"
-           x-data="commentsPanel(photo, () => currentUser, () => authHeaders())">
+           x-data="commentsPanel(photo)">
 
         <h2 class="font-serif text-xl mb-4">Comments</h2>
 
@@ -591,7 +515,7 @@
         <!-- Comment list -->
         <div class="space-y-6">
           <template x-for="c in comments" :key="c.commentid">
-            <div class="animate-fadein" x-data="commentItem(c, photo.photoid, () => currentUser, () => authHeaders(), 0)">
+            <div class="animate-fadein" x-data="commentItem(c, photo.photoid, 0)">
               <div class="flex gap-3">
                 <img :src="c.author.tn || `https://i.pravatar.cc/48?u=${c.author.userid}`"
                      :alt="c.author.username"
@@ -684,7 +608,7 @@
                         <div class="w-4 h-4 border-2 border-accent/30 border-t-accent rounded-full animate-spin"></div>
                       </div>
                       <template x-for="r1 in replies" :key="r1.commentid">
-                        <div x-data="commentItem(r1, photoid, getUser, getHeaders, depth + 1)">
+                        <div x-data="commentItem(r1, photoid, depth + 1)">
                           <div class="flex gap-2">
                             <img :src="c.author.tn || ''" class="avatar w-8 h-8 rounded-full object-cover shrink-0" />
                             <div class="flex-1 min-w-0">
@@ -703,7 +627,7 @@
                               </template>
                               <div class="flex items-center gap-3 mt-1">
                                 <template x-if="c.replycount > 0 && !showingReplies"><button @click="loadReplies()" class="text-xs text-accent hover:underline font-medium">Replies (<span x-text="c.replycount"></span>)</button></template>
-                                <template x-if="showingReplies"><button @click="showingReplies=false;replyOpen=false" class="text-xs text-muted hover:text-brand">Hide replies</button></template>
+                                <template x-if="showingReplies"><button @click="(showingReplies = false) || (replyOpen = false)" class="text-xs text-muted hover:text-brand">Hide replies</button></template>
                                 <template x-if="canReply"><button @click="replyOpen=!replyOpen" class="text-xs text-muted hover:text-brand font-medium">Reply</button></template>
                               </div>
                               <template x-if="replyOpen && !showingReplies">
@@ -714,7 +638,7 @@
                                   <template x-if="canReply && replyOpen"><div class="bg-gray-50 rounded-xl border border-[var(--border)] p-2"><textarea x-model="replyText" rows="1" placeholder="Write a reply…" class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea><div class="flex justify-end mt-1"><button @click="postReply()" :disabled="postingReply||!replyText.trim()" class="bg-brand text-white text-xs px-2 py-0.5 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="postingReply?'Posting…':'Reply'"></span></button></div></div></template>
                                   <div x-show="loadingReplies" class="flex justify-center py-1"><div class="w-4 h-4 border-2 border-accent/30 border-t-accent rounded-full animate-spin"></div></div>
                                   <template x-for="r2 in replies" :key="r2.commentid">
-                                    <div x-data="commentItem(r2, photoid, getUser, getHeaders, depth + 1)">
+                                    <div x-data="commentItem(r2, photoid, depth + 1)">
                                       <div class="flex gap-2">
                                         <img :src="c.author.tn || ''" class="avatar w-7 h-7 rounded-full object-cover shrink-0" />
                                         <div class="flex-1 min-w-0">
@@ -727,7 +651,7 @@
                                           <template x-if="editing"><div class="mt-1"><textarea x-model="editText" rows="2" @keydown.escape="cancelEdit()" class="w-full text-sm border border-[var(--border)] rounded-xl p-2 resize-none focus:outline-none focus:ring-2 focus:ring-accent/30"></textarea><div class="flex gap-2 justify-end mt-1"><button @click="cancelEdit()" class="text-xs text-muted hover:text-brand">Cancel</button><button @click="saveEdit()" :disabled="saving||!editText.trim()" class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="saving?'Saving…':'Save'"></span></button></div></div></template>
                                           <div class="flex items-center gap-3 mt-1">
                                             <template x-if="c.replycount > 0 && !showingReplies"><button @click="loadReplies()" class="text-xs text-accent hover:underline font-medium">Replies (<span x-text="c.replycount"></span>)</button></template>
-                                            <template x-if="showingReplies"><button @click="showingReplies=false;replyOpen=false" class="text-xs text-muted hover:text-brand">Hide replies</button></template>
+                                            <template x-if="showingReplies"><button @click="(showingReplies = false) || (replyOpen = false)" class="text-xs text-muted hover:text-brand">Hide replies</button></template>
                                             <template x-if="canReply"><button @click="replyOpen=!replyOpen" class="text-xs text-muted hover:text-brand font-medium">Reply</button></template>
                                           </div>
                                           <template x-if="replyOpen && !showingReplies"><div class="mt-2 bg-gray-50 rounded-xl border border-[var(--border)] p-2"><textarea x-model="replyText" rows="1" placeholder="Write a reply…" class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea><div class="flex justify-end mt-1"><button @click="postReply()" :disabled="postingReply||!replyText.trim()" class="bg-brand text-white text-xs px-2 py-0.5 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="postingReply?'Posting…':'Reply'"></span></button></div></div></template>
@@ -736,7 +660,7 @@
                                               <template x-if="canReply && replyOpen"><div class="bg-gray-50 rounded-xl border border-[var(--border)] p-2"><textarea x-model="replyText" rows="1" placeholder="Write a reply…" class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea><div class="flex justify-end mt-1"><button @click="postReply()" :disabled="postingReply||!replyText.trim()" class="bg-brand text-white text-xs px-2 py-0.5 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="postingReply?'Posting…':'Reply'"></span></button></div></div></template>
                                               <div x-show="loadingReplies" class="flex justify-center py-1"><div class="w-3 h-3 border-2 border-accent/30 border-t-accent rounded-full animate-spin"></div></div>
                                               <template x-for="r3 in replies" :key="r3.commentid">
-                                                <div x-data="commentItem(r3, photoid, getUser, getHeaders, depth + 1)">
+                                                <div x-data="commentItem(r3, photoid, depth + 1)">
                                                   <div class="flex gap-2">
                                                     <img :src="c.author.tn || ''" class="w-6 h-6 rounded-full object-cover shrink-0" />
                                                     <div class="flex-1 min-w-0">
@@ -746,7 +670,7 @@
                                                       <template x-if="editing"><div class="mt-1"><textarea x-model="editText" rows="2" @keydown.escape="cancelEdit()" class="w-full text-xs border border-[var(--border)] rounded-xl p-2 resize-none focus:outline-none"></textarea><div class="flex gap-2 justify-end mt-1"><button @click="cancelEdit()" class="text-xs text-muted hover:text-brand">Cancel</button><button @click="saveEdit()" :disabled="saving||!editText.trim()" class="bg-brand text-white text-xs px-2 py-0.5 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="saving?'Saving…':'Save'"></span></button></div></div></template>
                                                       <div class="flex items-center gap-3 mt-0.5">
                                                         <template x-if="c.replycount > 0 && !showingReplies"><button @click="loadReplies()" class="text-xs text-accent hover:underline">Replies (<span x-text="c.replycount"></span>)</button></template>
-                                                        <template x-if="showingReplies"><button @click="showingReplies=false;replyOpen=false" class="text-xs text-muted hover:text-brand">Hide</button></template>
+                                                        <template x-if="showingReplies"><button @click="(showingReplies = false) || (replyOpen = false)" class="text-xs text-muted hover:text-brand">Hide</button></template>
                                                         <template x-if="canReply"><button @click="replyOpen=!replyOpen" class="text-xs text-muted hover:text-brand">Reply</button></template>
                                                       </div>
                                                       <template x-if="replyOpen && !showingReplies"><div class="mt-1 bg-gray-50 rounded-xl border border-[var(--border)] p-2"><textarea x-model="replyText" rows="1" placeholder="Reply…" class="w-full text-xs resize-none focus:outline-none bg-transparent placeholder-muted"></textarea><div class="flex justify-end mt-1"><button @click="postReply()" :disabled="postingReply||!replyText.trim()" class="bg-brand text-white text-xs px-2 py-0.5 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="postingReply?'…':'Reply'"></span></button></div></div></template>
@@ -755,7 +679,7 @@
                                                           <template x-if="canReply && replyOpen"><div class="bg-gray-50 rounded-lg border border-[var(--border)] p-1.5"><textarea x-model="replyText" rows="1" placeholder="Reply…" class="w-full text-xs resize-none focus:outline-none bg-transparent placeholder-muted"></textarea><div class="flex justify-end mt-0.5"><button @click="postReply()" :disabled="postingReply||!replyText.trim()" class="bg-brand text-white text-xs px-2 py-0.5 rounded-full hover:bg-accent disabled:opacity-40"><span x-text="postingReply?'…':'Reply'"></span></button></div></div></template>
                                                           <div x-show="loadingReplies" class="flex justify-center"><div class="w-3 h-3 border-2 border-accent/30 border-t-accent rounded-full animate-spin"></div></div>
                                                           <template x-for="r4 in replies" :key="r4.commentid">
-                                                            <div x-data="commentItem(r4, photoid, getUser, getHeaders, depth + 1)">
+                                                            <div x-data="commentItem(r4, photoid, depth + 1)">
                                                               <div class="flex gap-1.5">
                                                                 <img :src="c.author.tn || ''" class="avatar w-5 h-5 rounded-full object-cover shrink-0" />
                                                                 <div class="flex-1 min-w-0">
@@ -764,7 +688,7 @@
                                                                   <p class="text-xs leading-relaxed" x-text="c.comment"></p>
                                                                   <div class="flex items-center gap-2 mt-0.5">
                                                                     <template x-if="c.replycount > 0 && !showingReplies"><button @click="loadReplies()" class="text-xs text-accent hover:underline">Replies (<span x-text="c.replycount"></span>)</button></template>
-                                                                    <template x-if="showingReplies"><button @click="showingReplies=false;replyOpen=false" class="text-xs text-muted hover:text-brand">Hide</button></template>
+                                                                    <template x-if="showingReplies"><button @click="(showingReplies = false) || (replyOpen = false)" class="text-xs text-muted hover:text-brand">Hide</button></template>
                                                                     <template x-if="canReply"><button @click="replyOpen=!replyOpen" class="text-xs text-muted hover:text-brand">Reply</button></template>
                                                                   </div>
                                                                   <template x-if="replyOpen && !showingReplies"><div class="mt-1 bg-gray-50 rounded-lg border border-[var(--border)] p-1.5"><textarea x-model="replyText" rows="1" placeholder="Reply…" class="w-full text-xs resize-none focus:outline-none bg-transparent"></textarea><div class="flex justify-end"><button @click="postReply()" :disabled="postingReply||!replyText.trim()" class="bg-brand text-white text-xs px-2 py-0.5 rounded-full hover:bg-accent disabled:opacity-40"><span x-text="postingReply?'…':'Reply'"></span></button></div></div></template>
@@ -772,7 +696,7 @@
                                                                     <div class="mt-1 space-y-2 border-l-2 border-[var(--border)] ml-1 pl-2">
                                                                       <div x-show="loadingReplies" class="flex justify-center"><div class="w-3 h-3 border-2 border-accent/30 border-t-accent rounded-full animate-spin"></div></div>
                                                                       <template x-for="r5 in replies" :key="r5.commentid">
-                                                                        <div x-data="commentItem(r5, photoid, getUser, getHeaders, depth + 1)" class="flex gap-1.5">
+                                                                        <div x-data="commentItem(r5, photoid, depth + 1)" class="flex gap-1.5">
                                                                           <img :src="c.author.tn || ''" class="avatar w-4 h-4 rounded-full object-cover shrink-0 mt-0.5" />
                                                                           <div class="flex-1 min-w-0">
                                                                             <span class="font-semibold text-xs" x-text="c.author.username"></span>
@@ -894,7 +818,7 @@
   <div class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
        @click.self="$store.ui.labelModal = false">
     <div class="bg-white rounded-2xl shadow-2xl w-96 p-6 animate-scalein"
-         x-data="labelEditor(labelModalData, photo, () => authHeaders())"
+         x-data="labelEditor(labelModalData, photo)"
          x-init="init()">
       <div class="flex items-center justify-between mb-5">
         <h2 class="font-serif text-xl" x-text="editingLabel ? 'Edit Label' : 'Add Label'"></h2>
@@ -1077,713 +1001,5 @@
   </div>
 </template>
 
-<!-- ══ ALPINE.JS ═════════════════════════════════════════════════════════════ -->
-<script>
-  document.addEventListener('alpine:init', () => {
-    Alpine.store('ui', {
-      emojiPickerOpen: false,
-      labelModal: false,
-      settingsOpen: false,
-    });
-  });
-
-  function formatDate(dateStr) {
-    if (!dateStr) return '';
-    try {
-      const d = new Date(dateStr), now = new Date(), diff = (now - d) / 1000;
-      if (diff < 5)     return 'just now';
-      if (diff < 60)     return `${diff}s ago`;
-      if (diff < 3600)   return `${Math.floor(diff/60)}m ago`;
-      if (diff < 86400)  return `${Math.floor(diff/3600)}h ago`;
-      if (diff < 604800) return `${Math.floor(diff/86400)}d ago`;
-      return d.toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' });
-    } catch { return dateStr; }
-  }
-
-  // commentsPanel manages the top-level comment list + new comment posting.
-  function commentsPanel(photo, getUser, getHeaders) {
-    return {
-      comments:    photo.comments || [],
-      newText:     '',
-      posting:     false,
-      loadingMore: false,
-
-      get testUser() { return getUser(); },
-
-      async post() {
-        const text = this.newText.trim();
-        if (!text || !getUser()) return;
-        this.posting = true;
-        try {
-          const resp = await fetch(`/api/v1/comments?photoid=${encodeURIComponent(photo.photoid)}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...getHeaders() },
-            body: JSON.stringify({ comment: text }),
-          });
-          if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).error || `HTTP ${resp.status}`);
-          const c = await resp.json();
-          this.comments.unshift(c);
-          this.newText = '';
-        } catch(e) {
-          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Failed to post: ${e.message}` }));
-        }
-        this.posting = false;
-      },
-
-      async loadMore() {
-        if (!photo.commentsurl) return;
-        this.loadingMore = true;
-        try {
-          const resp = await fetch(photo.commentsurl);
-          const data = await resp.json();
-          this.comments.push(...(data.comments || []));
-          photo.commentsurl = data.pages?.next ? data.pages.next.replace('/api/v1/comments', '/api/v1/comments') : null;
-        } catch(e) {
-          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Failed to load more: ${e.message}` }));
-        }
-        this.loadingMore = false;
-      },
-    };
-  }
-
-  // commentItem manages a single comment row: editing, deleting, replies.
-  // depth is 0-based; Reply is hidden at depth >= 5 (enforcing a 6-level max).
-  function commentItem(c, photoid, getUser, getHeaders, depth = 0) {
-    return {
-      c,
-      depth,
-      photoid,
-      getUser,
-      getHeaders,
-      expanded:     false,
-      clampLines:   4,
-      needsClamp:   false,
-      editing:      false,
-      editText:     '',
-      saving:       false,
-      showingReplies: false,
-      loadingReplies: false,
-      replyOpen:    false,
-      replyText:    '',
-      postingReply: false,
-      replies:      [],
-
-      get testUser()  { return getUser(); },
-      get canReply()  { return !!getUser() && depth < 5; },
-
-      checkClamp() {
-        this.$nextTick(() => {
-          const el = this.$refs.commentBody;
-          if (el) {
-            const lineH = parseFloat(getComputedStyle(el).lineHeight) || 20;
-            this.needsClamp = el.scrollHeight > lineH * this.clampLines + 4;
-          }
-        });
-      },
-
-      showMore() {
-        this.clampLines += 1;
-        const el = this.$refs.commentBody;
-        if (el) {
-          const lh = parseFloat(getComputedStyle(el).lineHeight) || 20;
-          if (el.scrollHeight <= lh * this.clampLines + 4) this.expanded = true;
-        }
-      },
-
-      startEdit() {
-        this.editText = this.c.comment;
-        this.editing  = true;
-      },
-      cancelEdit() { this.editing = false; },
-
-      async saveEdit() {
-        const text = this.editText.trim();
-        if (!text) return;
-        this.saving = true;
-        try {
-          const resp = await fetch(`/api/v1/comments/${encodeURIComponent(this.c.commentid)}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json', ...getHeaders() },
-            body: JSON.stringify({ comment: text }),
-          });
-          if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).error || `HTTP ${resp.status}`);
-          const updated = await resp.json();
-          this.c.comment = updated.comment;
-          this.editing = false;
-        } catch(e) {
-          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Edit failed: ${e.message}` }));
-        }
-        this.saving = false;
-      },
-
-      async deleteComment() {
-        if (!confirm('Delete this comment?')) return;
-        try {
-          const resp = await fetch(`/api/v1/comments/${encodeURIComponent(this.c.commentid)}`, {
-            method: 'DELETE', headers: getHeaders(),
-          });
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-          // Remove from parent list via event
-          document.dispatchEvent(new CustomEvent('photoapp:comment-deleted', { detail: this.c.commentid }));
-        } catch(e) {
-          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Delete failed: ${e.message}` }));
-        }
-      },
-
-      async loadReplies() {
-        this.showingReplies  = true;
-        this.loadingReplies  = true;
-        try {
-          const resp = await fetch(`/api/v1/comments?photoid=${encodeURIComponent(photoid)}&parentid=${encodeURIComponent(this.c.commentid)}`);
-          const data = await resp.json();
-          this.replies = data.comments || [];
-        } catch(e) { console.error('Failed to load replies', e); }
-        this.loadingReplies = false;
-      },
-
-      async postReply() {
-        const text = this.replyText.trim();
-        if (!text || !getUser()) return;
-        this.postingReply = true;
-        try {
-          const resp = await fetch(
-            `/api/v1/comments?photoid=${encodeURIComponent(photoid)}&parentid=${encodeURIComponent(this.c.commentid)}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', ...getHeaders() },
-              body: JSON.stringify({ comment: text }),
-            }
-          );
-          if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).error || `HTTP ${resp.status}`);
-          const reply = await resp.json();
-          this.replies.push(reply);
-          this.c.replycount = (this.c.replycount || 0) + 1;
-          this.replyText    = '';
-          this.replyOpen    = false;
-          this.showingReplies = true;
-        } catch(e) {
-          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Reply failed: ${e.message}` }));
-        }
-        this.postingReply = false;
-      },
-
-      formatDate,
-    };
-  }
-
-  // Skintone swatch colours in Fitzpatrick order.
-  const SKINTONE_COLORS = {
-    'light':        '#FFDBB4',
-    'medium-light': '#EAC085',
-    'medium':       '#C68642',
-    'medium-dark':  '#8D5524',
-    'dark':         '#4A2912',
-  };
-
-  function emojiPicker(photo) {
-    function getAuthHeaders() {
-      return window._testUserID ? { 'X-User-ID': window._testUserID } : {};
-    }
-    return {
-      photo,
-      search:     '',
-      emojis:     [],
-      total:      0,
-      offset:     0,
-      limit:      64,
-      loading:    false,
-      reactedIds: new Set(),
-
-      // Skintone picker state
-      skintoneTarget: null,    // the base emoji whose variants we're showing
-      skintoneVariants: [],    // loaded variant list (includes base at index 0)
-      skintoneLoading: false,
-
-      async init() {
-        if (getAuthHeaders()['X-User-ID']) {
-          const uid = getAuthHeaders()['X-User-ID'];
-          (photo.emojis || []).forEach(em => {
-            if (em.users && em.users.some(u => u.id === uid)) {
-              this.reactedIds.add(em.emojiid);
-            }
-          });
-        }
-        await this.load();
-      },
-
-      async load() {
-        this.loading = true;
-        try {
-          const params = new URLSearchParams({ limit: this.limit, offset: this.offset });
-          if (this.search) params.set('search', this.search);
-          const resp = await fetch(`/api/v1/emoji/types?${params}`);
-          const data = await resp.json();
-          this.emojis = data.emojis || [];
-          this.total  = data.total  || 0;
-        } catch(e) {
-          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Failed to load emojis: ${e.message}` }));
-        }
-        this.loading = false;
-      },
-
-      doSearch() { this.offset = 0; this.skintoneTarget = null; this.load(); },
-      nextPage()  { this.offset += this.limit; this.skintoneTarget = null; this.load(); },
-      prevPage()  { this.offset = Math.max(0, this.offset - this.limit); this.skintoneTarget = null; this.load(); },
-
-      skintoneColor(tone) { return SKINTONE_COLORS[tone] || '#FFD700'; },
-
-      async openSkintone(em) {
-        if (this.skintoneTarget?.emojiid === em.emojiid) {
-          this.skintoneTarget = null; // toggle off
-          return;
-        }
-        this.skintoneTarget  = em;
-        this.skintoneVariants = [];
-        this.skintoneLoading  = true;
-        try {
-          const resp = await fetch(`/api/v1/emoji/variants?hexcode=${encodeURIComponent(em.hexcode)}`);
-          const data = await resp.json();
-          this.skintoneVariants = data.variants || [];
-        } catch(e) {
-          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Failed to load variants: ${e.message}` }));
-        }
-        this.skintoneLoading = false;
-      },
-
-      handleEmojiClick(em) {
-        if (em.has_skintones) {
-          this.openSkintone(em);
-        } else {
-          this.skintoneTarget = null;
-          this.react(em);
-        }
-      },
-
-      async react(em) {
-        const headers = getAuthHeaders();
-        if (!headers['X-User-ID']) {
-          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: 'Select a user to react.' }));
-          return;
-        }
-        const alreadyReacted = this.reactedIds.has(em.emojiid);
-        const method = alreadyReacted ? 'DELETE' : 'POST';
-        try {
-          const resp = await fetch(
-            `/api/v1/emoji/react?photoid=${encodeURIComponent(this.photo.photoid)}&emojiid=${encodeURIComponent(em.emojiid)}`,
-            { method, headers }
-          );
-          if (!resp.ok) {
-            const e = await resp.json().catch(() => ({}));
-            throw new Error(e.error || `HTTP ${resp.status}`);
-          }
-          if (alreadyReacted) {
-            this.reactedIds.delete(em.emojiid);
-            const uid = window._testUserID;
-            const existing = this.photo.emojis.find(e => e.emojiid === em.emojiid);
-            if (existing) {
-              existing.count--;
-              if (uid) existing.users = (existing.users || []).filter(u => u.id !== uid);
-              if (existing.count <= 0) this.photo.emojis = this.photo.emojis.filter(e => e.emojiid !== em.emojiid);
-            }
-          } else {
-            this.reactedIds.add(em.emojiid);
-            const uid = window._testUserID;
-            const cu = this.currentUser;
-            const userEntry = uid ? { id: uid, name: cu?.username || '', tn: cu?.profileImage || null } : null;
-            const existing = this.photo.emojis.find(e => e.emojiid === em.emojiid);
-            if (existing) {
-              existing.count++;
-              if (userEntry) existing.users = [...(existing.users || []), userEntry];
-            } else {
-              this.photo.emojis.push({ emojiid: em.emojiid, emoji: em.emoji, imageurl: em.imageurl, alttext: em.alttext, count: 1, users: userEntry ? [userEntry] : [] });
-            }
-          }
-        } catch(e) {
-          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Reaction failed: ${e.message}` }));
-        }
-      },
-    };
-  }
-
-  function labelEditor(data, photo, getAuthHeaders) {
-    return {
-      photo,
-      getAuthHeaders,
-      editingLabel: data,        // null = new, object = edit existing
-
-      knownNames:  [],
-      knownValues: [],
-      loadingValues: false,
-
-      selectedName:  data ? data.name  : '',
-      customName:    '',
-      nameIsOther:   false,
-
-      selectedValue: '',
-      customValue:   '',
-      valueIsOther:  false,
-
-      saving: false,
-
-      get effectiveName()  { return this.nameIsOther  ? this.customName.trim()  : this.selectedName; },
-      get effectiveValue() { return this.valueIsOther ? this.customValue.trim() : this.selectedValue; },
-
-      async init() {
-        // Load known names.
-        try {
-          const r = await fetch('/api/v1/label-names');
-          const d = await r.json();
-          this.knownNames = d.names || [];
-        } catch { this.knownNames = []; }
-
-        // If editing, pre-select name and load its values.
-        if (this.editingLabel) {
-          if (!this.knownNames.includes(this.editingLabel.name)) {
-            this.knownNames = [this.editingLabel.name, ...this.knownNames];
-          }
-          await this.loadValues(this.editingLabel.name);
-          // Pre-select value or fall back to "other".
-          if (this.knownValues.includes(this.editingLabel.value)) {
-            this.selectedValue = this.editingLabel.value;
-          } else {
-            this.valueIsOther = true;
-            this.customValue  = this.editingLabel.value;
-          }
-        } else if (this.knownNames.length === 0) {
-          // No known names yet — go straight to free-text.
-          this.nameIsOther = true;
-          this.$nextTick(() => this.$refs.customNameInput?.focus());
-        }
-      },
-
-      onValueChange() {
-        if (this.selectedValue === '__other__') {
-          this.customValue   = this.editingLabel ? this.editingLabel.value : '';
-          this.valueIsOther  = true;
-          this.selectedValue = '';
-          this.$nextTick(() => {
-            if (this.$refs.customValueInput) {
-              this.$refs.customValueInput.focus();
-              this.$refs.customValueInput.select();
-            }
-          });
-        }
-      },
-
-      async onNameChange() {
-        if (this.selectedName === '__other__') {
-          this.nameIsOther  = true;
-          this.selectedName = '';
-          this.$nextTick(() => this.$refs.customNameInput?.focus());
-          return;
-        }
-        this.selectedValue = '';
-        this.valueIsOther  = false;
-        this.customValue   = '';
-        await this.loadValues(this.selectedName);
-      },
-
-      async loadValues(name) {
-        if (!name) return;
-        this.loadingValues = true;
-        try {
-          const r = await fetch(`/api/v1/label-values?name=${encodeURIComponent(name)}`);
-          const d = await r.json();
-          this.knownValues = d.values || [];
-        } catch { this.knownValues = []; }
-        this.loadingValues = false;
-        // If only one known value, pre-select it.
-        if (this.knownValues.length === 1) this.selectedValue = this.knownValues[0];
-        // If no known values go straight to free-text.
-        if (this.knownValues.length === 0) this.valueIsOther = true;
-      },
-
-      async save() {
-        const name  = this.effectiveName;
-        const value = this.effectiveValue;
-        if (!name || !value) return;
-        this.saving = true;
-        try {
-          let resp;
-          if (this.editingLabel) {
-            resp = await fetch(`/api/v1/labels/${encodeURIComponent(this.editingLabel.labelid)}`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
-              body: JSON.stringify({ value }),  // name is immutable when editing
-            });
-          } else {
-            resp = await fetch(`/api/v1/labels?photoid=${encodeURIComponent(this.photo.photoid)}`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
-              body: JSON.stringify({ name, value }),
-            });
-          }
-          if (!resp.ok) {
-            const e = await resp.json().catch(() => ({}));
-            throw new Error(e.error || `HTTP ${resp.status}`);
-          }
-          const saved = await resp.json();
-          if (this.editingLabel) {
-            const idx = this.photo.labels.findIndex(l => l.labelid === saved.labelid);
-            if (idx !== -1) this.photo.labels[idx] = saved;
-          } else {
-            this.photo.labels.push(saved);
-          }
-          document.dispatchEvent(new CustomEvent('photoapp:close-label-modal'));
-        } catch(e) {
-          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Save failed: ${e.message}` }));
-        }
-        this.saving = false;
-      },
-    };
-  }
-
-  function titleEditor(photo, getAuthHeaders) {
-    return {
-      photo,
-      getAuthHeaders,
-      editing: false,
-      draft: '',
-      original: '',
-
-      startEdit() {
-        this.original = this.photo.title.text;
-        this.draft    = this.photo.title.text;
-        this.editing  = true;
-        this.$nextTick(() => {
-          const el = this.$refs.titleInput;
-          if (el) { el.focus(); el.select(); }
-        });
-      },
-
-      cancel() {
-        this.draft   = this.original;
-        this.editing = false;
-      },
-
-      async save() {
-        if (!this.editing) return;
-        const newTitle = this.draft.trim();
-        // Treat empty or unchanged as a cancel.
-        if (!newTitle || newTitle === this.original) {
-          this.cancel();
-          return;
-        }
-        this.editing = false;
-        try {
-          const resp = await fetch(
-            `/api/v1/photo?photoid=${encodeURIComponent(this.photo.photoid)}`,
-            {
-              method: 'PATCH',
-              headers: {
-                'Content-Type': 'application/json',
-                ...this.getAuthHeaders(),
-              },
-              body: JSON.stringify({ title: newTitle }),
-            }
-          );
-          if (!resp.ok) {
-            const err = await resp.json().catch(() => ({}));
-            throw new Error(err.error || `HTTP ${resp.status}`);
-          }
-          this.photo.title.text = newTitle;
-          this.original         = newTitle;
-        } catch (e) {
-          // Roll back on failure and show error.
-          this.photo.title.text = this.original;
-          // Bubble up to parent photoApp showToast if accessible.
-          document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Save failed: ${e.message}` }));
-        }
-      },
-    };
-  }
-
-  // Returns the avatar URL for a user object.
-  // Uses the stored profile_image URL (which the server sets at registration).
-  // Returns empty string when none is set — callers should handle missing images
-  // via CSS (bg-gray-200) or an x-if guard.
-  function avatarSrc(user) {
-    if (!user) return '';
-    return user.profileImage || '';
-  }
-
-  function userSwitcher() {
-    return {
-      open: false,
-      users: [],
-      loaded: false,
-      toggle() {
-        if (!this.loaded) {
-          fetch('/auth/users').then(r => r.json()).then(d => {
-            this.users = d.users || [];
-            this.loaded = true;
-          });
-        }
-        this.open = !this.open;
-      },
-    };
-  }
-
-  function photoApp() {
-    return {
-      photo: null,
-      loading: true,
-      error: null,
-
-      // Real auth — populated from /auth/me on page load.
-      loggedInUser: null,
-      authConfig: { googleEnabled: false, appleEnabled: false },
-
-      // User switcher — populated from /auth/users when allow_multi_login is set.
-      testUser: null,
-
-      // Returns auth headers: real session is a cookie (transparent to JS);
-      // fall back to X-User-ID for the dev test-user switcher.
-      authHeaders() {
-        if (this.loggedInUser) return {}; // cookie is sent automatically
-        return this.testUser ? { 'X-User-ID': this.testUser.userid } : {};
-      },
-
-      // Effective user for UI decisions (edit/delete controls, reaction ownership).
-      get currentUser() {
-        return this.loggedInUser || this.testUser || null;
-      },
-
-      selectTestUser(user) {
-        this.testUser = user;
-        window._testUserID = user?.userid || null;
-        if (this.photo) this.loadPhoto(this.photo.photoid);
-      },
-
-      async logout() {
-        await fetch('/auth/logout', { method: 'POST' });
-        this.loggedInUser = null;
-        window._testUserID = null;
-        if (this.photo) this.loadPhoto(this.photo.photoid);
-      },
-
-
-      labelModalData: null,   // null = add, label object = edit
-
-      toast: { visible: false, message: '', timer: null },
-
-
-      activeLabelID: null,
-
-      async init() {
-        // Load auth provider config and current session in parallel.
-        try {
-          const [cfg, me] = await Promise.all([
-            fetch('/auth/config').then(r => r.json()),
-            fetch('/auth/me').then(r => r.json()),
-          ]);
-          this.authConfig = cfg;
-          if (me.loggedIn) {
-            this.loggedInUser = me;
-            window._testUserID = me.userid;
-          }
-        } catch { /* non-fatal */ }
-
-        const params = new URLSearchParams(window.location.search);
-        const photoid = params.get('photoid') || 'random';
-        const label   = params.get('label') || null;
-        this.activeLabelID = label;
-        await this.loadPhoto(photoid, label);
-        document.addEventListener('photoapp:toast', (e) => this.showToast(e.detail));
-        document.addEventListener('photoapp:close-label-modal', () => { Alpine.store('ui').labelModal = false; });
-        document.addEventListener('photoapp:comment-deleted', (e) => {
-          if (this.photo) this.photo.comments = this.photo.comments.filter(c => c.commentid !== e.detail);
-        });
-        document.addEventListener('photoapp:auth-success', (e) => {
-          this.loggedInUser = e.detail;
-          window._testUserID = e.detail.userid;
-          if (this.photo) this.loadPhoto(this.photo.photoid);
-        });
-      },
-
-      async loadPhoto(photoid, labelID) {
-        // labelID=undefined preserves activeLabelID; null clears it explicitly.
-        if (labelID !== undefined) this.activeLabelID = labelID || null;
-        this.loading = true;
-        this.error = null;
-        try {
-          let url;
-          if (photoid === 'random') {
-            url = '/api/v1/photo?random=true';
-          } else {
-            url = `/api/v1/photo?photoid=${encodeURIComponent(photoid)}`;
-            if (this.activeLabelID) url += `&label=${encodeURIComponent(this.activeLabelID)}`;
-          }
-          const resp = await fetch(url, { headers: this.authHeaders() });
-          if (!resp.ok) throw new Error(`Photo not found (${resp.status})`);
-          this.photo = await resp.json();
-          // Keep the URL in sync so bookmarks and the back button work.
-          const qs = new URLSearchParams({ photoid: this.photo.photoid });
-          if (this.activeLabelID) qs.set('label', this.activeLabelID);
-          window.history.replaceState(null, '', `?${qs}`);
-        } catch (e) { this.error = e.message; }
-        this.loading = false;
-      },
-
-      showToast(message) {
-        clearTimeout(this.toast.timer);
-        this.toast.message = message;
-        this.toast.visible = true;
-        this.toast.timer = setTimeout(() => { this.toast.visible = false; }, 3500);
-      },
-
-      async toggleReaction(em) {
-        if (!this.currentUser) { this.showToast('Select a user to react.'); return; }
-        const uid = this.currentUser.userid;
-        const alreadyReacted = em.users && em.users.some(u => u.id === uid);
-        const method = alreadyReacted ? 'DELETE' : 'POST';
-        try {
-          const resp = await fetch(
-            `/api/v1/emoji/react?photoid=${encodeURIComponent(this.photo.photoid)}&emojiid=${encodeURIComponent(em.emojiid)}`,
-            { method, headers: this.authHeaders() }
-          );
-          if (!resp.ok) {
-            const e = await resp.json().catch(() => ({}));
-            throw new Error(e.error || `HTTP ${resp.status}`);
-          }
-          if (alreadyReacted) {
-            em.count--;
-            em.users = (em.users || []).filter(u => u.id !== uid);
-            if (em.count <= 0) this.photo.emojis = this.photo.emojis.filter(e => e.emojiid !== em.emojiid);
-          } else {
-            em.count++;
-            const cu2 = this.currentUser;
-            em.users = [...(em.users || []), { id: uid, name: cu2?.username || '', tn: cu2?.profileImage || null }];
-          }
-        } catch(e) {
-          this.showToast(`Reaction failed: ${e.message}`);
-        }
-      },
-
-      openLabelModal(label) {
-        this.labelModalData = label;
-        Alpine.store('ui').labelModal = true;
-      },
-
-      async deleteLabel(label) {
-        if (!this.currentUser) { this.showToast('Select a user to delete labels.'); return; }
-        try {
-          const resp = await fetch(`/api/v1/labels/${encodeURIComponent(label.labelid)}`, {
-            method: 'DELETE',
-            headers: this.authHeaders(),
-          });
-          if (!resp.ok) {
-            const e = await resp.json().catch(() => ({}));
-            throw new Error(e.error || `HTTP ${resp.status}`);
-          }
-          this.photo.labels = this.photo.labels.filter(l => l.labelid !== label.labelid);
-        } catch(e) {
-          this.showToast(`Delete failed: ${e.message}`);
-        }
-      },
-
-    };
-  }
-</script>
 </body>
 </html>
