@@ -612,6 +612,7 @@ function photoApp() {
     },
 
     labelModalData: null,
+    userModal: false,
 
     toast: { visible: false, message: '', timer: null },
 

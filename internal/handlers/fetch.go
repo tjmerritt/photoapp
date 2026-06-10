@@ -3,10 +3,30 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/tjmerritt/photoapp/internal/db"
 	"github.com/tjmerritt/photoapp/internal/models"
 )
+
+// proxyImageURL rewrites an external http:// image URL to go through the
+// /api/v1/imgproxy endpoint so the browser never makes a mixed-content request.
+// https:// URLs and relative paths are returned unchanged.
+func proxyImageURL(u string) string {
+	if strings.HasPrefix(u, "http://") {
+		return "/api/v1/imgproxy?url=" + u
+	}
+	return u
+}
+
+// proxyImageURLPtr is the pointer variant for *string fields.
+func proxyImageURLPtr(u *string) *string {
+	if u == nil {
+		return nil
+	}
+	proxied := proxyImageURL(*u)
+	return &proxied
+}
 
 // fetchLabels returns a page of labels for a photo plus the total count.
 func fetchLabels(ctx context.Context, pool *db.Pool, photoid string, offset, limit int) ([]models.Label, int, error) {
@@ -78,6 +98,7 @@ func fetchEmojis(ctx context.Context, pool *db.Pool, photoid string, offset, lim
 		if err := rows.Scan(&e.EmojiID, &e.EmojiChar, &e.ImageURL, &e.AltText, &e.Count); err != nil {
 			return nil, 0, err
 		}
+		e.ImageURL = proxyImageURLPtr(e.ImageURL)
 		emojis = append(emojis, e)
 	}
 	if err := rows.Err(); err != nil {
@@ -153,6 +174,7 @@ func fetchRelated(ctx context.Context, pool *db.Pool, photoid, exhibitionID stri
 		if err := rows.Scan(&rp.PhotoID, &rp.ImageURL, &rp.ClickURL, &rp.Width, &rp.Height); err != nil {
 			return nil, err
 		}
+		rp.ImageURL = proxyImageURL(rp.ImageURL)
 		related = append(related, rp)
 	}
 	return related, rows.Err()
@@ -201,6 +223,7 @@ func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID, e
 		if err := rows.Scan(&rp.PhotoID, &rp.ImageURL, &rp.Width, &rp.Height); err != nil {
 			return nil, err
 		}
+		rp.ImageURL = proxyImageURL(rp.ImageURL)
 		rp.ClickURL = fmt.Sprintf("/?photoid=%s&label=%s", rp.PhotoID, labelID)
 		related = append(related, rp)
 	}

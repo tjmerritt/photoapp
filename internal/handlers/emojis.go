@@ -217,6 +217,7 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
 		}
+		et.ImageURL = proxyImageURLPtr(et.ImageURL)
 		types = append(types, et)
 	}
 	if err := rows.Err(); err != nil {
@@ -271,6 +272,7 @@ func (h *EmojisHandler) ListVariants(w http.ResponseWriter, r *http.Request, _ h
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
 		}
+		et.ImageURL = proxyImageURLPtr(et.ImageURL)
 		if tone != "" {
 			et.Skintone = &tone
 		}
