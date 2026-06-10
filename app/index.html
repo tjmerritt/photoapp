@@ -9,15 +9,6 @@
   <script src="/tailwindcss.js"></script>
   <!-- Alpine.js -->
   <script defer src="/alpinejs.min.js"></script>
-  <script>
-    document.addEventListener('alpine:init', () => {
-      Alpine.store('ui', {
-        emojiPickerOpen: false,
-        labelModal: false,
-        settingsOpen: false,
-      });
-    });
-  </script>
 
   <style>
     @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap');
@@ -138,8 +129,8 @@
       </button>
       <!-- User switcher — only visible when logged-in user has allow_multi_login -->
       <template x-if="loggedInUser && loggedInUser.allowMultiLogin">
-        <div class="relative" x-data="{ open: false, users: [], loaded: false }">
-          <button @click="if(!loaded){ fetch('/auth/users').then(r=>r.json()).then(d=>{ users=d.users||[]; loaded=true; }); } open = !open"
+        <div class="relative" x-data="userSwitcher()">
+          <button @click="toggle()"
                   class="flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-gray-100 transition text-xs font-medium text-muted border border-dashed border-gray-300"
                   title="Switch acting user">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -154,7 +145,7 @@
                class="absolute right-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-52 py-1 z-50 animate-scalein">
             <p class="px-3 py-1 text-xs font-semibold text-muted uppercase tracking-widest">Act as user</p>
             <!-- Self (no override) -->
-            <button @click="selectTestUser(null); open = false"
+            <button @click="selectTestUser(null) || (open = false)"
                     :class="!testUser ? 'bg-gray-50 font-semibold' : ''"
                     class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
               <img :src="loggedInUser.profileImage || ''" class="avatar w-6 h-6 rounded-full object-cover shrink-0" />
@@ -165,7 +156,7 @@
             </button>
             <div class="border-t border-[var(--border)] my-1"></div>
             <template x-for="u in users.filter(u => u.userid !== loggedInUser.userid)" :key="u.userid">
-              <button @click="selectTestUser({ userid: u.userid, username: u.username, profileImage: u.profileImage }); open = false"
+              <button @click="selectTestUser({ userid: u.userid, username: u.username, profileImage: u.profileImage }) || (open = false)"
                       :class="testUser && testUser.userid === u.userid ? 'bg-accent/10 text-accent font-semibold' : ''"
                       class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
                 <img :src="u.profileImage || ''" class="avatar w-6 h-6 rounded-full object-cover shrink-0" />
@@ -194,7 +185,7 @@
                saving: false,
                uploading: false,
                get presets() {
-                 const h = loggedInUser?.avatarHash || '';
+                 const h = (loggedInUser && loggedInUser.avatarHash) || '';
                  return h ? Array.from({ length: 20 }, (_, i) => i === 0 ? h : h + i) : [];
                },
                async selectPreset(hash) {
@@ -216,7 +207,7 @@
                  this.saving = false;
                },
                async uploadCustom(e) {
-                 const file = e.target.files?.[0];
+                 const file = e.target.files && e.target.files[0];
                  if (!file) return;
                  this.uploading = true;
                  try {
@@ -238,9 +229,9 @@
 
           <!-- Current avatar -->
           <div class="flex items-center gap-3 mb-4">
-            <img :src="loggedInUser?.profileImage || ''" class="avatar w-14 h-14 rounded-full object-cover ring-2 ring-[var(--border)]" />
+            <img :src="(loggedInUser && loggedInUser.profileImage) || ''" class="avatar w-14 h-14 rounded-full object-cover ring-2 ring-[var(--border)]" />
             <div>
-              <p class="text-sm font-semibold" x-text="loggedInUser?.username"></p>
+              <p class="text-sm font-semibold" x-text="loggedInUser && loggedInUser.username"></p>
               <p class="text-xs text-muted">Profile image</p>
             </div>
           </div>
@@ -250,7 +241,7 @@
           <div class="grid grid-cols-5 gap-1.5 mb-4">
             <template x-for="hash in presets" :key="hash">
               <button @click="selectPreset(hash)" :disabled="saving"
-                      :class="loggedInUser?.profileImage === '/avatars/' + hash ? 'ring-2 ring-accent' : 'ring-1 ring-[var(--border)] hover:ring-accent/60'"
+                      :class="loggedInUser && loggedInUser.profileImage === '/avatars/' + hash ? 'ring-2 ring-accent' : 'ring-1 ring-[var(--border)] hover:ring-accent/60'"
                       class="rounded-xl overflow-hidden transition disabled:opacity-40">
                 <img :src="'/avatars/' + hash" class="w-full aspect-square object-cover" />
               </button>
@@ -299,7 +290,7 @@
                   <div class="text-xs text-muted" x-text="loggedInUser.email"></div>
                 </div>
               </div>
-              <button @click="logout(); open = false"
+              <button @click="logout() || (open = false)"
                       class="w-full bg-gray-100 hover:bg-gray-200 text-brand text-sm py-2 rounded-xl transition font-medium">
                 Sign Out
               </button>
@@ -369,10 +360,10 @@
 
               <!-- Login / Register tabs -->
               <div class="flex rounded-xl bg-gray-100 p-1 mb-4">
-                <button @click="authTab = 'login'; authError = ''"
+                <button @click="(authTab = 'login') && (authError = '')"
                         :class="authTab === 'login' ? 'bg-white shadow text-brand' : 'text-muted'"
                         class="flex-1 text-sm py-1.5 rounded-lg font-medium transition">Login</button>
-                <button @click="authTab = 'register'; authError = ''"
+                <button @click="(authTab = 'register') && (authError = '')"
                         :class="authTab === 'register' ? 'bg-white shadow text-brand' : 'text-muted'"
                         class="flex-1 text-sm py-1.5 rounded-lg font-medium transition">Register</button>
               </div>
@@ -564,7 +555,7 @@
                     <img :src="u.tn || ''"
                          :alt="u.name || u.id"
                          class="avatar w-6 h-6 rounded-full object-cover" />
-                    <span class="text-xs text-brand" x-text="u.name || u.id?.slice(0,8)"></span>
+                    <span class="text-xs text-brand" x-text="u.name || (u.id && u.id.slice(0,8))"></span>
                   </div>
                 </template>
               </div>
@@ -655,7 +646,7 @@
                       </button>
                     </template>
                     <template x-if="showingReplies">
-                      <button @click="showingReplies = false; replyOpen = false" class="text-xs text-muted hover:text-brand">Hide replies</button>
+                      <button @click="(showingReplies = false) || (replyOpen = false)" class="text-xs text-muted hover:text-brand">Hide replies</button>
                     </template>
                     <template x-if="canReply">
                       <button @click="replyOpen = !replyOpen" class="text-xs text-muted hover:text-brand font-medium">Reply</button>
@@ -889,7 +880,7 @@
           <input type="password" placeholder="••••••••"
                  class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
         </div>
-        <button @click="userModal = false; showToast('Login is not yet available.')"
+        <button @click="(userModal = false) || showToast('Login is not yet available.')"
                 class="w-full bg-brand text-white py-2.5 rounded-xl font-medium hover:bg-accent transition text-sm mt-2">
           Log In
         </button>
@@ -937,7 +928,7 @@
                      type="text" placeholder="Enter label name"
                      class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 mt-1" />
               <button x-show="nameIsOther"
-                      @click="nameIsOther = false; selectedName = ''"
+                      @click="(nameIsOther = false) || (selectedName = '')"
                       class="text-xs text-accent mt-1 hover:underline">← back to list</button>
             </div>
           </template>
@@ -952,7 +943,7 @@
               <select x-show="!valueIsOther"
                       x-model="selectedValue"
                       class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 bg-white"
-                      @change="if (selectedValue === '__other__') { customValue = editingLabel ? editingLabel.value : ''; valueIsOther = true; selectedValue = ''; $nextTick(() => { $refs.customValueInput?.focus(); $refs.customValueInput?.select(); }); }">
+                      @change="onValueChange()">
                 <option value="" disabled>— choose a value —</option>
                 <template x-for="v in knownValues" :key="v">
                   <option :value="v" x-text="v"></option>
@@ -966,7 +957,7 @@
                      class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 mt-1"
                      @keydown.enter.prevent="save()" />
               <button x-show="valueIsOther && knownValues.length > 0"
-                      @click="valueIsOther = false; selectedValue = ''"
+                      @click="(valueIsOther = false) || (selectedValue = '')"
                       class="text-xs text-accent mt-1 hover:underline">← back to list</button>
             </div>
           </template>
@@ -1023,7 +1014,7 @@
                       :title="em.alttext"
                       :class="[
                         reactedIds.has(em.emojiid) ? 'bg-accent/10 ring-1 ring-accent/40' : 'hover:bg-gray-100',
-                        skintoneTarget?.emojiid === em.emojiid ? 'ring-2 ring-brand' : ''
+                        skintoneTarget && skintoneTarget.emojiid === em.emojiid ? 'ring-2 ring-brand' : ''
                       ]"
                       class="w-12 h-12 flex items-center justify-center rounded-xl transition select-none relative">
                 <template x-if="em.imageurl">
@@ -1040,7 +1031,7 @@
               </button>
 
               <!-- Skintone variant popover -->
-              <template x-if="skintoneTarget?.emojiid === em.emojiid">
+              <template x-if="skintoneTarget && skintoneTarget.emojiid === em.emojiid">
                 <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-30
                             bg-white border border-[var(--border)] rounded-xl shadow-xl p-2
                             flex items-center gap-1 animate-scalein"
@@ -1049,7 +1040,7 @@
                   <template x-if="!skintoneLoading">
                     <div class="flex items-center gap-1">
                       <template x-for="v in skintoneVariants" :key="v.emojiid">
-                        <button @click.stop="react(v); skintoneTarget = null"
+                        <button @click.stop="react(v) || (skintoneTarget = null)"
                                 :title="v.skintone ? v.skintone + ' skin tone' : 'default'"
                                 :class="reactedIds.has(v.emojiid) ? 'ring-2 ring-accent' : 'hover:bg-gray-100'"
                                 class="w-10 h-10 flex items-center justify-center rounded-lg transition relative">
@@ -1088,6 +1079,14 @@
 
 <!-- ══ ALPINE.JS ═════════════════════════════════════════════════════════════ -->
 <script>
+  document.addEventListener('alpine:init', () => {
+    Alpine.store('ui', {
+      emojiPickerOpen: false,
+      labelModal: false,
+      settingsOpen: false,
+    });
+  });
+
   function formatDate(dateStr) {
     if (!dateStr) return '';
     try {
@@ -1457,6 +1456,20 @@
         }
       },
 
+      onValueChange() {
+        if (this.selectedValue === '__other__') {
+          this.customValue   = this.editingLabel ? this.editingLabel.value : '';
+          this.valueIsOther  = true;
+          this.selectedValue = '';
+          this.$nextTick(() => {
+            if (this.$refs.customValueInput) {
+              this.$refs.customValueInput.focus();
+              this.$refs.customValueInput.select();
+            }
+          });
+        }
+      },
+
       async onNameChange() {
         if (this.selectedName === '__other__') {
           this.nameIsOther  = true;
@@ -1592,6 +1605,23 @@
   function avatarSrc(user) {
     if (!user) return '';
     return user.profileImage || '';
+  }
+
+  function userSwitcher() {
+    return {
+      open: false,
+      users: [],
+      loaded: false,
+      toggle() {
+        if (!this.loaded) {
+          fetch('/auth/users').then(r => r.json()).then(d => {
+            this.users = d.users || [];
+            this.loaded = true;
+          });
+        }
+        this.open = !this.open;
+      },
+    };
   }
 
   function photoApp() {
