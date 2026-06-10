@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" x-data="photoApp()" x-init="init()" @open-emoji-picker.window="emojiPickerOpen = true">
+<html lang="en" x-data="photoApp()" x-init="init()" @open-emoji-picker.window="$store.ui.emojiPickerOpen = true">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -9,6 +9,15 @@
   <script src="/tailwindcss.js"></script>
   <!-- Alpine.js -->
   <script defer src="/alpinejs.min.js"></script>
+  <script>
+    document.addEventListener('alpine:init', () => {
+      Alpine.store('ui', {
+        emojiPickerOpen: false,
+        labelModal: false,
+        settingsOpen: false,
+      });
+    });
+  </script>
 
   <style>
     @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap');
@@ -88,7 +97,7 @@
       <div x-show="open" @click.outside="open=false" x-transition
            class="absolute left-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-44 py-1 animate-scalein">
         <a href="#" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Photos</a>
-        <button @click="if(loggedInUser){ settingsOpen = !settingsOpen; } open = false"
+        <button @click="loggedInUser && ($store.ui.settingsOpen = !$store.ui.settingsOpen)"
                 :class="loggedInUser ? '' : 'opacity-40 cursor-default'"
                 class="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-center gap-3">
           <svg class="w-4 h-4 text-muted shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -168,7 +177,7 @@
       </template>
       <!-- Settings -->
       <div class="relative">
-        <button @click="loggedInUser && (settingsOpen = !settingsOpen)"
+        <button @click="loggedInUser && ($store.ui.settingsOpen = !$store.ui.settingsOpen)"
                 :class="loggedInUser ? 'hover:bg-gray-100 cursor-pointer' : 'cursor-default opacity-40'"
                 class="p-2 rounded-lg transition" title="Settings">
           <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -179,7 +188,7 @@
         </button>
 
         <!-- Settings popup -->
-        <div x-show="settingsOpen" @click.outside="settingsOpen = false" x-transition
+        <div x-show="$store.ui.settingsOpen" @click.outside="$store.ui.settingsOpen = false" x-transition
              class="absolute right-0 top-11 bg-white border border-[var(--border)] rounded-2xl shadow-2xl w-80 p-5 z-50 animate-scalein">
         <div x-data="{
                saving: false,
@@ -890,9 +899,9 @@
 </template>
 
 <!-- Add / Edit label modal -->
-<template x-if="labelModal">
+<template x-if="$store.ui.labelModal">
   <div class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
-       @click.self="labelModal = false">
+       @click.self="$store.ui.labelModal = false">
     <div class="bg-white rounded-2xl shadow-2xl w-96 p-6 animate-scalein"
          x-data="labelEditor(labelModalData, photo, () => authHeaders())"
          x-init="init()">
@@ -974,10 +983,10 @@
 </template>
 
 <!-- Emoji picker modal -->
-<template x-if="emojiPickerOpen">
+<template x-if="$store.ui.emojiPickerOpen">
   <div class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
-       @click.self="emojiPickerOpen = false"
-       @close-emoji-picker="emojiPickerOpen = false">
+       @click.self="$store.ui.emojiPickerOpen = false"
+       @close-emoji-picker="$store.ui.emojiPickerOpen = false">
     <div class="bg-white rounded-2xl shadow-2xl w-[28rem] p-5 animate-scalein flex flex-col" style="max-height:80vh"
          x-data="emojiPicker(photo)"
          x-init="init()">
@@ -1624,10 +1633,7 @@
       },
 
 
-      settingsOpen: false,
-      labelModal: false,
       labelModalData: null,   // null = add, label object = edit
-      emojiPickerOpen: false,
 
       toast: { visible: false, message: '', timer: null },
 
@@ -1654,7 +1660,7 @@
         this.activeLabelID = label;
         await this.loadPhoto(photoid, label);
         document.addEventListener('photoapp:toast', (e) => this.showToast(e.detail));
-        document.addEventListener('photoapp:close-label-modal', () => { this.labelModal = false; });
+        document.addEventListener('photoapp:close-label-modal', () => { Alpine.store('ui').labelModal = false; });
         document.addEventListener('photoapp:comment-deleted', (e) => {
           if (this.photo) this.photo.comments = this.photo.comments.filter(c => c.commentid !== e.detail);
         });
@@ -1726,7 +1732,7 @@
 
       openLabelModal(label) {
         this.labelModalData = label;
-        this.labelModal = true;
+        Alpine.store('ui').labelModal = true;
       },
 
       async deleteLabel(label) {
