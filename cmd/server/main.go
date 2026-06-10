@@ -49,8 +49,11 @@ func main() {
 	// ── Auth handler (needed before router so session lookup is wired) ────────
 	authHandler := &handlers.AuthHandler{DB: pool, Cfg: cfg}
 
+	// ── Exhibition handler ────────────────────────────────────────────────────
+	exhibitionHandler := &handlers.ExhibitionHandler{DB: pool}
+
 	// ── Router ────────────────────────────────────────────────────────────────
-	router := handlers.NewRouter(pool, cfg, authHandler)
+	router := handlers.NewRouter(pool, cfg, authHandler, exhibitionHandler)
 
 	// ── HTTP server ───────────────────────────────────────────────────────────
 	srv := &http.Server{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
@@ -15,15 +16,59 @@ import (
 type ctxKey string
 
 const (
-	ctxUserID    ctxKey = "userid"
-	ctxRequestID ctxKey = "requestid"
+	ctxUserID              ctxKey = "userid"
+	ctxRequestID           ctxKey = "requestid"
+	ctxExhibitionID        ctxKey = "exhibitionid"
+	ctxAuthorizedNonPublic ctxKey = "authorized_non_public"
 )
+
+// ExhibitionID retrieves the current exhibition ID from the context.
+// Returns "" when no exhibition was resolved for this request.
+func ExhibitionID(ctx context.Context) string {
+	v, _ := ctx.Value(ctxExhibitionID).(string)
+	return v
+}
+
+// ExhibitionLookup resolves an exhibition ID from a hostname.
+type ExhibitionLookup func(ctx context.Context, hostname string) string
+
+// Exhibition extracts the Host header and looks up the corresponding
+// exhibitionid. Tries the full host:port first, then host only.
+// The result is injected into the context; requests with no match get "".
+func Exhibition(lookup ExhibitionLookup) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if lookup != nil {
+				hostport := r.Host
+				id := lookup(r.Context(), hostport)
+				if id == "" {
+					// Strip port and try bare hostname.
+					if host, _, err := net.SplitHostPort(hostport); err == nil {
+						id = lookup(r.Context(), host)
+					}
+				}
+				if id != "" {
+					r = r.WithContext(context.WithValue(r.Context(), ctxExhibitionID, id))
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
 
 // UserID retrieves the authenticated user ID from the request context.
 // Returns ("", false) when no user is present (unauthenticated request).
 func UserID(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(ctxUserID).(string)
 	return v, ok && v != ""
+}
+
+// AuthorizedNonPublic reports whether the current user is allowed to see
+// non-public photos. Returns false for unauthenticated requests and for users
+// whose authorized_non_public flag is not set.
+func AuthorizedNonPublic(ctx context.Context) bool {
+	v, _ := ctx.Value(ctxAuthorizedNonPublic).(bool)
+	return v
 }
 
 // MustUserID retrieves the user ID and panics if missing.
@@ -87,12 +132,24 @@ func Logger(next http.Handler) http.Handler {
 // Returning "" means the session is invalid or not found.
 type SessionLookup func(ctx context.Context, token string) string
 
+// UserFlagsLookup fetches per-user permission flags for the given user ID.
+// It is called once per request after the user is resolved.
+type UserFlagsLookup func(ctx context.Context, userID string) UserFlags
+
+// UserFlags holds permission flags loaded for an authenticated user.
+type UserFlags struct {
+	AuthorizedNonPublic bool
+}
+
 // Auth resolves the acting user from:
 //  1. The session cookie (real auth), via the provided lookup function.
 //  2. The X-User-ID header (dev/test fallback), only when no cookie is present.
 //
+// If flagsLookup is non-nil it is called to load per-user flags (e.g.
+// authorized_non_public) and store them in the context.
+//
 // Unauthenticated requests pass through with an empty user ID in context.
-func Auth(headerName string, sessionLookup SessionLookup) func(http.Handler) http.Handler {
+func Auth(headerName string, sessionLookup SessionLookup, flagsLookup UserFlagsLookup) func(http.Handler) http.Handler {
 	const cookieName = "photoapp_session"
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -111,7 +168,12 @@ func Auth(headerName string, sessionLookup SessionLookup) func(http.Handler) htt
 			}
 
 			if uid != "" {
-				r = r.WithContext(context.WithValue(r.Context(), ctxUserID, uid))
+				ctx := context.WithValue(r.Context(), ctxUserID, uid)
+				if flagsLookup != nil {
+					flags := flagsLookup(ctx, uid)
+					ctx = context.WithValue(ctx, ctxAuthorizedNonPublic, flags.AuthorizedNonPublic)
+				}
+				r = r.WithContext(ctx)
 			}
 			next.ServeHTTP(w, r)
 		})

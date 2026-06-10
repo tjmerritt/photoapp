@@ -16,6 +16,7 @@
 //
 //	--db              PostgreSQL DSN (default: $DATABASE_URL)
 //	--owner           UUID of the owning user (required)
+//	--exhibition      Exhibition UUID or name to associate photos with (required)
 //	--title           Fixed title text for every photo (optional)
 //	--title-from-url  Derive title from the URL path basename (default true)
 //	--label           Extra label in Name=Value format; may be repeated
@@ -45,6 +46,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rwcarlsen/goexif/exif"
+	"gocv.io/x/gocv"
 )
 
 // label is a name/value pair.
@@ -65,24 +67,29 @@ func (l *labelFlag) Set(s string) error {
 
 func main() {
 	var (
-		dbURL        string
-		ownerID      string
-		fixedTitle   string
-		titleFromURL bool
-		dryRun       bool
-		refreshEXIF  bool
-		outputFile   string
-		extraLabels  labelFlag
+		dbURL          string
+		ownerID        string
+		exhibition     string
+		fixedTitle     string
+		titleFromURL   bool
+		dryRun         bool
+		refreshEXIF    bool
+		outputFile     string
+		extraLabels    labelFlag
+		cascadeXMLPath string
 	)
 
 	flag.StringVar(&dbURL, "db", os.Getenv("DATABASE_URL"), "PostgreSQL DSN (env: DATABASE_URL)")
 	flag.StringVar(&ownerID, "owner", "", "UUID of the photo owner (required)")
+	flag.StringVar(&exhibition, "exhibition", "", "Exhibition UUID or name to assign photos to (required)")
 	flag.StringVar(&fixedTitle, "title", "", "Fixed title for every photo (overrides --title-from-url)")
 	flag.BoolVar(&titleFromURL, "title-from-url", true, "Derive title from URL basename")
 	flag.BoolVar(&dryRun, "dry-run", false, "Print rows without inserting")
 	flag.BoolVar(&refreshEXIF, "refresh-exif", false, "Re-download images and replace labels even when photoid already exists")
 	flag.StringVar(&outputFile, "output", "", "Write url,photoid results to this CSV file")
 	flag.Var(&extraLabels, "label", "Extra label in Name=Value format (repeatable)")
+	flag.StringVar(&cascadeXMLPath, "cascade", os.Getenv("HAAR_CASCADE_XML"),
+		"Path to haarcascade_frontalface_default.xml (env: HAAR_CASCADE_XML); disables face detection when empty")
 	flag.Parse()
 
 	if ownerID == "" {
@@ -90,10 +97,30 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
+	if exhibition == "" {
+		fmt.Fprintln(os.Stderr, "error: --exhibition is required")
+		flag.Usage()
+		os.Exit(1)
+	}
 	if dbURL == "" && !dryRun {
 		fmt.Fprintln(os.Stderr, "error: --db or DATABASE_URL is required")
 		flag.Usage()
 		os.Exit(1)
+	}
+
+	// ── Face-detection classifier (loaded once for all photos) ────────────────
+	var classifier *gocv.CascadeClassifier
+	if cascadeXMLPath != "" {
+		c := gocv.NewCascadeClassifier()
+		if !c.Load(cascadeXMLPath) {
+			fmt.Fprintf(os.Stderr, "error: could not load cascade classifier from %q\n", cascadeXMLPath)
+			os.Exit(1)
+		}
+		defer c.Close()
+		classifier = &c
+		slog.Info("face classifier loaded", "path", cascadeXMLPath)
+	} else {
+		slog.Warn("--cascade not set; all photos will be imported as non-public (is_public=false)")
 	}
 
 	// ── Open input ────────────────────────────────────────────────────────────
@@ -136,6 +163,19 @@ func main() {
 			os.Exit(1)
 		}
 		defer pool.Close()
+
+		// Resolve --exhibition: try as UUID first, then as name.
+		var exhibitionID string
+		err = pool.QueryRow(ctx,
+			`SELECT exhibitionid::text FROM exhibitions WHERE exhibitionid::text = $1 OR name = $1 AND deleted_at IS NULL`,
+			exhibition,
+		).Scan(&exhibitionID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: exhibition %q not found in database\n", exhibition)
+			os.Exit(1)
+		}
+		exhibition = exhibitionID
+		slog.Info("exhibition resolved", "id", exhibition)
 	}
 
 	// ── Process URLs ──────────────────────────────────────────────────────────
@@ -223,15 +263,24 @@ func main() {
 		}
 
 		exifLabels := extractEXIF(imgBytes)
-		allLabels := mergeLabels(exifLabels, []label(extraLabels))
+		resolutionLabel := []label{
+			label{
+				name: "Resolution",
+				value: fmt.Sprintf("%dx%d", w, h),
+			},
+		}
+		allLabels := mergeLabels(exifLabels, resolutionLabel)
+		allLabels = mergeLabels(allLabels, []label(extraLabels))
+
+		isPublic := detectIsPublic(imgBytes, classifier)
 
 		if dryRun {
 			action := "insert"
 			if hintID != "" {
 				action = fmt.Sprintf("update labels for %s", hintID)
 			}
-			fmt.Printf("[dry-run] %s url=%s title=%q w=%d h=%d\n",
-				action, rawURL, titleFor(rawURL, fixedTitle, titleFromURL), w, h)
+			fmt.Printf("[dry-run] %s url=%s title=%q w=%d h=%d is_public=%v\n",
+				action, rawURL, titleFor(rawURL, fixedTitle, titleFromURL), w, h, isPublic)
 			for _, l := range allLabels {
 				fmt.Printf("           label %q = %q\n", l.name, l.value)
 			}
@@ -240,13 +289,15 @@ func main() {
 		}
 
 		photoID, action, err := upsertPhoto(ctx, pool, upsertParams{
-			hintID:  hintID,
-			rawURL:  rawURL,
-			ownerID: ownerID,
-			title:   titleFor(rawURL, fixedTitle, titleFromURL),
-			width:   w,
-			height:  h,
-			labels:  allLabels,
+			hintID:       hintID,
+			rawURL:       rawURL,
+			ownerID:      ownerID,
+			exhibitionID: exhibition,
+			title:        titleFor(rawURL, fixedTitle, titleFromURL),
+			width:        w,
+			height:       h,
+			labels:       allLabels,
+			isPublic:     isPublic,
 		})
 		if err != nil {
 			slog.Warn("skipping URL", "url", rawURL, "error", err)
@@ -271,13 +322,15 @@ func main() {
 }
 
 type upsertParams struct {
-	hintID  string
-	rawURL  string
-	ownerID string
-	title   string
-	width   int
-	height  int
-	labels  []label
+	hintID       string
+	rawURL       string
+	ownerID      string
+	exhibitionID string
+	title        string
+	width        int
+	height       int
+	labels       []label
+	isPublic     bool
 }
 
 // upsertPhoto either inserts a new photo or, when hintID is supplied and the
@@ -310,10 +363,10 @@ func upsertPhoto(ctx context.Context, pool *pgxpool.Pool, p upsertParams) (strin
 	// Insert new photo.
 	var photoID string
 	err := pool.QueryRow(ctx, `
-		INSERT INTO photos (owner_userid, image_url, image_width, image_height, title_text, title_userid)
-		VALUES ($1, $2, $3, $4, $5, $1)
+		INSERT INTO photos (owner_userid, image_url, image_width, image_height, title_text, title_userid, exhibitionid, is_public)
+		VALUES ($1, $2, $3, $4, $5, $1, NULLIF($6,'')::uuid, $7)
 		RETURNING photoid::text
-	`, p.ownerID, p.rawURL, p.width, p.height, p.title).Scan(&photoID)
+	`, p.ownerID, p.rawURL, p.width, p.height, p.title, p.exhibitionID, p.isPublic).Scan(&photoID)
 	if err != nil {
 		return "", "", fmt.Errorf("inserting photo: %w", err)
 	}
@@ -494,6 +547,27 @@ func mergeLabels(base, extra []label) []label {
 		}
 	}
 	return out
+}
+
+// detectIsPublic returns true when the image contains no detectable faces.
+// classifier must already be loaded; pass nil to skip detection entirely
+// (all photos treated as non-public, the safe default).
+func detectIsPublic(imgBytes []byte, classifier *gocv.CascadeClassifier) bool {
+	if classifier == nil {
+		return false
+	}
+
+	mat, err := gocv.IMDecode(imgBytes, gocv.IMReadColor)
+	if err != nil || mat.Empty() {
+		slog.Warn("detectIsPublic: could not decode image for face detection")
+		return false
+	}
+	defer mat.Close()
+
+	faces := classifier.DetectMultiScale(mat)
+	isPublic := len(faces) == 0
+	slog.Debug("detectIsPublic", "faces", len(faces), "is_public", isPublic)
+	return isPublic
 }
 
 // titleFromURLPath turns the last path segment into a human-readable title.
