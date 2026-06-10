@@ -1,4 +1,21 @@
 // ─────────────────────────────────────────────────────────────────────────────
+// Tailwind Play CDN config — must be set before tailwindcss.js loads.
+// app.js is listed first in <head> so this runs before the CDN script.
+// ─────────────────────────────────────────────────────────────────────────────
+window.tailwind = window.tailwind || {};
+window.tailwind.config = {
+  theme: {
+    extend: {
+      colors: { brand: '#1a1a2e', accent: '#e94560', muted: '#6b7280' },
+      fontFamily: {
+        serif: ['"DM Serif Display"', 'serif'],
+        sans:  ['"DM Sans"', 'sans-serif'],
+      },
+    },
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Global auth helpers — used by all child components so we don't need closure
 // args (which require arrow functions, unsupported in the Alpine CSP evaluator).
 // window._loggedIn   : true when a real session cookie is active

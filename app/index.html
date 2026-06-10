@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PhotoApp</title>
 
-  <!-- Tailwind CSS -->
-  <script src="/tailwindcss.js"></script>
-  <!-- App logic (must come before Alpine so alpine:init listener is registered) -->
+  <!-- App logic first: sets window.tailwind.config before tailwindcss.js reads it,
+       and registers alpine:init listener before alpinejs.min.js fires it. -->
   <script src="/app.js"></script>
+  <!-- Tailwind CSS Play CDN (reads window.tailwind.config set above) -->
+  <script src="/tailwindcss.js"></script>
   <!-- Alpine.js CSP build -->
   <script defer src="/alpinejs.min.js"></script>
 
@@ -59,19 +60,6 @@
     img.avatar { background-color: #e5e7eb; }
   </style>
 
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: { brand: '#1a1a2e', accent: '#e94560', muted: '#6b7280' },
-          fontFamily: {
-            serif: ['"DM Serif Display"', 'serif'],
-            sans:  ['"DM Sans"', 'sans-serif'],
-          },
-        },
-      },
-    };
-  </script>
 </head>
 
 <body class="min-h-screen flex flex-col">
