@@ -1,10 +1,10 @@
 package handlers
 
 import (
-        "io"
-        "net/http"
-        "strings"
-        "time"
+	"io"
+	"net/http"
+	"strings"
+	"time"
 )
 
 // imgproxyClient is a shared HTTP client with a reasonable timeout.
@@ -21,35 +21,35 @@ var imgproxyClient = &http.Client{Timeout: 30 * time.Second}
 type ImgProxyHandler struct{}
 
 func (h *ImgProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-        target := r.URL.Query().Get("url")
-        if target == "" {
-                http.Error(w, "url parameter required", http.StatusBadRequest)
-                return
-        }
+	target := r.URL.Query().Get("url")
+	if target == "" {
+		http.Error(w, "url parameter required", http.StatusBadRequest)
+		return
+	}
 
-        // Only proxy plain http:// URLs — reject anything else.
-        if !strings.HasPrefix(target, "http://") {
-                http.Error(w, "only http:// URLs may be proxied", http.StatusBadRequest)
-                return
-        }
+	// Only proxy plain http:// URLs — reject anything else.
+	if !strings.HasPrefix(target, "http://") {
+		http.Error(w, "only http:// URLs may be proxied", http.StatusBadRequest)
+		return
+	}
 
-        resp, err := imgproxyClient.Get(target)
-        if err != nil {
-                http.Error(w, "upstream fetch failed", http.StatusBadGateway)
-                return
-        }
-        defer resp.Body.Close()
+	resp, err := imgproxyClient.Get(target)
+	if err != nil {
+		http.Error(w, "upstream fetch failed", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
 
-        // Forward content-type and cache headers from upstream.
-        if ct := resp.Header.Get("Content-Type"); ct != "" {
-                w.Header().Set("Content-Type", ct)
-        }
-        if cl := resp.Header.Get("Content-Length"); cl != "" {
-                w.Header().Set("Content-Length", cl)
-        }
-        // Cache aggressively — these are static photo assets.
-        w.Header().Set("Cache-Control", "public, max-age=86400")
+	// Forward content-type and cache headers from upstream.
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	if cl := resp.Header.Get("Content-Length"); cl != "" {
+		w.Header().Set("Content-Length", cl)
+	}
+	// Cache aggressively — these are static photo assets.
+	w.Header().Set("Cache-Control", "public, max-age=86400")
 
-        w.WriteHeader(resp.StatusCode)
-        io.Copy(w, resp.Body) //nolint:errcheck
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body) //nolint:errcheck
 }

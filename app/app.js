@@ -1,21 +1,4 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Tailwind Play CDN config — must be set before tailwindcss.js loads.
-// app.js is listed first in <head> so this runs before the CDN script.
-// ─────────────────────────────────────────────────────────────────────────────
-window.tailwind = window.tailwind || {};
-window.tailwind.config = {
-  theme: {
-    extend: {
-      colors: { brand: '#1a1a2e', accent: '#e94560', muted: '#6b7280' },
-      fontFamily: {
-        serif: ['"DM Serif Display"', 'serif'],
-        sans:  ['"DM Sans"', 'sans-serif'],
-      },
-    },
-  },
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Global auth helpers — used by all child components so we don't need closure
 // args (which require arrow functions, unsupported in the Alpine CSP evaluator).
 // window._loggedIn   : true when a real session cookie is active
@@ -650,6 +633,9 @@ function photoApp() {
         window._currentUser = e.detail;
         if (this.photo) this.loadPhoto(this.photo.photoid);
       });
+      document.addEventListener('photoapp:profile-image', (e) => {
+        if (this.loggedInUser) this.loggedInUser.profileImage = e.detail;
+      });
     },
 
     async loadPhoto(photoid, labelID) {
@@ -743,7 +729,7 @@ function avatarSettings() {
     uploading: false,
 
     get presets() {
-      const user = this.$parent && this.$parent.loggedInUser;
+      const user = window._currentUser;
       const h = (user && user.avatarHash) || '';
       return h ? Array.from({ length: 20 }, (_, i) => i === 0 ? h : h + i) : [];
     },
@@ -759,9 +745,9 @@ function avatarSettings() {
           body: JSON.stringify({ profileImage: url }),
         });
         if (!r.ok) throw new Error('Save failed');
-        const parent = this.$parent;
-        if (parent && parent.loggedInUser) parent.loggedInUser.profileImage = url;
+        if (window._currentUser) window._currentUser.profileImage = url;
         window._profileImage = url;
+        document.dispatchEvent(new CustomEvent('photoapp:profile-image', { detail: url }));
       } catch(e) {
         document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: e.message }));
       }
@@ -778,8 +764,8 @@ function avatarSettings() {
         const r = await fetch('/auth/profile/avatar', { method: 'POST', body: fd });
         if (!r.ok) throw new Error('Upload failed');
         const d = await r.json();
-        const parent = this.$parent;
-        if (parent && parent.loggedInUser) parent.loggedInUser.profileImage = d.profileImage;
+        if (window._currentUser) window._currentUser.profileImage = d.profileImage;
+        document.dispatchEvent(new CustomEvent('photoapp:profile-image', { detail: d.profileImage }));
       } catch(e) {
         document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: e.message }));
       }
