@@ -86,7 +86,7 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	photo := models.Photo{
 		PhotoID: photoid,
-		Image:   models.ImageInfo{URL: imgURL, Width: imgW, Height: imgH},
+		Image:   models.ImageInfo{URL: proxyImageURL(imgURL), Width: imgW, Height: imgH},
 		Title: models.TitleInfo{
 			Text:     titleText,
 			UserID:   titleUserID,

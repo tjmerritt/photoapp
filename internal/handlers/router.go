@@ -17,9 +17,10 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	photos      := &PhotoHandler{DB: pool, Cfg: cfg}
 	patchPhoto  := &PatchPhotoHandler{DB: pool, Cfg: cfg}
 	users       := &UserHandler{DB: pool}
-	labels   := &LabelsHandler{DB: pool, Cfg: cfg}
-	emojis   := &EmojisHandler{DB: pool, Cfg: cfg}
-	comments := &CommentsHandler{DB: pool, Cfg: cfg}
+	labels      := &LabelsHandler{DB: pool, Cfg: cfg}
+	emojis      := &EmojisHandler{DB: pool, Cfg: cfg}
+	comments    := &CommentsHandler{DB: pool, Cfg: cfg}
+	imgProxy    := &ImgProxyHandler{}
 
 	// Convenience: wrap a httprouter.Handle with RequireAuth
 	auth := func(h httprouter.Handle) httprouter.Handle {
@@ -33,6 +34,7 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	}
 
 	// ── Read endpoints (no auth required) ─────────────────────────────────────
+	r.HandlerFunc(http.MethodGet, "/api/v1/imgproxy", imgProxy.ServeHTTP)
 	r.HandlerFunc(http.MethodGet, "/api/v1/photo", photos.ServeHTTP)
 	r.PATCH("/api/v1/photo", auth(func(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
 		patchPhoto.ServeHTTP(w, req)
