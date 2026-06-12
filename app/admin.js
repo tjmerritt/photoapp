@@ -17,6 +17,8 @@ function adminApp() {
     authError: false,
     toast:     { visible: false, message: '' },
 
+    thumbUrl(url, cssWidth) { return thumbUrl(url, cssWidth); },
+
     async init() {
       const me = await fetch('/auth/me').then(function(r) { return r.json(); });
       if (!me.loggedIn) { window.location.href = '/'; return; }

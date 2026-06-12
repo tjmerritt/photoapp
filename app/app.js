@@ -581,6 +581,8 @@ function photoApp() {
 
     testUser: null,
 
+    thumbUrl(url, cssWidth) { return thumbUrl(url, cssWidth); },
+
     authHeaders() {
       if (this.loggedInUser) return {};
       return this.testUser ? { 'X-User-ID': this.testUser.userid } : {};
