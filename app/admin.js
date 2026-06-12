@@ -1,5 +1,13 @@
 // admin.js — photo visibility admin panel (Alpine.js CSP build)
 
+// thumbUrl — same helper as in app.js; duplicated so admin.html is standalone.
+function thumbUrl(url, cssWidth) {
+  if (!url || url.indexOf('/api/v1/imgproxy') === -1) return url;
+  var dpr = window.devicePixelRatio || 1;
+  var w   = Math.round(cssWidth * dpr);
+  return url + '&w=' + w;
+}
+
 function adminApp() {
   return {
     photos:    [],
@@ -13,9 +21,9 @@ function adminApp() {
       const me = await fetch('/auth/me').then(function(r) { return r.json(); });
       if (!me.loggedIn) { window.location.href = '/'; return; }
 
-      // Probe for admin access
+      // Probe for admin access (403 = no permission, 404 = server not rebuilt yet)
       const probe = await fetch('/api/v1/admin/photos?limit=1&offset=0');
-      if (probe.status === 403) { this.authError = true; return; }
+      if (probe.status === 403 || probe.status === 404) { this.authError = true; return; }
 
       await this.loadMore();
     },

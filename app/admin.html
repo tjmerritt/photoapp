@@ -23,8 +23,9 @@
   <!-- Auth error -->
   <div x-show="authError"
        class="max-w-md mx-auto mt-12 bg-red-50 border border-red-300 rounded-2xl p-6 text-center text-red-800 text-sm">
-    You don't have admin access. Ask the site owner to grant
-    <code class="font-mono bg-red-100 px-1 rounded">authorized_non_public</code>.
+    You don't have admin access, or the server needs to be rebuilt with the latest code.
+    If you just deployed, grant
+    <code class="font-mono bg-red-100 px-1 rounded">authorized_non_public</code> to your user.
   </div>
 
   <!-- Loading skeleton -->
@@ -50,7 +51,7 @@
 
         <!-- Thumbnail -->
         <a :href="'/?photoid=' + photo.photoid" target="_blank" class="block">
-          <img :src="photo.imageurl"
+          <img :src="thumbUrl(photo.imageurl, 440)"
                :alt="photo.title || photo.photoid"
                loading="lazy"
                class="w-full aspect-[4/3] object-cover bg-gray-100 hover:opacity-90 transition-opacity" />

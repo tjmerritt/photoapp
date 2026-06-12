@@ -5,6 +5,18 @@
 // window._testUserID : userid string (set for both real users and test-user mode)
 // window._currentUser: full user object ({ userid, username, profileImage, ... })
 // ─────────────────────────────────────────────────────────────────────────────
+// thumbUrl(url, cssWidth) — appends &w=<actual-pixels> to an imgproxy URL so
+// the backend can downscale large source images to fit the display slot.
+// cssWidth is the CSS pixel width of the display element; we multiply by
+// devicePixelRatio so retina screens still get sharp images.
+// Non-proxy URLs (e.g. /uploads/...) are returned unchanged.
+function thumbUrl(url, cssWidth) {
+  if (!url || url.indexOf('/api/v1/imgproxy') === -1) return url;
+  var dpr = window.devicePixelRatio || 1;
+  var w   = Math.round(cssWidth * dpr);
+  return url + '&w=' + w;
+}
+
 function getAuthHeaders() {
   if (window._loggedIn) return {};   // cookie handles auth for real sessions
   return window._testUserID ? { 'X-User-ID': window._testUserID } : {};
