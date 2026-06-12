@@ -28,6 +28,19 @@ function adminApp() {
       if (probe.status === 403 || probe.status === 404) { this.authError = true; return; }
 
       await this.loadMore();
+      this.initScroll();
+    },
+
+    initScroll() {
+      const self = this;
+      const sentinel = document.getElementById('scroll-sentinel');
+      if (!sentinel || !window.IntersectionObserver) return;
+      const observer = new IntersectionObserver(function(entries) {
+        if (entries[0].isIntersecting && !self.loading && self.offset < self.total) {
+          self.loadMore();
+        }
+      }, { rootMargin: '200px' });
+      observer.observe(sentinel);
     },
 
     async loadMore() {
