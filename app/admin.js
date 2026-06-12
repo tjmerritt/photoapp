@@ -33,14 +33,12 @@ function adminApp() {
 
     initScroll() {
       const self = this;
-      const sentinel = document.getElementById('scroll-sentinel');
-      if (!sentinel || !window.IntersectionObserver) return;
-      const observer = new IntersectionObserver(function(entries) {
-        if (entries[0].isIntersecting && !self.loading && self.offset < self.total) {
+      window.addEventListener('scroll', function() {
+        if (self.loading || self.offset >= self.total) return;
+        if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 400) {
           self.loadMore();
         }
-      }, { rootMargin: '200px' });
-      observer.observe(sentinel);
+      }, { passive: true });
     },
 
     async loadMore() {
