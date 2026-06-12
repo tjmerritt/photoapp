@@ -22,6 +22,9 @@ type Config struct {
 	UploadDir     string // local filesystem path
 	UploadURLBase string // public URL prefix served for uploaded files
 
+	// Disk cache for proxied images (originals + scaled variants)
+	ImgCacheDir string // default: ./imgcache
+
 	// Pagination defaults
 	DefaultPageSize int
 	MaxPageSize     int
@@ -80,6 +83,7 @@ func Load() (*Config, error) {
 		AppDir:          envStr("APP_DIR", "app"),
 		UploadDir:       envStr("UPLOAD_DIR", "./uploads"),
 		UploadURLBase:   envStr("UPLOAD_URL_BASE", "/uploads"),
+		ImgCacheDir:     envStr("IMGCACHE_DIR", "./imgcache"),
 		DefaultPageSize: defaultPage,
 		MaxPageSize:     maxPage,
 		AuthHeader:      envStr("AUTH_HEADER", "X-User-ID"),

@@ -53,7 +53,11 @@ func main() {
 	exhibitionHandler := &handlers.ExhibitionHandler{DB: pool}
 
 	// ── Router ────────────────────────────────────────────────────────────────
-	router := handlers.NewRouter(pool, cfg, authHandler, exhibitionHandler)
+	router, err := handlers.NewRouter(pool, cfg, authHandler, exhibitionHandler)
+	if err != nil {
+		slog.Error("failed to initialise router", "err", err)
+		os.Exit(1)
+	}
 
 	// ── HTTP server ───────────────────────────────────────────────────────────
 	srv := &http.Server{
