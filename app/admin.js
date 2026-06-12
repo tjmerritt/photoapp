@@ -1,0 +1,65 @@
+// admin.js — photo visibility admin panel (Alpine.js CSP build)
+
+function adminApp() {
+  return {
+    photos:    [],
+    total:     0,
+    offset:    0,
+    loading:   false,
+    authError: false,
+    toast:     { visible: false, message: '' },
+
+    async init() {
+      const me = await fetch('/auth/me').then(function(r) { return r.json(); });
+      if (!me.loggedIn) { window.location.href = '/'; return; }
+
+      // Probe for admin access
+      const probe = await fetch('/api/v1/admin/photos?limit=1&offset=0');
+      if (probe.status === 403) { this.authError = true; return; }
+
+      await this.loadMore();
+    },
+
+    async loadMore() {
+      if (this.loading) return;
+      this.loading = true;
+      try {
+        const r    = await fetch('/api/v1/admin/photos?limit=50&offset=' + this.offset);
+        const data = await r.json();
+        this.total  = data.total;
+        this.photos = this.photos.concat(data.photos);
+        this.offset += data.photos.length;
+      } catch(e) {
+        this.showToast('Load failed: ' + e.message);
+      }
+      this.loading = false;
+    },
+
+    // Called after x-model updates photo.is_public on checkbox change.
+    async savePublic(photo) {
+      const newVal = photo.is_public;
+      try {
+        const r = await fetch('/api/v1/admin/photo?photoid=' + photo.photoid, {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ is_public: newVal }),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+      } catch(e) {
+        photo.is_public = !newVal; // revert
+        this.showToast('Save failed: ' + e.message);
+      }
+    },
+
+    showToast(msg) {
+      this.toast.message = msg;
+      this.toast.visible = true;
+      const self = this;
+      setTimeout(function() { self.toast.visible = false; }, 3500);
+    },
+  };
+}
+
+document.addEventListener('alpine:init', function() {
+  Alpine.data('adminApp', adminApp);
+});
