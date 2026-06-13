@@ -619,6 +619,7 @@ function photoApp() {
     testUser: null,
 
     thumbUrl(url, cssWidth) { return thumbUrl(url, cssWidth); },
+     labelColorFor(name) { return labelColorFor(name); },
 
     authHeaders() {
       if (this.loggedInUser) return {};
