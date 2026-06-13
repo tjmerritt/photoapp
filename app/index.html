@@ -32,15 +32,7 @@
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
 
-    .label-chip:nth-child(1)  .label-name { background: hsl(210 70% 55%); }
-    .label-chip:nth-child(2)  .label-name { background: hsl(257 70% 55%); }
-    .label-chip:nth-child(3)  .label-name { background: hsl(330 70% 55%); }
-    .label-chip:nth-child(4)  .label-name { background: hsl(30  70% 55%); }
-    .label-chip:nth-child(5)  .label-name { background: hsl(160 60% 40%); }
-    .label-chip:nth-child(6)  .label-name { background: hsl(15  70% 55%); }
-    .label-chip:nth-child(7)  .label-name { background: hsl(190 70% 45%); }
-    .label-chip:nth-child(8)  .label-name { background: hsl(280 60% 55%); }
-    .label-chip:nth-child(n+9).label-name { background: hsl(45  70% 50%); }
+    /* Label colors are assigned by name via labelColorFor() in app.js */
 
     @keyframes fadeIn  { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
     @keyframes scaleIn { from { opacity:0; transform:scale(.95);      } to { opacity:1; transform:scale(1);      } }
@@ -398,7 +390,9 @@
                    ? 'ring-2 ring-accent'
                    : 'ring-1 ring-[var(--border)]'"
                  x-data="{ hovered: false }" @mouseenter="hovered = true" @mouseleave="hovered = false">
-              <span class="label-name flex items-center px-3 py-1 text-white font-medium text-xs rounded-l-full" x-text="label.name"></span>
+              <span class="label-name flex items-center px-3 py-1 text-white font-medium text-xs rounded-l-full"
+                    :style="'background:' + labelColorFor(label.name)"
+                    x-text="label.name"></span>
               <span class="flex items-center px-3 py-1 bg-white text-brand font-medium rounded-r-full cursor-pointer hover:bg-gray-50 transition-colors"
                     @click.stop="loadPhoto(photo.photoid, activeLabelID === label.labelid ? null : label.labelid)"
                     :title="activeLabelID === label.labelid ? 'Clear label filter' : 'Find photos with this label'"

@@ -354,6 +354,50 @@ function emojiPicker(photo) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// labelColorFor — stable, muted color keyed to the label *name*, not position.
+// Colors are assigned lazily on first sight and cached for the session.
+// ─────────────────────────────────────────────────────────────────────────────
+const _labelColorCache = {};
+// 100 muted label colors: 20 hues × 5 saturation/lightness variants.
+// Hues spaced 18° apart; saturation 18–28%; lightness 41–54% (all legible with white text).
+const _LABEL_PALETTE = [
+// awk 'BEGIN { for (i = 0; i < 360; i += 3) printf("  '"'"'hsl(%3d 25%% 50%%)'"'"',\n", i, "%", "%"); }'
+  'hsl(  0 25% 50%)', 'hsl(  3 25% 50%)', 'hsl(  6 25% 50%)', 'hsl(  9 25% 50%)', 'hsl( 12 25% 50%)',
+  'hsl( 15 25% 50%)', 'hsl( 18 25% 50%)', 'hsl( 21 25% 50%)', 'hsl( 24 25% 50%)', 'hsl( 27 25% 50%)',
+  'hsl( 30 25% 50%)', 'hsl( 33 25% 50%)', 'hsl( 36 25% 50%)', 'hsl( 39 25% 50%)', 'hsl( 42 25% 50%)',
+  'hsl( 45 25% 50%)', 'hsl( 48 25% 50%)', 'hsl( 51 25% 50%)', 'hsl( 54 25% 50%)', 'hsl( 57 25% 50%)',
+  'hsl( 60 25% 50%)', 'hsl( 63 25% 50%)', 'hsl( 66 25% 50%)', 'hsl( 69 25% 50%)', 'hsl( 72 25% 50%)',
+  'hsl( 75 25% 50%)', 'hsl( 78 25% 50%)', 'hsl( 81 25% 50%)', 'hsl( 84 25% 50%)', 'hsl( 87 25% 50%)',
+  'hsl( 90 25% 50%)', 'hsl( 93 25% 50%)', 'hsl( 96 25% 50%)', 'hsl( 99 25% 50%)', 'hsl(102 25% 50%)',
+  'hsl(105 25% 50%)', 'hsl(108 25% 50%)', 'hsl(111 25% 50%)', 'hsl(114 25% 50%)', 'hsl(117 25% 50%)',
+  'hsl(120 25% 50%)', 'hsl(123 25% 50%)', 'hsl(126 25% 50%)', 'hsl(129 25% 50%)', 'hsl(132 25% 50%)',
+  'hsl(135 25% 50%)', 'hsl(138 25% 50%)', 'hsl(141 25% 50%)', 'hsl(144 25% 50%)', 'hsl(147 25% 50%)',
+  'hsl(150 25% 50%)', 'hsl(153 25% 50%)', 'hsl(156 25% 50%)', 'hsl(159 25% 50%)', 'hsl(162 25% 50%)',
+  'hsl(165 25% 50%)', 'hsl(168 25% 50%)', 'hsl(171 25% 50%)', 'hsl(174 25% 50%)', 'hsl(177 25% 50%)',
+  'hsl(180 25% 50%)', 'hsl(183 25% 50%)', 'hsl(186 25% 50%)', 'hsl(189 25% 50%)', 'hsl(192 25% 50%)',
+  'hsl(195 25% 50%)', 'hsl(198 25% 50%)', 'hsl(201 25% 50%)', 'hsl(204 25% 50%)', 'hsl(207 25% 50%)',
+  'hsl(210 25% 50%)', 'hsl(213 25% 50%)', 'hsl(216 25% 50%)', 'hsl(219 25% 50%)', 'hsl(222 25% 50%)',
+  'hsl(225 25% 50%)', 'hsl(228 25% 50%)', 'hsl(231 25% 50%)', 'hsl(234 25% 50%)', 'hsl(237 25% 50%)',
+  'hsl(240 25% 50%)', 'hsl(243 25% 50%)', 'hsl(246 25% 50%)', 'hsl(249 25% 50%)', 'hsl(252 25% 50%)',
+  'hsl(255 25% 50%)', 'hsl(258 25% 50%)', 'hsl(261 25% 50%)', 'hsl(264 25% 50%)', 'hsl(267 25% 50%)',
+  'hsl(270 25% 50%)', 'hsl(273 25% 50%)', 'hsl(276 25% 50%)', 'hsl(279 25% 50%)', 'hsl(282 25% 50%)',
+  'hsl(285 25% 50%)', 'hsl(288 25% 50%)', 'hsl(291 25% 50%)', 'hsl(294 25% 50%)', 'hsl(297 25% 50%)',
+  'hsl(300 25% 50%)', 'hsl(303 25% 50%)', 'hsl(306 25% 50%)', 'hsl(309 25% 50%)', 'hsl(312 25% 50%)',
+  'hsl(315 25% 50%)', 'hsl(318 25% 50%)', 'hsl(321 25% 50%)', 'hsl(324 25% 50%)', 'hsl(327 25% 50%)',
+  'hsl(330 25% 50%)', 'hsl(333 25% 50%)', 'hsl(336 25% 50%)', 'hsl(339 25% 50%)', 'hsl(342 25% 50%)',
+  'hsl(345 25% 50%)', 'hsl(348 25% 50%)', 'hsl(351 25% 50%)', 'hsl(354 25% 50%)', 'hsl(357 25% 50%)',
+];
+function labelColorFor(name) {
+  if (_labelColorCache[name]) return _labelColorCache[name];
+  // djb2-style hash over the label name string.
+  let h = 5381;
+  for (let i = 0; i < name.length; i++) h = ((h << 5) + h) ^ name.charCodeAt(i);
+  const color = _LABEL_PALETTE[Math.abs(h) % _LABEL_PALETTE.length];
+  _labelColorCache[name] = color;
+  return color;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // labelEditor — add/edit a label on a photo.
 // Takes data (null=add, obj=edit) and photo; auth via global.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -398,7 +442,8 @@ function labelEditor(data, photo) {
           this.customValue  = this.editingLabel.value;
         }
       } else if (this.knownNames.length === 0) {
-        this.nameIsOther = true;
+        this.nameIsOther  = true;
+        this.valueIsOther = true;
         this.$nextTick(() => { if (this.$refs.customNameInput) this.$refs.customNameInput.focus(); });
       }
     },
@@ -421,6 +466,10 @@ function labelEditor(data, photo) {
       if (this.selectedName === '__other__') {
         this.nameIsOther  = true;
         this.selectedName = '';
+        this.valueIsOther = true;
+        this.knownValues  = [];
+        this.selectedValue = '';
+        this.customValue   = '';
         this.$nextTick(() => { if (this.$refs.customNameInput) this.$refs.customNameInput.focus(); });
         return;
       }
@@ -582,6 +631,7 @@ function photoApp() {
     testUser: null,
 
     thumbUrl(url, cssWidth) { return thumbUrl(url, cssWidth); },
+     labelColorFor(name) { return labelColorFor(name); },
 
     authHeaders() {
       if (this.loggedInUser) return {};
