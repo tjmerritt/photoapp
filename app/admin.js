@@ -28,6 +28,7 @@ function adminApp() {
       if (probe.status === 403 || probe.status === 404) { this.authError = true; return; }
 
       await this.loadMore();
+      await this.$nextTick();
       this.initScroll();
     },
 
@@ -35,7 +36,11 @@ function adminApp() {
       const self = this;
       window.addEventListener('scroll', function() {
         if (self.loading || self.offset >= self.total) return;
-        if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 400) {
+        var pageH = Math.max(
+          document.body.scrollHeight,
+          document.documentElement.scrollHeight
+        );
+        if (window.scrollY + window.innerHeight >= pageH - 400) {
           self.loadMore();
         }
       }, { passive: true });
