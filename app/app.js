@@ -442,7 +442,8 @@ function labelEditor(data, photo) {
           this.customValue  = this.editingLabel.value;
         }
       } else if (this.knownNames.length === 0) {
-        this.nameIsOther = true;
+        this.nameIsOther  = true;
+        this.valueIsOther = true;
         this.$nextTick(() => { if (this.$refs.customNameInput) this.$refs.customNameInput.focus(); });
       }
     },
@@ -465,6 +466,10 @@ function labelEditor(data, photo) {
       if (this.selectedName === '__other__') {
         this.nameIsOther  = true;
         this.selectedName = '';
+        this.valueIsOther = true;
+        this.knownValues  = [];
+        this.selectedValue = '';
+        this.customValue   = '';
         this.$nextTick(() => { if (this.$refs.customNameInput) this.$refs.customNameInput.focus(); });
         return;
       }
