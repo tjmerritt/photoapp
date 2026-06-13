@@ -10,8 +10,14 @@ import (
 )
 
 // NewRouter builds and returns the fully configured HTTP router.
-func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhibitionHandler *ExhibitionHandler) http.Handler {
+func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhibitionHandler *ExhibitionHandler) (http.Handler, error) {
 	r := httprouter.New()
+
+	// ── Image cache ───────────────────────────────────────────────────────────
+	imgCache, err := NewImageCache(cfg.ImgCacheDir)
+	if err != nil {
+		return nil, err
+	}
 
 	// ── Handler instances ─────────────────────────────────────────────────────
 	photos      := &PhotoHandler{DB: pool, Cfg: cfg}
@@ -20,7 +26,8 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	labels      := &LabelsHandler{DB: pool, Cfg: cfg}
 	emojis      := &EmojisHandler{DB: pool, Cfg: cfg}
 	comments    := &CommentsHandler{DB: pool, Cfg: cfg}
-	imgProxy    := &ImgProxyHandler{}
+	imgProxy    := &ImgProxyHandler{Cache: imgCache}
+	admin       := &AdminHandler{DB: pool, Cfg: cfg}
 
 	// Convenience: wrap a httprouter.Handle with RequireAuth
 	auth := func(h httprouter.Handle) httprouter.Handle {
@@ -68,6 +75,10 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	r.PATCH("/api/v1/comments/:commentid",                auth(comments.Update))
 	r.DELETE("/api/v1/comments/:commentid",               auth(comments.Delete))
 
+	// ── Admin endpoints (auth + authorized_non_public enforced in handler) ──────
+	r.GET("/api/v1/admin/photos",  auth(admin.ListPhotos))
+	r.PATCH("/api/v1/admin/photo", auth(admin.SetPublic))
+
 	// ── Static file serving for uploaded emoji images ─────────────────────────
 	r.ServeFiles("/uploads/*filepath", http.Dir(cfg.UploadDir))
 
@@ -111,5 +122,5 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	handler = middleware.CORS(handler)
 	handler = middleware.RequestID(handler)
 
-	return handler
+	return handler, nil
 }

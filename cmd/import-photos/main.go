@@ -92,6 +92,8 @@ func main() {
 		"Path to haarcascade_frontalface_default.xml (env: HAAR_CASCADE_XML); disables face detection when empty")
 	flag.Parse()
 
+	slog.SetLogLoggerLevel(slog.LevelDebug)
+
 	if ownerID == "" {
 		fmt.Fprintln(os.Stderr, "error: --owner is required")
 		flag.Usage()
@@ -262,17 +264,21 @@ func main() {
 			continue
 		}
 
+		isPublic := detectIsPublic(imgBytes, classifier)
+
 		exifLabels := extractEXIF(imgBytes)
-		resolutionLabel := []label{
+		computedLabels := []label{
 			label{
 				name: "Resolution",
 				value: fmt.Sprintf("%dx%d", w, h),
 			},
+			label{
+				name: "Public",
+				value: fmt.Sprintf("%v", isPublic),
+			},
 		}
-		allLabels := mergeLabels(exifLabels, resolutionLabel)
+		allLabels := mergeLabels(exifLabels, computedLabels)
 		allLabels = mergeLabels(allLabels, []label(extraLabels))
-
-		isPublic := detectIsPublic(imgBytes, classifier)
 
 		if dryRun {
 			action := "insert"
@@ -563,8 +569,27 @@ func detectIsPublic(imgBytes []byte, classifier *gocv.CascadeClassifier) bool {
 		return false
 	}
 	defer mat.Close()
+	gray := gocv.NewMat()
+	defer gray.Close()
 
-	faces := classifier.DetectMultiScale(mat)
+	gocv.CvtColor(mat, &gray, gocv.ColorBGRToGray)
+	width := gray.Cols() / 64
+	if width < 30 {
+		width = 30
+	}
+	height := gray.Rows() / 64
+	if height < 30 {
+		height = 30
+	}
+
+	faces := classifier.DetectMultiScaleWithParams(
+		gray,
+		1.1, 	// default scaleFactor
+		8,	// minNeighbors
+		0,	// flags
+		image.Pt(width, height),	// minSize
+		image.Pt(0,0),		// maxSize
+	)
 	isPublic := len(faces) == 0
 	slog.Debug("detectIsPublic", "faces", len(faces), "is_public", isPublic)
 	return isPublic

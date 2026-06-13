@@ -353,7 +353,7 @@
                :style="photo.image.height > photo.image.width ? 'max-height:85vh' : 'max-height:70vh'">
             <template x-for="rel in photo.related" :key="rel.photoid">
               <a href="#" @click.prevent="loadPhoto(rel.photoid)" class="block rounded-xl overflow-hidden ring-1 ring-[var(--border)] hover:ring-accent/60 transition shadow-sm shrink-0">
-                <img :src="rel.imageurl" :alt="rel.photoid" class="w-full h-24 object-cover hover:opacity-90 transition" />
+                <img :src="thumbUrl(rel.imageurl, 144)" :alt="rel.photoid" class="w-full h-24 object-cover hover:opacity-90 transition" />
               </a>
             </template>
           </div>
