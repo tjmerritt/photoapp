@@ -358,27 +358,49 @@ function emojiPicker(photo) {
 // Colors are assigned lazily on first sight and cached for the session.
 // ─────────────────────────────────────────────────────────────────────────────
 const _labelColorCache = {};
+// 100 muted label colors: 20 hues × 5 saturation/lightness variants.
+// Hues spaced 18° apart; saturation 18–28%; lightness 41–54% (all legible with white text).
 const _LABEL_PALETTE = [
-  'hsl(210 45% 52%)',   // slate blue
-  'hsl(257 40% 54%)',   // soft violet
-  'hsl(330 40% 52%)',   // dusty rose
-  'hsl(30  50% 50%)',   // warm tan
-  'hsl(158 38% 44%)',   // sage green
-  'hsl(16  45% 50%)',   // terracotta
-  'hsl(190 45% 44%)',   // teal
-  'hsl(280 38% 52%)',   // mauve
-  'hsl(45  48% 48%)',   // golden
-  'hsl(100 35% 46%)',   // muted olive
-  'hsl(0   40% 50%)',   // muted red
-  'hsl(170 38% 42%)',   // seafoam
-  'hsl(225 42% 54%)',   // periwinkle
-  'hsl(60  40% 44%)',   // chartreuse-grey
-  'hsl(300 32% 50%)',   // dusty orchid
-  'hsl(20  42% 48%)',   // adobe
-  'hsl(140 36% 46%)',   // fern
-  'hsl(240 38% 56%)',   // medium slate
-  'hsl(350 42% 52%)',   // antique rose
-  'hsl(80  38% 46%)',   // moss
+  // hue 0 (red)
+  'hsl(0   22% 41%)', 'hsl(0   26% 46%)', 'hsl(0   20% 51%)', 'hsl(0   28% 43%)', 'hsl(0   24% 54%)',
+  // hue 18 (red-orange)
+  'hsl(18  22% 41%)', 'hsl(18  26% 46%)', 'hsl(18  20% 51%)', 'hsl(18  28% 43%)', 'hsl(18  24% 54%)',
+  // hue 36 (orange)
+  'hsl(36  22% 41%)', 'hsl(36  26% 46%)', 'hsl(36  20% 51%)', 'hsl(36  28% 43%)', 'hsl(36  24% 54%)',
+  // hue 54 (amber)
+  'hsl(54  22% 41%)', 'hsl(54  26% 46%)', 'hsl(54  20% 51%)', 'hsl(54  28% 43%)', 'hsl(54  24% 54%)',
+  // hue 72 (yellow-green)
+  'hsl(72  22% 41%)', 'hsl(72  26% 46%)', 'hsl(72  20% 51%)', 'hsl(72  28% 43%)', 'hsl(72  24% 54%)',
+  // hue 90 (chartreuse)
+  'hsl(90  22% 41%)', 'hsl(90  26% 46%)', 'hsl(90  20% 51%)', 'hsl(90  28% 43%)', 'hsl(90  24% 54%)',
+  // hue 108 (green)
+  'hsl(108 22% 41%)', 'hsl(108 26% 46%)', 'hsl(108 20% 51%)', 'hsl(108 28% 43%)', 'hsl(108 24% 54%)',
+  // hue 126 (spring green)
+  'hsl(126 22% 41%)', 'hsl(126 26% 46%)', 'hsl(126 20% 51%)', 'hsl(126 28% 43%)', 'hsl(126 24% 54%)',
+  // hue 144 (mint)
+  'hsl(144 22% 41%)', 'hsl(144 26% 46%)', 'hsl(144 20% 51%)', 'hsl(144 28% 43%)', 'hsl(144 24% 54%)',
+  // hue 162 (seafoam)
+  'hsl(162 22% 41%)', 'hsl(162 26% 46%)', 'hsl(162 20% 51%)', 'hsl(162 28% 43%)', 'hsl(162 24% 54%)',
+  // hue 180 (cyan)
+  'hsl(180 22% 41%)', 'hsl(180 26% 46%)', 'hsl(180 20% 51%)', 'hsl(180 28% 43%)', 'hsl(180 24% 54%)',
+  // hue 198 (sky)
+  'hsl(198 22% 41%)', 'hsl(198 26% 46%)', 'hsl(198 20% 51%)', 'hsl(198 28% 43%)', 'hsl(198 24% 54%)',
+  // hue 216 (azure)
+  'hsl(216 22% 41%)', 'hsl(216 26% 46%)', 'hsl(216 20% 51%)', 'hsl(216 28% 43%)', 'hsl(216 24% 54%)',
+  // hue 234 (blue)
+  'hsl(234 22% 41%)', 'hsl(234 26% 46%)', 'hsl(234 20% 51%)', 'hsl(234 28% 43%)', 'hsl(234 24% 54%)',
+  // hue 252 (blue-violet)
+  'hsl(252 22% 41%)', 'hsl(252 26% 46%)', 'hsl(252 20% 51%)', 'hsl(252 28% 43%)', 'hsl(252 24% 54%)',
+  // hue 270 (violet)
+  'hsl(270 22% 41%)', 'hsl(270 26% 46%)', 'hsl(270 20% 51%)', 'hsl(270 28% 43%)', 'hsl(270 24% 54%)',
+  // hue 288 (purple)
+  'hsl(288 22% 41%)', 'hsl(288 26% 46%)', 'hsl(288 20% 51%)', 'hsl(288 28% 43%)', 'hsl(288 24% 54%)',
+  // hue 306 (magenta)
+  'hsl(306 22% 41%)', 'hsl(306 26% 46%)', 'hsl(306 20% 51%)', 'hsl(306 28% 43%)', 'hsl(306 24% 54%)',
+  // hue 324 (rose)
+  'hsl(324 22% 41%)', 'hsl(324 26% 46%)', 'hsl(324 20% 51%)', 'hsl(324 28% 43%)', 'hsl(324 24% 54%)',
+  // hue 342 (crimson)
+  'hsl(342 22% 41%)', 'hsl(342 26% 46%)', 'hsl(342 20% 51%)', 'hsl(342 28% 43%)', 'hsl(342 24% 54%)',
 ];
 function labelColorFor(name) {
   if (_labelColorCache[name]) return _labelColorCache[name];
