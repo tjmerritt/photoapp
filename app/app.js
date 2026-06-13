@@ -354,6 +354,43 @@ function emojiPicker(photo) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// labelColorFor — stable, muted color keyed to the label *name*, not position.
+// Colors are assigned lazily on first sight and cached for the session.
+// ─────────────────────────────────────────────────────────────────────────────
+const _labelColorCache = {};
+const _LABEL_PALETTE = [
+  'hsl(210 45% 52%)',   // slate blue
+  'hsl(257 40% 54%)',   // soft violet
+  'hsl(330 40% 52%)',   // dusty rose
+  'hsl(30  50% 50%)',   // warm tan
+  'hsl(158 38% 44%)',   // sage green
+  'hsl(16  45% 50%)',   // terracotta
+  'hsl(190 45% 44%)',   // teal
+  'hsl(280 38% 52%)',   // mauve
+  'hsl(45  48% 48%)',   // golden
+  'hsl(100 35% 46%)',   // muted olive
+  'hsl(0   40% 50%)',   // muted red
+  'hsl(170 38% 42%)',   // seafoam
+  'hsl(225 42% 54%)',   // periwinkle
+  'hsl(60  40% 44%)',   // chartreuse-grey
+  'hsl(300 32% 50%)',   // dusty orchid
+  'hsl(20  42% 48%)',   // adobe
+  'hsl(140 36% 46%)',   // fern
+  'hsl(240 38% 56%)',   // medium slate
+  'hsl(350 42% 52%)',   // antique rose
+  'hsl(80  38% 46%)',   // moss
+];
+function labelColorFor(name) {
+  if (_labelColorCache[name]) return _labelColorCache[name];
+  // djb2-style hash over the label name string.
+  let h = 5381;
+  for (let i = 0; i < name.length; i++) h = ((h << 5) + h) ^ name.charCodeAt(i);
+  const color = _LABEL_PALETTE[Math.abs(h) % _LABEL_PALETTE.length];
+  _labelColorCache[name] = color;
+  return color;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // labelEditor — add/edit a label on a photo.
 // Takes data (null=add, obj=edit) and photo; auth via global.
 // ─────────────────────────────────────────────────────────────────────────────
