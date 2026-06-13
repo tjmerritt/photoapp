@@ -264,17 +264,21 @@ func main() {
 			continue
 		}
 
+		isPublic := detectIsPublic(imgBytes, classifier)
+
 		exifLabels := extractEXIF(imgBytes)
-		resolutionLabel := []label{
+		computedLabels := []label{
 			label{
 				name: "Resolution",
 				value: fmt.Sprintf("%dx%d", w, h),
 			},
+			label{
+				name: "Public",
+				value: fmt.Sprintf("%v", isPublic),
+			},
 		}
-		allLabels := mergeLabels(exifLabels, resolutionLabel)
+		allLabels := mergeLabels(exifLabels, computedLabels)
 		allLabels = mergeLabels(allLabels, []label(extraLabels))
-
-		isPublic := detectIsPublic(imgBytes, classifier)
 
 		if dryRun {
 			action := "insert"
