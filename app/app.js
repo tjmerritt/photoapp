@@ -793,7 +793,11 @@ function avatarSettings() {
     uploading: false,
 
     get presets() {
-      const user = window._currentUser;
+      // Prefer loggedInUser from the reactive parent photoApp scope so Alpine
+      // re-evaluates this getter when auth resolves (window._currentUser is a
+      // plain global and not reactive, so using it alone caused the grid to
+      // stay empty after the CSP rewrite moved this out of inline x-data).
+      const user = (this.$parent && this.$parent.loggedInUser) || window._currentUser;
       const h = (user && user.avatarHash) || '';
       return h ? Array.from({ length: 20 }, (_, i) => i === 0 ? h : h + i) : [];
     },
