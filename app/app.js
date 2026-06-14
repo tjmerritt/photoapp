@@ -631,7 +631,8 @@ function photoApp() {
     testUser: null,
 
     thumbUrl(url, cssWidth) { return thumbUrl(url, cssWidth); },
-     labelColorFor(name) { return labelColorFor(name); },
+    labelColorFor(name) { return labelColorFor(name); },
+    avatarSrc(user) { return avatarSrc(user); },
 
     authHeaders() {
       if (this.loggedInUser) return {};
