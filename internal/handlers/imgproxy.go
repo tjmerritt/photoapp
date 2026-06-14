@@ -7,7 +7,6 @@ import (
 	"image/jpeg"
 	_ "image/gif"  // register GIF decoder
 	_ "image/png"  // register PNG decoder
-	_ "image/gif" // register GIF decoder
 	"net/http"
 	"strconv"
 	"strings"
