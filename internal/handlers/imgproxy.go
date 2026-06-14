@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"image"
+	_ "image/gif" // register GIF decoder
 	"image/jpeg"
-	_ "image/gif"  // register GIF decoder
-	_ "image/png"  // register PNG decoder
+	_ "image/png" // register PNG decoder
 	"net/http"
 	"strconv"
 	"strings"
@@ -110,15 +110,15 @@ func resizeToWidth(src []byte, targetW int) (scaled []byte, origW int, err error
 	}
 
 	bounds := img.Bounds()
-	srcW   := bounds.Dx()
-	srcH   := bounds.Dy()
+	srcW := bounds.Dx()
+	srcH := bounds.Dy()
 
 	if srcW <= int(float64(targetW)*1.2) {
 		return nil, srcW, fmt.Errorf("already small enough (%dpx)", srcW)
 	}
 
 	dstH := srcH * targetW / srcW
-	dst  := image.NewRGBA(image.Rect(0, 0, targetW, dstH))
+	dst := image.NewRGBA(image.Rect(0, 0, targetW, dstH))
 	draw.BiLinear.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
 
 	var buf bytes.Buffer

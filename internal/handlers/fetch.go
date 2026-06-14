@@ -239,17 +239,20 @@ func fetchComments(ctx context.Context, pool *db.Pool, photoid, parentID string,
 	)
 	// A deleted comment is included only when it still has replies, so that
 	// those replies remain visible in context. Its text is blanked server-side.
-	const visibleFilter = `(deleted_at IS NULL OR reply_count > 0)`
+	// countFilter: used in single-table COUNT queries (no alias).
+	// joinFilter:  used in JOIN queries where comments is aliased as c.
+	const countFilter = `(deleted_at IS NULL OR reply_count > 0)`
+	const joinFilter = `(c.deleted_at IS NULL OR c.reply_count > 0)`
 
 	if parentID == "" {
 		err = pool.QueryRow(ctx, `
 			SELECT COUNT(*) FROM comments
-			WHERE  photoid = $1 AND parent_commentid IS NULL AND `+visibleFilter,
+			WHERE  photoid = $1 AND parent_commentid IS NULL AND `+countFilter,
 			photoid).Scan(&total)
 	} else {
 		err = pool.QueryRow(ctx, `
 			SELECT COUNT(*) FROM comments
-			WHERE  parent_commentid = $1 AND `+visibleFilter,
+			WHERE  parent_commentid = $1 AND `+countFilter,
 			parentID).Scan(&total)
 	}
 	if err != nil {
@@ -264,7 +267,12 @@ func fetchComments(ctx context.Context, pool *db.Pool, photoid, parentID string,
 		COALESCE(u.profile_image, '/avatars/' || md5(lower(trim(COALESCE(u.email, u.userid::text))))),
 		c.deleted_at IS NOT NULL`
 
-	var rows interface{ Next() bool; Scan(...any) error; Close(); Err() error }
+	var rows interface {
+		Next() bool
+		Scan(...any) error
+		Close()
+		Err() error
+	}
 	if parentID == "" {
 		rows, err = pool.Query(ctx, `
 			SELECT `+selectCols+`
@@ -272,7 +280,7 @@ func fetchComments(ctx context.Context, pool *db.Pool, photoid, parentID string,
 			JOIN   users    u ON u.userid = c.author_userid
 			WHERE  c.photoid = $1
 			  AND  c.parent_commentid IS NULL
-			  AND  `+visibleFilter+`
+			  AND  `+joinFilter+`
 			ORDER  BY c.created_at
 			LIMIT  $2 OFFSET $3
 		`, photoid, limit, offset)
@@ -282,7 +290,7 @@ func fetchComments(ctx context.Context, pool *db.Pool, photoid, parentID string,
 			FROM   comments c
 			JOIN   users    u ON u.userid = c.author_userid
 			WHERE  c.parent_commentid = $1
-			  AND  `+visibleFilter+`
+			  AND  `+joinFilter+`
 			ORDER  BY c.created_at
 			LIMIT  $2 OFFSET $3
 		`, parentID, limit, offset)
