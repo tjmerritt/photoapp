@@ -9,11 +9,11 @@ import (
 	"github.com/tjmerritt/photoapp/internal/models"
 )
 
-// proxyImageURL rewrites an external http:// image URL to go through the
-// /api/v1/imgproxy endpoint so the browser never makes a mixed-content request.
-// https:// URLs and relative paths are returned unchanged.
+// proxyImageURL rewrites any external (http/https) image URL to go through the
+// /api/v1/imgproxy endpoint so the browser never hits external origins, which
+// would be blocked by the app's CSP. Relative paths are returned unchanged.
 func proxyImageURL(u string) string {
-	if strings.HasPrefix(u, "http://") {
+	if strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
 		return "/api/v1/imgproxy?url=" + u
 	}
 	return u

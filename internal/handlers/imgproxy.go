@@ -16,10 +16,11 @@ import (
 	_ "golang.org/x/image/webp" // register WebP decoder
 )
 
-// ImgProxyHandler proxies external http:// image URLs through the HTTPS app
-// server to avoid mixed-content errors in the browser.
+// ImgProxyHandler proxies external image URLs through the app server so that
+// the browser never loads them directly. This keeps the CSP img-src directive
+// restricted to 'self' and avoids mixed-content errors for http:// sources.
 //
-// GET /api/v1/imgproxy?url=http://...&w=<pixels>
+// GET /api/v1/imgproxy?url=https://...&w=<pixels>
 //
 // Cache behaviour:
 //  1. If w is given and a scaled variant is cached → serve it immediately.
@@ -28,7 +29,7 @@ import (
 //     cache the result, and serve the scaled JPEG.
 //  4. If no w, or resize is not possible, serve the original bytes.
 //
-// Security: only http:// URLs are accepted to prevent SSRF via the proxy.
+// Security: only http:// and https:// URLs are accepted.
 type ImgProxyHandler struct {
 	Cache *ImageCache
 }
@@ -41,8 +42,8 @@ func (h *ImgProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "url parameter required", http.StatusBadRequest)
 		return
 	}
-	if !strings.HasPrefix(target, "http://") {
-		http.Error(w, "only http:// URLs may be proxied", http.StatusBadRequest)
+	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+		http.Error(w, "only http:// and https:// URLs may be proxied", http.StatusBadRequest)
 		return
 	}
 
