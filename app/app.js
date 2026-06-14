@@ -57,6 +57,12 @@ function commentsPanel(photo) {
     posting:     false,
     loadingMore: false,
 
+    init() {
+      document.addEventListener('photoapp:comment-deleted', (e) => {
+        this.comments = this.comments.filter(c => c.commentid !== e.detail);
+      });
+    },
+
     async post() {
       const text = this.newText.trim();
       if (!text || !getCurrentUser()) return;
