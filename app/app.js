@@ -703,7 +703,7 @@ function photoApp() {
         if (this.photo) this.loadPhoto(this.photo.photoid);
       });
       document.addEventListener('photoapp:profile-image', (e) => {
-        if (this.loggedInUser) this.loggedInUser.profileImage = e.detail;
+        if (this.loggedInUser) this.loggedInUser = { ...this.loggedInUser, profileImage: e.detail };
       });
     },
 
