@@ -677,6 +677,10 @@ function photoApp() {
           window._testUserID = me.userid;
           window._loggedIn = true;
           window._currentUser = me;
+          // Notify avatarSettings (and any other listeners) that auth is ready.
+          // photoapp:auth-success is only dispatched on login; this covers the
+          // "already logged-in on page load" path where /auth/me returns a session.
+          document.dispatchEvent(new CustomEvent('photoapp:auth-ready', { detail: me }));
         }
       } catch { /* non-fatal */ }
 
@@ -791,14 +795,25 @@ function avatarSettings() {
   return {
     saving:    false,
     uploading: false,
+    _avatarHash: '',
+
+    init() {
+      // The presets getter must depend on a reactive Alpine property (_avatarHash)
+      // rather than window._currentUser, which is a plain global that Alpine
+      // cannot track.  We populate _avatarHash from two sources:
+      //   1. photoapp:auth-ready — dispatched by photoApp.init() after /auth/me
+      //      returns for an already-logged-in session (page load path).
+      //   2. photoapp:auth-success — dispatched after the user logs in via the
+      //      login form during an existing session.
+      const sync = (e) => {
+        if (e.detail && e.detail.avatarHash) this._avatarHash = e.detail.avatarHash;
+      };
+      document.addEventListener('photoapp:auth-ready',   sync);
+      document.addEventListener('photoapp:auth-success', sync);
+    },
 
     get presets() {
-      // Prefer loggedInUser from the reactive parent photoApp scope so Alpine
-      // re-evaluates this getter when auth resolves (window._currentUser is a
-      // plain global and not reactive, so using it alone caused the grid to
-      // stay empty after the CSP rewrite moved this out of inline x-data).
-      const user = (this.$parent && this.$parent.loggedInUser) || window._currentUser;
-      const h = (user && user.avatarHash) || '';
+      const h = this._avatarHash;
       return h ? Array.from({ length: 20 }, (_, i) => i === 0 ? h : h + i) : [];
     },
 
