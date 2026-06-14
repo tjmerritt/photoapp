@@ -248,7 +248,7 @@ function emojiPicker(photo) {
     skintoneLoading:  false,
 
     async init() {
-      const uid = getAuthHeaders()['X-User-ID'];
+      const uid = window._testUserID;   // set for both real sessions and test-user mode
       if (uid) {
         (photo.emojis || []).forEach(em => {
           if (em.users && em.users.some(u => u.id === uid)) {
@@ -308,11 +308,11 @@ function emojiPicker(photo) {
     },
 
     async react(em) {
-      const headers = getAuthHeaders();
-      if (!headers['X-User-ID']) {
+      if (!window._loggedIn && !window._testUserID) {
         document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: 'Select a user to react.' }));
         return;
       }
+      const headers = getAuthHeaders();
       const alreadyReacted = this.reactedIds.has(em.emojiid);
       const method = alreadyReacted ? 'DELETE' : 'POST';
       try {
