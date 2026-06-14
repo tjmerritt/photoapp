@@ -114,6 +114,101 @@ func (h *AuthHandler) finishLogin(w http.ResponseWriter, r *http.Request, userID
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
+// downloadExternalImage fetches an image from a remote URL, saves it to the
+// upload directory, and returns the local /uploads/... path.
+func (h *AuthHandler) downloadExternalImage(ctx context.Context, imageURL string) (string, error) {
+	if !strings.HasPrefix(imageURL, "http://") && !strings.HasPrefix(imageURL, "https://") {
+		return "", fmt.Errorf("not an HTTP/HTTPS URL")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "PhotoApp/1.0")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	// Read a small header for content-type sniffing, then stream the rest.
+	header := make([]byte, 512)
+	n, err := io.ReadFull(resp.Body, header)
+	if err != nil && err != io.ErrUnexpectedEOF {
+		return "", err
+	}
+	header = header[:n]
+
+	ct := http.DetectContentType(header)
+	exts := map[string]string{
+		"image/jpeg": ".jpg",
+		"image/png":  ".png",
+		"image/gif":  ".gif",
+		"image/webp": ".webp",
+	}
+	ext, ok := exts[ct]
+	if !ok {
+		return "", fmt.Errorf("unsupported content type: %s", ct)
+	}
+
+	if err := os.MkdirAll(h.Cfg.UploadDir, 0o755); err != nil {
+		return "", err
+	}
+
+	filename := uuid.New().String() + ext
+	dest, err := os.Create(filepath.Join(h.Cfg.UploadDir, filename))
+	if err != nil {
+		return "", err
+	}
+	defer dest.Close()
+
+	body := io.MultiReader(bytes.NewReader(header), io.LimitReader(resp.Body, 10<<20))
+	if _, err := io.Copy(dest, body); err != nil {
+		_ = os.Remove(filepath.Join(h.Cfg.UploadDir, filename))
+		return "", err
+	}
+
+	return h.Cfg.UploadURLBase + "/" + filename, nil
+}
+
+// localizeExternalProfileImage checks whether a user's stored profile_image is
+// an external URL. If it is, the image is downloaded and stored locally so the
+// frontend can load it without CSP issues. Failures are logged and silently ignored.
+func (h *AuthHandler) localizeExternalProfileImage(ctx context.Context, userID, externalURL string) {
+	var current *string
+	_ = h.DB.QueryRow(ctx,
+		`SELECT profile_image FROM users WHERE userid=$1 AND deleted_at IS NULL`, userID,
+	).Scan(&current)
+
+	if current == nil || !strings.HasPrefix(*current, "https://") {
+		return // already local or not set
+	}
+
+	local, err := h.downloadExternalImage(ctx, externalURL)
+	if err != nil {
+		slog.Warn("localizeExternalProfileImage: download failed",
+			"userid", userID, "error", err)
+		return
+	}
+
+	if _, err := h.DB.Exec(ctx,
+		`UPDATE users SET profile_image=$1, updated_at=NOW() WHERE userid=$2`, local, userID,
+	); err != nil {
+		slog.Warn("localizeExternalProfileImage: DB update failed",
+			"userid", userID, "error", err)
+		_ = os.Remove(filepath.Join(h.Cfg.UploadDir, filepath.Base(local)))
+	}
+}
+
 // findOrCreateOAuthUser looks up a user by their provider+sub, creating one if needed.
 func (h *AuthHandler) findOrCreateOAuthUser(ctx context.Context, provider, sub, email, name, picture string) (string, error) {
 	col := "google_id"
@@ -148,8 +243,17 @@ func (h *AuthHandler) findOrCreateOAuthUser(ctx context.Context, provider, sub, 
 	username := usernameFromName(name, email)
 	username = h.uniqueUsername(ctx, username)
 
-	// Use the provider's picture if available, otherwise generate one from email.
-	profileImage := picture
+	// Download the provider's picture to local storage to avoid CSP issues.
+	// Fall back to a generated avatar if the download fails or no picture is provided.
+	profileImage := ""
+	if picture != "" {
+		if local, dlErr := h.downloadExternalImage(ctx, picture); dlErr == nil {
+			profileImage = local
+		} else {
+			slog.Warn("findOrCreateOAuthUser: failed to download profile image",
+				"error", dlErr, "url", picture)
+		}
+	}
 	if profileImage == "" && email != "" {
 		profileImage = AvatarURL(email)
 	}
@@ -319,6 +423,13 @@ func (h *AuthHandler) GoogleCallback(w http.ResponseWriter, r *http.Request, _ h
 		http.Error(w, "User creation failed", http.StatusInternalServerError)
 		return
 	}
+
+	// For existing users who still have an external profile_image URL from before
+	// this fix was deployed, download and store it locally now.
+	if info.Picture != "" {
+		h.localizeExternalProfileImage(r.Context(), userID, info.Picture)
+	}
+
 	h.finishLogin(w, r, userID)
 }
 
