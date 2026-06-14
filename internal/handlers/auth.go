@@ -201,7 +201,8 @@ func (h *AuthHandler) localizeExternalProfileImage(ctx context.Context, userID, 
 	}
 
 	if _, err := h.DB.Exec(ctx,
-		`UPDATE users SET profile_image=$1, updated_at=NOW() WHERE userid=$2`, local, userID,
+		`UPDATE users SET profile_image=$1, profile_image_source=$1, updated_at=NOW() WHERE userid=$2`,
+		local, userID,
 	); err != nil {
 		slog.Warn("localizeExternalProfileImage: DB update failed",
 			"userid", userID, "error", err)
@@ -245,10 +246,14 @@ func (h *AuthHandler) findOrCreateOAuthUser(ctx context.Context, provider, sub, 
 
 	// Download the provider's picture to local storage to avoid CSP issues.
 	// Fall back to a generated avatar if the download fails or no picture is provided.
+	// profile_image_source tracks the real photo URL separately from the selected
+	// display image (which may later be switched to a generated avatar).
 	profileImage := ""
+	profileImageSource := ""
 	if picture != "" {
 		if local, dlErr := h.downloadExternalImage(ctx, picture); dlErr == nil {
 			profileImage = local
+			profileImageSource = local
 		} else {
 			slog.Warn("findOrCreateOAuthUser: failed to download profile image",
 				"error", dlErr, "url", picture)
@@ -261,12 +266,16 @@ func (h *AuthHandler) findOrCreateOAuthUser(ctx context.Context, provider, sub, 
 	if profileImage != "" {
 		picturePtr = &profileImage
 	}
+	var sourcePtr *string
+	if profileImageSource != "" {
+		sourcePtr = &profileImageSource
+	}
 
 	err = h.DB.QueryRow(ctx, fmt.Sprintf(`
-		INSERT INTO users (username, email, provider, %s, profile_image)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO users (username, email, provider, %s, profile_image, profile_image_source)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING userid::text
-	`, col), username, email, provider, sub, picturePtr).Scan(&userID)
+	`, col), username, email, provider, sub, picturePtr, sourcePtr).Scan(&userID)
 	return userID, err
 }
 
@@ -319,27 +328,31 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request, _ httprouter.Pa
 		middleware.WriteJSON(w, http.StatusOK, map[string]any{"loggedIn": false})
 		return
 	}
-	var username, email string
-	var profileImage *string
+	var username, email, provider string
+	var profileImage, profileImageSource *string
 	var allowMultiLogin bool
 	err := h.DB.QueryRow(r.Context(), `
 		SELECT username, email,
 		       COALESCE(profile_image, '/avatars/' || md5(lower(trim(COALESCE(email, userid::text))))),
+		       profile_image_source,
+		       provider,
 		       allow_multi_login
 		FROM   users WHERE userid=$1 AND deleted_at IS NULL
-	`, userID).Scan(&username, &email, &profileImage, &allowMultiLogin)
+	`, userID).Scan(&username, &email, &profileImage, &profileImageSource, &provider, &allowMultiLogin)
 	if err != nil {
 		middleware.WriteJSON(w, http.StatusOK, map[string]any{"loggedIn": false})
 		return
 	}
 	middleware.WriteJSON(w, http.StatusOK, map[string]any{
-		"loggedIn":        true,
-		"userid":          userID,
-		"username":        username,
-		"email":           email,
-		"profileImage":    profileImage,
-		"avatarHash":      emailHash(email),
-		"allowMultiLogin": allowMultiLogin,
+		"loggedIn":           true,
+		"userid":             userID,
+		"username":           username,
+		"email":              email,
+		"profileImage":       profileImage,
+		"profileImageSource": profileImageSource,
+		"provider":           provider,
+		"avatarHash":         emailHash(email),
+		"allowMultiLogin":    allowMultiLogin,
 	})
 }
 
@@ -777,10 +790,9 @@ func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request, _ ht
 		middleware.WriteError(w, http.StatusBadRequest, "profileImage is required")
 		return
 	}
-	// Only allow /avatars/... paths or uploads from our own server.
+	// Only allow local paths: generated avatars or uploaded images.
 	if !strings.HasPrefix(body.ProfileImage, "/avatars/") &&
-		!strings.HasPrefix(body.ProfileImage, "/uploads/") &&
-		!strings.HasPrefix(body.ProfileImage, "https://") {
+		!strings.HasPrefix(body.ProfileImage, "/uploads/") {
 		middleware.WriteError(w, http.StatusBadRequest, "invalid profileImage URL")
 		return
 	}
@@ -794,13 +806,24 @@ func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request, _ ht
 	middleware.WriteJSON(w, http.StatusOK, map[string]string{"profileImage": body.ProfileImage})
 }
 
-// POST /auth/profile/avatar  — upload a custom profile image
+// POST /auth/profile/avatar  — upload a custom profile image (local accounts only)
 func (h *AuthHandler) UploadProfileAvatar(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	userID, ok := middleware.UserID(r.Context())
 	if !ok || userID == "" {
 		middleware.WriteError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
+
+	// Only local (email/password) accounts may upload a profile image.
+	var userProvider string
+	_ = h.DB.QueryRow(r.Context(),
+		`SELECT provider FROM users WHERE userid=$1 AND deleted_at IS NULL`, userID,
+	).Scan(&userProvider)
+	if userProvider != "local" {
+		middleware.WriteError(w, http.StatusForbidden, "profile image upload is only available for local accounts")
+		return
+	}
+
 	if err := r.ParseMultipartForm(4 << 20); err != nil {
 		middleware.WriteError(w, http.StatusBadRequest, "could not parse form (max 4MB)")
 		return
@@ -848,7 +871,7 @@ func (h *AuthHandler) UploadProfileAvatar(w http.ResponseWriter, r *http.Request
 
 	imageURL := h.Cfg.UploadURLBase + "/" + filename
 	_, _ = h.DB.Exec(r.Context(),
-		`UPDATE users SET profile_image=$1, updated_at=NOW() WHERE userid=$2`,
+		`UPDATE users SET profile_image=$1, profile_image_source=$1, updated_at=NOW() WHERE userid=$2`,
 		imageURL, userID)
 
 	middleware.WriteJSON(w, http.StatusOK, map[string]string{"profileImage": imageURL})

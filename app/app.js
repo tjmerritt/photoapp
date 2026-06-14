@@ -794,20 +794,21 @@ function photoApp() {
 // ─────────────────────────────────────────────────────────────────────────────
 function avatarSettings() {
   return {
-    saving:    false,
-    uploading: false,
-    _avatarHash: '',
+    saving:             false,
+    uploading:          false,
+    _avatarHash:        '',
+    _profileImageSource: '',   // local URL of the user's real photo (upload / OAuth download)
+    _provider:          '',    // 'local' | 'google' | 'apple'
 
     init() {
-      // The presets getter must depend on a reactive Alpine property (_avatarHash)
-      // rather than window._currentUser, which is a plain global that Alpine
-      // cannot track.  We populate _avatarHash from two sources:
-      //   1. photoapp:auth-ready — dispatched by photoApp.init() after /auth/me
-      //      returns for an already-logged-in session (page load path).
-      //   2. photoapp:auth-success — dispatched after the user logs in via the
-      //      login form during an existing session.
+      // Sync reactive state from auth events so Alpine can track changes.
+      // photoapp:auth-ready  — page load with existing session
+      // photoapp:auth-success — login during session
       const sync = (e) => {
-        if (e.detail && e.detail.avatarHash) this._avatarHash = e.detail.avatarHash;
+        if (!e.detail) return;
+        if (e.detail.avatarHash)        this._avatarHash         = e.detail.avatarHash;
+        if (e.detail.profileImageSource) this._profileImageSource = e.detail.profileImageSource;
+        if (e.detail.provider)          this._provider           = e.detail.provider;
       };
       document.addEventListener('photoapp:auth-ready',   sync);
       document.addEventListener('photoapp:auth-success', sync);
@@ -816,6 +817,26 @@ function avatarSettings() {
     get presets() {
       const h = this._avatarHash;
       return h ? Array.from({ length: 20 }, (_, i) => i === 0 ? h : h + i) : [];
+    },
+
+    async selectProfileImage() {
+      if (this.saving || !this._profileImageSource) return;
+      this.saving = true;
+      const url = this._profileImageSource;
+      try {
+        const r = await fetch('/auth/profile', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ profileImage: url }),
+        });
+        if (!r.ok) throw new Error('Save failed');
+        if (window._currentUser) window._currentUser.profileImage = url;
+        window._profileImage = url;
+        document.dispatchEvent(new CustomEvent('photoapp:profile-image', { detail: url }));
+      } catch(e) {
+        document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: e.message }));
+      }
+      this.saving = false;
     },
 
     async selectPreset(hash) {
@@ -846,9 +867,16 @@ function avatarSettings() {
         const fd = new FormData();
         fd.append('image', file);
         const r = await fetch('/auth/profile/avatar', { method: 'POST', body: fd });
-        if (!r.ok) throw new Error('Upload failed');
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          throw new Error(d.error || 'Upload failed');
+        }
         const d = await r.json();
-        if (window._currentUser) window._currentUser.profileImage = d.profileImage;
+        this._profileImageSource = d.profileImage;
+        if (window._currentUser) {
+          window._currentUser.profileImage       = d.profileImage;
+          window._currentUser.profileImageSource = d.profileImage;
+        }
         document.dispatchEvent(new CustomEvent('photoapp:profile-image', { detail: d.profileImage }));
       } catch(e) {
         document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: e.message }));
