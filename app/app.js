@@ -59,7 +59,10 @@ function commentsPanel(photo) {
 
     init() {
       document.addEventListener('photoapp:comment-deleted', (e) => {
-        this.comments = this.comments.filter(c => c.commentid !== e.detail);
+        const idx = this.comments.findIndex(c => c.commentid === e.detail);
+        if (idx !== -1) {
+          this.comments[idx] = { ...this.comments[idx], deleted: true };
+        }
       });
     },
 
@@ -124,6 +127,21 @@ function commentItem(c, photoid, depth = 0) {
 
     get canReply() { return !!getCurrentUser() && this.depth < 5; },
 
+    // Returns '[deleted]' when the comment has been soft-deleted so the template
+    // doesn't need per-level conditional logic around c.comment.
+    get commentBody() { return this.c.deleted ? '[deleted]' : (this.c.comment || ''); },
+
+    init() {
+      // When a reply inside this comment's thread is deleted, mark it in the
+      // replies array so it shows '[deleted]' rather than disappearing.
+      document.addEventListener('photoapp:comment-deleted', (e) => {
+        const idx = this.replies.findIndex(r => r.commentid === e.detail);
+        if (idx !== -1) {
+          this.replies[idx] = { ...this.replies[idx], deleted: true };
+        }
+      });
+    },
+
     checkClamp() {
       this.$nextTick(() => {
         const el = this.$refs.commentBody;
@@ -171,12 +189,17 @@ function commentItem(c, photoid, depth = 0) {
 
     async deleteComment() {
       if (!confirm('Delete this comment?')) return;
+      const commentid = this.c.commentid;
       try {
-        const resp = await fetch(`/api/v1/comments/${encodeURIComponent(this.c.commentid)}`, {
+        const resp = await fetch(`/api/v1/comments/${encodeURIComponent(commentid)}`, {
           method: 'DELETE', headers: getAuthHeaders(),
         });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        document.dispatchEvent(new CustomEvent('photoapp:comment-deleted', { detail: this.c.commentid }));
+        // Mark this component's own comment as deleted so it shows '[deleted]'
+        // immediately and the replies beneath it remain visible.
+        this.c = { ...this.c, deleted: true };
+        this.editing = false;
+        document.dispatchEvent(new CustomEvent('photoapp:comment-deleted', { detail: commentid }));
       } catch(e) {
         document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Delete failed: ${e.message}` }));
       }

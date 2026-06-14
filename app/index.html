@@ -384,7 +384,7 @@
           </h1>
         </template>
         <!-- Edit mode -->
-        <template x-if="editing">
+        <template x-if="editing && !c.deleted">
           <div class="flex items-center gap-2">
             <input x-ref="titleInput"
                    x-model="draft"
@@ -527,7 +527,7 @@
                     <span class="font-semibold text-sm" x-text="c.author.username"></span>
                     <span class="text-xs text-muted" x-text="formatDate(c.date)"></span>
                     <!-- Edit / Delete (own comments only) -->
-                    <template x-if="currentUser && currentUser.userid ===c.author.userid">
+                    <template x-if="currentUser && currentUser.userid ===c.author.userid && !c.deleted">
                       <span class="flex items-center gap-2 ml-auto">
                         <button @click="startEdit()" class="text-xs text-muted hover:text-brand">Edit</button>
                         <button @click="deleteComment()" class="text-xs text-muted hover:text-red-500">Delete</button>
@@ -542,13 +542,13 @@
                            :style="expanded ? '' : `-webkit-line-clamp: ${clampLines}`"
                            x-ref="commentBody"
                            x-init="checkClamp()"
-                           x-text="c.comment"></div>
+                           x-text="commentBody"></div>
                       <template x-if="!expanded && needsClamp">
                         <button @click="showMore()" class="text-accent text-xs mt-1 hover:underline">more</button>
                       </template>
                     </div>
                   </template>
-                  <template x-if="editing">
+                  <template x-if="editing && !c.deleted">
                     <div class="mt-1">
                       <textarea x-model="editText" rows="3"
                                 @keydown.escape="cancelEdit()"
@@ -616,12 +616,12 @@
                               <div class="flex items-baseline gap-2 flex-wrap">
                                 <span class="font-semibold text-xs" x-text="c.author.username"></span>
                                 <span class="text-xs text-muted" x-text="formatDate(c.date)"></span>
-                                <template x-if="currentUser && currentUser.userid ===c.author.userid">
+                                <template x-if="currentUser && currentUser.userid ===c.author.userid && !c.deleted">
                                   <span class="flex gap-2 ml-auto"><button @click="startEdit()" class="text-xs text-muted hover:text-brand">Edit</button><button @click="deleteComment()" class="text-xs text-muted hover:text-red-500">Delete</button></span>
                                 </template>
                               </div>
-                              <template x-if="!editing"><p class="text-sm mt-0.5 leading-relaxed" x-text="c.comment"></p></template>
-                              <template x-if="editing">
+                              <template x-if="!editing"><p class="text-sm mt-0.5 leading-relaxed" x-text="commentBody"></p></template>
+                              <template x-if="editing && !c.deleted">
                                 <div class="mt-1"><textarea x-model="editText" rows="2" @keydown.escape="cancelEdit()" class="w-full text-sm border border-[var(--border)] rounded-xl p-2 resize-none focus:outline-none focus:ring-2 focus:ring-accent/30"></textarea>
                                   <div class="flex gap-2 justify-end mt-1"><button @click="cancelEdit()" class="text-xs text-muted hover:text-brand">Cancel</button><button @click="saveEdit()" :disabled="saving||!editText.trim()" class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="saving?'Saving…':'Save'"></span></button></div>
                                 </div>
@@ -646,10 +646,10 @@
                                           <div class="flex items-baseline gap-2 flex-wrap">
                                             <span class="font-semibold text-xs" x-text="c.author.username"></span>
                                             <span class="text-xs text-muted" x-text="formatDate(c.date)"></span>
-                                            <template x-if="currentUser && currentUser.userid ===c.author.userid"><span class="flex gap-2 ml-auto"><button @click="startEdit()" class="text-xs text-muted hover:text-brand">Edit</button><button @click="deleteComment()" class="text-xs text-muted hover:text-red-500">Delete</button></span></template>
+                                            <template x-if="currentUser && currentUser.userid ===c.author.userid && !c.deleted"><span class="flex gap-2 ml-auto"><button @click="startEdit()" class="text-xs text-muted hover:text-brand">Edit</button><button @click="deleteComment()" class="text-xs text-muted hover:text-red-500">Delete</button></span></template>
                                           </div>
-                                          <template x-if="!editing"><p class="text-sm mt-0.5 leading-relaxed" x-text="c.comment"></p></template>
-                                          <template x-if="editing"><div class="mt-1"><textarea x-model="editText" rows="2" @keydown.escape="cancelEdit()" class="w-full text-sm border border-[var(--border)] rounded-xl p-2 resize-none focus:outline-none focus:ring-2 focus:ring-accent/30"></textarea><div class="flex gap-2 justify-end mt-1"><button @click="cancelEdit()" class="text-xs text-muted hover:text-brand">Cancel</button><button @click="saveEdit()" :disabled="saving||!editText.trim()" class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="saving?'Saving…':'Save'"></span></button></div></div></template>
+                                          <template x-if="!editing"><p class="text-sm mt-0.5 leading-relaxed" x-text="commentBody"></p></template>
+                                          <template x-if="editing && !c.deleted"><div class="mt-1"><textarea x-model="editText" rows="2" @keydown.escape="cancelEdit()" class="w-full text-sm border border-[var(--border)] rounded-xl p-2 resize-none focus:outline-none focus:ring-2 focus:ring-accent/30"></textarea><div class="flex gap-2 justify-end mt-1"><button @click="cancelEdit()" class="text-xs text-muted hover:text-brand">Cancel</button><button @click="saveEdit()" :disabled="saving||!editText.trim()" class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="saving?'Saving…':'Save'"></span></button></div></div></template>
                                           <div class="flex items-center gap-3 mt-1">
                                             <template x-if="c.replycount > 0 && !showingReplies"><button @click="loadReplies()" class="text-xs text-accent hover:underline font-medium">Replies (<span x-text="c.replycount"></span>)</button></template>
                                             <template x-if="showingReplies"><button @click="(showingReplies = false) || (replyOpen = false)" class="text-xs text-muted hover:text-brand">Hide replies</button></template>
@@ -667,8 +667,8 @@
                                                     <div class="flex-1 min-w-0">
                                                       <span class="font-semibold text-xs" x-text="c.author.username"></span>
                                                       <span class="text-xs text-muted ml-1" x-text="formatDate(c.date)"></span>
-                                                      <template x-if="!editing"><p class="text-xs mt-0.5 leading-relaxed" x-text="c.comment"></p></template>
-                                                      <template x-if="editing"><div class="mt-1"><textarea x-model="editText" rows="2" @keydown.escape="cancelEdit()" class="w-full text-xs border border-[var(--border)] rounded-xl p-2 resize-none focus:outline-none"></textarea><div class="flex gap-2 justify-end mt-1"><button @click="cancelEdit()" class="text-xs text-muted hover:text-brand">Cancel</button><button @click="saveEdit()" :disabled="saving||!editText.trim()" class="bg-brand text-white text-xs px-2 py-0.5 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="saving?'Saving…':'Save'"></span></button></div></div></template>
+                                                      <template x-if="!editing"><p class="text-xs mt-0.5 leading-relaxed" x-text="commentBody"></p></template>
+                                                      <template x-if="editing && !c.deleted"><div class="mt-1"><textarea x-model="editText" rows="2" @keydown.escape="cancelEdit()" class="w-full text-xs border border-[var(--border)] rounded-xl p-2 resize-none focus:outline-none"></textarea><div class="flex gap-2 justify-end mt-1"><button @click="cancelEdit()" class="text-xs text-muted hover:text-brand">Cancel</button><button @click="saveEdit()" :disabled="saving||!editText.trim()" class="bg-brand text-white text-xs px-2 py-0.5 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="saving?'Saving…':'Save'"></span></button></div></div></template>
                                                       <div class="flex items-center gap-3 mt-0.5">
                                                         <template x-if="c.replycount > 0 && !showingReplies"><button @click="loadReplies()" class="text-xs text-accent hover:underline">Replies (<span x-text="c.replycount"></span>)</button></template>
                                                         <template x-if="showingReplies"><button @click="(showingReplies = false) || (replyOpen = false)" class="text-xs text-muted hover:text-brand">Hide</button></template>
@@ -686,7 +686,7 @@
                                                                 <div class="flex-1 min-w-0">
                                                                   <span class="font-semibold text-xs" x-text="c.author.username"></span>
                                                                   <span class="text-xs text-muted ml-1" x-text="formatDate(c.date)"></span>
-                                                                  <p class="text-xs leading-relaxed" x-text="c.comment"></p>
+                                                                  <p class="text-xs leading-relaxed" x-text="commentBody"></p>
                                                                   <div class="flex items-center gap-2 mt-0.5">
                                                                     <template x-if="c.replycount > 0 && !showingReplies"><button @click="loadReplies()" class="text-xs text-accent hover:underline">Replies (<span x-text="c.replycount"></span>)</button></template>
                                                                     <template x-if="showingReplies"><button @click="(showingReplies = false) || (replyOpen = false)" class="text-xs text-muted hover:text-brand">Hide</button></template>
@@ -702,7 +702,7 @@
                                                                           <div class="flex-1 min-w-0">
                                                                             <span class="font-semibold text-xs" x-text="c.author.username"></span>
                                                                             <span class="text-xs text-muted ml-1" x-text="formatDate(c.date)"></span>
-                                                                            <p class="text-xs leading-relaxed" x-text="c.comment"></p>
+                                                                            <p class="text-xs leading-relaxed" x-text="commentBody"></p>
                                                                           </div>
                                                                         </div>
                                                                       </template>
