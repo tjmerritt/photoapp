@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -33,6 +34,7 @@ func (h *EmojisHandler) List(w http.ResponseWriter, r *http.Request, _ httproute
 
 	emojis, total, err := fetchEmojis(r.Context(), h.DB, photoid, offset, limit, 3)
 	if err != nil {
+		slog.Error("List", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -62,12 +64,14 @@ func (h *EmojisHandler) ListUsers(w http.ResponseWriter, r *http.Request, _ http
 		WHERE emojiid=$1 AND ($2='' OR photoid::text=$2)
 	`, emojiid, photoid).Scan(&total)
 	if err != nil {
+		slog.Error("ListUsers", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
 
 	users, err := fetchEmojiUsers(r.Context(), h.DB, photoid, emojiid, offset, limit)
 	if err != nil {
+		slog.Error("ListUsers", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -107,6 +111,7 @@ func (h *EmojisHandler) React(w http.ResponseWriter, r *http.Request, _ httprout
 		ON CONFLICT (photoid, emojiid, userid) DO NOTHING
 	`, photoid, emojiid, userID)
 	if err != nil {
+		slog.Error("React", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -134,6 +139,7 @@ func (h *EmojisHandler) Unreact(w http.ResponseWriter, r *http.Request, _ httpro
 		WHERE photoid=$1 AND emojiid=$2 AND userid=$3
 	`, photoid, emojiid, userID)
 	if err != nil {
+		slog.Error("Unreact", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -182,6 +188,7 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 		"SELECT COUNT(*) FROM emoji_types WHERE "+where,
 		args...,
 	).Scan(&total); err != nil {
+		slog.Error("ListTypes", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -204,6 +211,7 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 		args...,
 	)
 	if err != nil {
+		slog.Error("ListTypes", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -214,6 +222,7 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 		var et models.EmojiTypeResponse
 		if err := rows.Scan(&et.EmojiID, &et.EmojiChar, &et.ImageURL, &et.AltText,
 			&et.IsActive, &et.Hexcode, &et.HasSkintones); err != nil {
+			slog.Error("ListTypes", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
 		}
@@ -221,6 +230,7 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 		types = append(types, et)
 	}
 	if err := rows.Err(); err != nil {
+		slog.Error("ListTypes", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -258,6 +268,7 @@ func (h *EmojisHandler) ListVariants(w http.ResponseWriter, r *http.Request, _ h
 		ORDER  BY sort_order, created_at
 	`, hexcode)
 	if err != nil {
+		slog.Error("ListVariants", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -269,6 +280,7 @@ func (h *EmojisHandler) ListVariants(w http.ResponseWriter, r *http.Request, _ h
 		var tone string
 		if err := baseRows.Scan(&et.EmojiID, &et.EmojiChar, &et.ImageURL, &et.AltText,
 			&et.IsActive, &et.Hexcode, &tone); err != nil {
+			slog.Error("ListVariants", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
 		}
@@ -279,6 +291,7 @@ func (h *EmojisHandler) ListVariants(w http.ResponseWriter, r *http.Request, _ h
 		variants = append(variants, et)
 	}
 	if err := baseRows.Err(); err != nil {
+		slog.Error("ListVariants", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -334,6 +347,7 @@ func (h *EmojisHandler) UploadType(w http.ResponseWriter, r *http.Request, _ htt
 
 	// Ensure upload directory exists
 	if err := os.MkdirAll(h.Cfg.UploadDir, 0o755); err != nil {
+		slog.Error("UploadType", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "could not create upload directory")
 		return
 	}
@@ -345,12 +359,14 @@ func (h *EmojisHandler) UploadType(w http.ResponseWriter, r *http.Request, _ htt
 	destPath := filepath.Join(h.Cfg.UploadDir, filename)
 	dest, err := os.Create(destPath)
 	if err != nil {
+		slog.Error("UploadType", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "could not save file")
 		return
 	}
 	defer dest.Close()
 
 	if _, err := io.Copy(dest, file); err != nil {
+		slog.Error("UploadType", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "could not save file")
 		return
 	}
@@ -366,6 +382,7 @@ func (h *EmojisHandler) UploadType(w http.ResponseWriter, r *http.Request, _ htt
 		RETURNING emojiid::text
 	`, newID, imageURL, altText).Scan(&emojiid)
 	if err != nil {
+		slog.Error("UploadType", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}

@@ -168,6 +168,23 @@ type UpdatePhotoTitleRequest struct {
 	Title string `json:"title"`
 }
 
+// ── Search ────────────────────────────────────────────────────────────────────
+
+// SearchResult is a single photo match returned by the search endpoint.
+type SearchResult struct {
+	PhotoID  string `json:"photoid"`
+	ImageURL string `json:"imageurl"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+}
+
+// SearchResponse is returned by GET /api/v1/search.
+type SearchResponse struct {
+	Query   string         `json:"query"`
+	Total   int            `json:"total"`
+	Results []SearchResult `json:"results"`
+}
+
 // EmojiTypeResponse is returned after uploading a new emoji type.
 type EmojiTypeResponse struct {
 	EmojiID      string  `json:"emojiid"`

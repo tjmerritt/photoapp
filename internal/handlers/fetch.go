@@ -199,18 +199,18 @@ func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID, e
 			  AND  ($3 = '' OR p.exhibitionid::text = $3)
 			  AND  (p.is_public OR $4)
 		),
-		top_seven AS (
-			SELECT * FROM candidates ORDER BY view_count DESC LIMIT 7
+		top_ten AS (
+			SELECT * FROM candidates ORDER BY view_count DESC LIMIT 10
 		),
-		random_extra AS (
+		random_three AS (
 			SELECT * FROM candidates
-			WHERE  photoid NOT IN (SELECT photoid FROM top_seven)
+			WHERE  photoid NOT IN (SELECT photoid FROM top_ten)
 			ORDER  BY random()
-			LIMIT  1
+			LIMIT  3
 		)
-		SELECT photoid, image_url, image_width, image_height FROM random_extra
+		SELECT photoid, image_url, image_width, image_height FROM random_three
 		UNION ALL
-		SELECT photoid, image_url, image_width, image_height FROM top_seven
+		SELECT photoid, image_url, image_width, image_height FROM top_ten
 	`, labelID, photoid, exhibitionID, canSeeNonPublic)
 	if err != nil {
 		return nil, err

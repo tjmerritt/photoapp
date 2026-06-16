@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/jackc/pgx/v5"
@@ -30,6 +31,7 @@ func (h *CommentsHandler) List(w http.ResponseWriter, r *http.Request, _ httprou
 
 	comments, total, err := fetchComments(r.Context(), h.DB, photoid, parentID, offset, limit)
 	if err != nil {
+		slog.Error("List", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -118,6 +120,7 @@ func (h *CommentsHandler) Create(w http.ResponseWriter, r *http.Request, _ httpr
 		`, photoid, userID, req.Comment).Scan(&commentid, &date)
 	}
 	if err != nil {
+		slog.Error("Create", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -170,6 +173,7 @@ func (h *CommentsHandler) Update(w http.ResponseWriter, r *http.Request, ps http
 		return
 	}
 	if err != nil {
+		slog.Error("Update", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -182,6 +186,7 @@ func (h *CommentsHandler) Update(w http.ResponseWriter, r *http.Request, ps http
 		UPDATE comments SET comment_text=$1 WHERE commentid=$2
 	`, req.Comment, commentid)
 	if err != nil {
+		slog.Error("Update", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -206,6 +211,7 @@ func (h *CommentsHandler) Update(w http.ResponseWriter, r *http.Request, ps http
 		&c.CommentID, &c.Comment, &c.ReplyCount, &c.Date,
 		&c.Author.UserID, &c.Author.Username, &c.Author.TN,
 	); err != nil {
+		slog.Error("Update", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -228,6 +234,7 @@ func (h *CommentsHandler) Delete(w http.ResponseWriter, r *http.Request, ps http
 		return
 	}
 	if err != nil {
+		slog.Error("Delete", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -241,6 +248,7 @@ func (h *CommentsHandler) Delete(w http.ResponseWriter, r *http.Request, ps http
 		UPDATE comments SET deleted_at=NOW() WHERE commentid=$1
 	`, commentid)
 	if err != nil {
+		slog.Error("Delete", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}

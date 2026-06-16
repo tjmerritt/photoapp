@@ -79,6 +79,7 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		slog.Error("ServeHTTP", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -101,6 +102,7 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	const labelLimit = 10
 	labels, labelTotal, err := fetchLabels(ctx, h.DB, photoid, 0, labelLimit)
 	if err != nil {
+		slog.Error("ServeHTTP", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -114,6 +116,7 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	const emojiUserLimit = 3
 	emojis, emojiTotal, err := fetchEmojis(ctx, h.DB, photoid, 0, 20, emojiUserLimit)
 	if err != nil {
+		slog.Error("ServeHTTP", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -137,6 +140,7 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		related, err = fetchRelated(ctx, h.DB, photoid, exhibitionID, canSeeNonPublic)
 	}
 	if err != nil {
+		slog.Error("ServeHTTP", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -187,6 +191,7 @@ func (h *UserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		slog.Error("ServeHTTP", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -239,6 +244,7 @@ func (h *PatchPhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		slog.Error("ServeHTTP", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -253,6 +259,7 @@ func (h *PatchPhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		WHERE  photoid = $3
 	`, title, currentUser, photoid)
 	if err != nil {
+		slog.Error("ServeHTTP", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}

@@ -646,6 +646,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request, _ httprou
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
+		slog.Error("Register", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "server error")
 		return
 	}
@@ -665,6 +666,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request, _ httprou
 
 	token, err := h.createSession(r.Context(), userID)
 	if err != nil {
+		slog.Error("Register", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "session creation failed")
 		return
 	}
@@ -701,6 +703,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request, _ httprouter
 
 	token, err := h.createSession(r.Context(), userID)
 	if err != nil {
+		slog.Error("Login", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "session creation failed")
 		return
 	}
@@ -747,6 +750,7 @@ func (h *AuthHandler) ListUsers(w http.ResponseWriter, r *http.Request, _ httpro
 		ORDER  BY username
 	`)
 	if err != nil {
+		slog.Error("ListUsers", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -800,6 +804,7 @@ func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request, _ ht
 		`UPDATE users SET profile_image=$1, updated_at=NOW() WHERE userid=$2`,
 		body.ProfileImage, userID)
 	if err != nil {
+		slog.Error("UpdateProfile", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -855,16 +860,19 @@ func (h *AuthHandler) UploadProfileAvatar(w http.ResponseWriter, r *http.Request
 	filename := uuid.New().String() + ext
 
 	if err := os.MkdirAll(h.Cfg.UploadDir, 0o755); err != nil {
+		slog.Error("UploadProfileAvatar", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "could not create upload directory")
 		return
 	}
 	dest, err := os.Create(filepath.Join(h.Cfg.UploadDir, filename))
 	if err != nil {
+		slog.Error("UploadProfileAvatar", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "could not save file")
 		return
 	}
 	defer dest.Close()
 	if _, err := io.Copy(dest, fullFile); err != nil {
+		slog.Error("UploadProfileAvatar", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "could not save file")
 		return
 	}
