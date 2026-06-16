@@ -78,8 +78,9 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	r.DELETE("/api/v1/comments/:commentid",               auth(comments.Delete))
 
 	// ── Admin endpoints (auth + authorized_non_public enforced in handler) ──────
-	r.GET("/api/v1/admin/photos",  auth(admin.ListPhotos))
-	r.PATCH("/api/v1/admin/photo", auth(admin.SetPublic))
+	r.GET("/api/v1/admin/exhibitions", auth(admin.ListExhibitions))
+	r.GET("/api/v1/admin/photos",      auth(admin.ListPhotos))
+	r.PATCH("/api/v1/admin/photo",     auth(admin.SetPublic))
 
 	// ── Static file serving for uploaded emoji images ─────────────────────────
 	r.ServeFiles("/uploads/*filepath", http.Dir(cfg.UploadDir))

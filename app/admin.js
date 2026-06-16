@@ -10,12 +10,15 @@ function thumbUrl(url, cssWidth) {
 
 function adminApp() {
   return {
-    photos:    [],
-    total:     0,
-    offset:    0,
-    loading:   false,
-    authError: false,
-    toast:     { visible: false, message: '' },
+    exhibitions:         [],
+    selectedExhibition:  '',
+    photos:              [],
+    total:               0,
+    offset:              0,
+    loading:             false,
+    authError:           false,
+    noExhibitions:       false,
+    toast:               { visible: false, message: '' },
 
     thumbUrl(url, cssWidth) { return thumbUrl(url, cssWidth); },
 
@@ -24,12 +27,29 @@ function adminApp() {
       if (!me.loggedIn) { window.location.href = '/'; return; }
 
       // Probe for admin access (403 = no permission, 404 = server not rebuilt yet)
-      const probe = await fetch('/api/v1/admin/photos?limit=1&offset=0');
+      const probe = await fetch('/api/v1/admin/exhibitions');
       if (probe.status === 403 || probe.status === 404) { this.authError = true; return; }
 
+      const data = await probe.json();
+      this.exhibitions = data.exhibitions || [];
+
+      if (this.exhibitions.length === 0) {
+        this.noExhibitions = true;
+        return;
+      }
+
+      this.selectedExhibition = this.exhibitions[0].exhibitionid;
       await this.loadMore();
       await this.$nextTick();
       this.initScroll();
+    },
+
+    async changeExhibition() {
+      // Reset and reload when the user picks a different exhibition.
+      this.photos = [];
+      this.offset = 0;
+      this.total  = 0;
+      await this.loadMore();
     },
 
     initScroll() {
@@ -47,10 +67,12 @@ function adminApp() {
     },
 
     async loadMore() {
-      if (this.loading) return;
+      if (this.loading || !this.selectedExhibition) return;
       this.loading = true;
       try {
-        const r    = await fetch('/api/v1/admin/photos?limit=50&offset=' + this.offset);
+        var url = '/api/v1/admin/photos?limit=50&offset=' + this.offset
+                + '&exhibitionid=' + encodeURIComponent(this.selectedExhibition);
+        const r    = await fetch(url);
         const data = await r.json();
         this.total  = data.total;
         this.photos = this.photos.concat(data.photos);
