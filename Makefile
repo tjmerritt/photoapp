@@ -29,6 +29,7 @@ migrate-up:
 	psql "$$DATABASE_URL" -f migrations/007_multi_login.sql
 	psql "$$DATABASE_URL" -f migrations/008_exhibitions.sql
 	psql "$$DATABASE_URL" -f migrations/009_public_flag.sql
+	psql "$$DATABASE_URL" -f migrations/010_profile_image_source.sql
 
 migrate-down:
 	psql "$$DATABASE_URL" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"

@@ -85,12 +85,13 @@ type RelatedPhoto struct {
 }
 
 type Comment struct {
-	CommentID   string        `json:"commentid"`
-	Author      CommentAuthor `json:"author"`
-	Date        time.Time     `json:"date"`
-	ReplyCount  int           `json:"replycount"`
-	Comment     string        `json:"comment"`
-	RepliesURL  string        `json:"repliesurl"`
+	CommentID  string        `json:"commentid"`
+	Author     CommentAuthor `json:"author"`
+	Date       time.Time     `json:"date"`
+	ReplyCount int           `json:"replycount"`
+	Comment    string        `json:"comment"`
+	Deleted    bool          `json:"deleted,omitempty"`
+	RepliesURL string        `json:"repliesurl"`
 }
 
 // Photo is the full response for GET /api/v1/photo.

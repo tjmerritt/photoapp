@@ -57,6 +57,15 @@ function commentsPanel(photo) {
     posting:     false,
     loadingMore: false,
 
+    init() {
+      document.addEventListener('photoapp:comment-deleted', (e) => {
+        const idx = this.comments.findIndex(c => c.commentid === e.detail);
+        if (idx !== -1) {
+          this.comments[idx] = { ...this.comments[idx], deleted: true };
+        }
+      });
+    },
+
     async post() {
       const text = this.newText.trim();
       if (!text || !getCurrentUser()) return;
@@ -118,6 +127,21 @@ function commentItem(c, photoid, depth = 0) {
 
     get canReply() { return !!getCurrentUser() && this.depth < 5; },
 
+    // Returns '[deleted]' when the comment has been soft-deleted so the template
+    // doesn't need per-level conditional logic around c.comment.
+    get commentBody() { return this.c.deleted ? '[deleted]' : (this.c.comment || ''); },
+
+    init() {
+      // When a reply inside this comment's thread is deleted, mark it in the
+      // replies array so it shows '[deleted]' rather than disappearing.
+      document.addEventListener('photoapp:comment-deleted', (e) => {
+        const idx = this.replies.findIndex(r => r.commentid === e.detail);
+        if (idx !== -1) {
+          this.replies[idx] = { ...this.replies[idx], deleted: true };
+        }
+      });
+    },
+
     checkClamp() {
       this.$nextTick(() => {
         const el = this.$refs.commentBody;
@@ -165,12 +189,17 @@ function commentItem(c, photoid, depth = 0) {
 
     async deleteComment() {
       if (!confirm('Delete this comment?')) return;
+      const commentid = this.c.commentid;
       try {
-        const resp = await fetch(`/api/v1/comments/${encodeURIComponent(this.c.commentid)}`, {
+        const resp = await fetch(`/api/v1/comments/${encodeURIComponent(commentid)}`, {
           method: 'DELETE', headers: getAuthHeaders(),
         });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        document.dispatchEvent(new CustomEvent('photoapp:comment-deleted', { detail: this.c.commentid }));
+        // Mark this component's own comment as deleted so it shows '[deleted]'
+        // immediately and the replies beneath it remain visible.
+        this.c = { ...this.c, deleted: true };
+        this.editing = false;
+        document.dispatchEvent(new CustomEvent('photoapp:comment-deleted', { detail: commentid }));
       } catch(e) {
         document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Delete failed: ${e.message}` }));
       }
@@ -248,7 +277,7 @@ function emojiPicker(photo) {
     skintoneLoading:  false,
 
     async init() {
-      const uid = getAuthHeaders()['X-User-ID'];
+      const uid = window._testUserID;   // set for both real sessions and test-user mode
       if (uid) {
         (photo.emojis || []).forEach(em => {
           if (em.users && em.users.some(u => u.id === uid)) {
@@ -308,11 +337,11 @@ function emojiPicker(photo) {
     },
 
     async react(em) {
-      const headers = getAuthHeaders();
-      if (!headers['X-User-ID']) {
+      if (!window._loggedIn && !window._testUserID) {
         document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: 'Select a user to react.' }));
         return;
       }
+      const headers = getAuthHeaders();
       const alreadyReacted = this.reactedIds.has(em.emojiid);
       const method = alreadyReacted ? 'DELETE' : 'POST';
       try {
@@ -631,7 +660,8 @@ function photoApp() {
     testUser: null,
 
     thumbUrl(url, cssWidth) { return thumbUrl(url, cssWidth); },
-     labelColorFor(name) { return labelColorFor(name); },
+    labelColorFor(name) { return labelColorFor(name); },
+    avatarSrc(user) { return avatarSrc(user); },
 
     authHeaders() {
       if (this.loggedInUser) return {};
@@ -677,6 +707,10 @@ function photoApp() {
           window._testUserID = me.userid;
           window._loggedIn = true;
           window._currentUser = me;
+          // Notify avatarSettings (and any other listeners) that auth is ready.
+          // photoapp:auth-success is only dispatched on login; this covers the
+          // "already logged-in on page load" path where /auth/me returns a session.
+          document.dispatchEvent(new CustomEvent('photoapp:auth-ready', { detail: me }));
         }
       } catch { /* non-fatal */ }
 
@@ -698,7 +732,7 @@ function photoApp() {
         if (this.photo) this.loadPhoto(this.photo.photoid);
       });
       document.addEventListener('photoapp:profile-image', (e) => {
-        if (this.loggedInUser) this.loggedInUser.profileImage = e.detail;
+        if (this.loggedInUser) this.loggedInUser = { ...this.loggedInUser, profileImage: e.detail };
       });
     },
 
@@ -789,13 +823,49 @@ function photoApp() {
 // ─────────────────────────────────────────────────────────────────────────────
 function avatarSettings() {
   return {
-    saving:    false,
-    uploading: false,
+    saving:             false,
+    uploading:          false,
+    _avatarHash:        '',
+    _profileImageSource: '',   // local URL of the user's real photo (upload / OAuth download)
+    _provider:          '',    // 'local' | 'google' | 'apple'
+
+    init() {
+      // Sync reactive state from auth events so Alpine can track changes.
+      // photoapp:auth-ready  — page load with existing session
+      // photoapp:auth-success — login during session
+      const sync = (e) => {
+        if (!e.detail) return;
+        if (e.detail.avatarHash)        this._avatarHash         = e.detail.avatarHash;
+        if (e.detail.profileImageSource) this._profileImageSource = e.detail.profileImageSource;
+        if (e.detail.provider)          this._provider           = e.detail.provider;
+      };
+      document.addEventListener('photoapp:auth-ready',   sync);
+      document.addEventListener('photoapp:auth-success', sync);
+    },
 
     get presets() {
-      const user = window._currentUser;
-      const h = (user && user.avatarHash) || '';
+      const h = this._avatarHash;
       return h ? Array.from({ length: 20 }, (_, i) => i === 0 ? h : h + i) : [];
+    },
+
+    async selectProfileImage() {
+      if (this.saving || !this._profileImageSource) return;
+      this.saving = true;
+      const url = this._profileImageSource;
+      try {
+        const r = await fetch('/auth/profile', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ profileImage: url }),
+        });
+        if (!r.ok) throw new Error('Save failed');
+        if (window._currentUser) window._currentUser.profileImage = url;
+        window._profileImage = url;
+        document.dispatchEvent(new CustomEvent('photoapp:profile-image', { detail: url }));
+      } catch(e) {
+        document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: e.message }));
+      }
+      this.saving = false;
     },
 
     async selectPreset(hash) {
@@ -826,9 +896,16 @@ function avatarSettings() {
         const fd = new FormData();
         fd.append('image', file);
         const r = await fetch('/auth/profile/avatar', { method: 'POST', body: fd });
-        if (!r.ok) throw new Error('Upload failed');
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          throw new Error(d.error || 'Upload failed');
+        }
         const d = await r.json();
-        if (window._currentUser) window._currentUser.profileImage = d.profileImage;
+        this._profileImageSource = d.profileImage;
+        if (window._currentUser) {
+          window._currentUser.profileImage       = d.profileImage;
+          window._currentUser.profileImageSource = d.profileImage;
+        }
         document.dispatchEvent(new CustomEvent('photoapp:profile-image', { detail: d.profileImage }));
       } catch(e) {
         document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: e.message }));

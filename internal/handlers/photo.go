@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -22,7 +23,7 @@ type PhotoHandler struct {
 func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	photoid := q.Get("photoid")
-	random  := q.Get("random") == "true" || q.Get("random") == "1"
+	random := q.Get("random") == "true" || q.Get("random") == "1"
 	labelID := q.Get("label")
 
 	if photoid == "" && !random {
@@ -69,7 +70,7 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var (
 		imgURL, titleText, titleUserID, titleUsername, ownerUserID, desc string
-		imgW, imgH                                                         int
+		imgW, imgH                                                       int
 	)
 	err := row.Scan(&photoid, &imgURL, &imgW, &imgH,
 		&titleText, &titleUserID, &titleUsername, &ownerUserID, &desc)
@@ -145,6 +146,7 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	const commentLimit = 10
 	comments, commentTotal, err := fetchComments(ctx, h.DB, photoid, "", 0, commentLimit)
 	if err != nil {
+		slog.Error("fetchComments", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}

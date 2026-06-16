@@ -9,11 +9,11 @@ import (
 	"github.com/tjmerritt/photoapp/internal/models"
 )
 
-// proxyImageURL rewrites an external http:// image URL to go through the
-// /api/v1/imgproxy endpoint so the browser never makes a mixed-content request.
-// https:// URLs and relative paths are returned unchanged.
+// proxyImageURL rewrites any external (http/https) image URL to go through the
+// /api/v1/imgproxy endpoint so the browser never hits external origins, which
+// would be blocked by the app's CSP. Relative paths are returned unchanged.
 func proxyImageURL(u string) string {
-	if strings.HasPrefix(u, "http://") {
+	if strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
 		return "/api/v1/imgproxy?url=" + u
 	}
 	return u
@@ -237,44 +237,60 @@ func fetchComments(ctx context.Context, pool *db.Pool, photoid, parentID string,
 		total int
 		err   error
 	)
+	// A deleted comment is included only when it still has replies, so that
+	// those replies remain visible in context. Its text is blanked server-side.
+	// countFilter: used in single-table COUNT queries (no alias).
+	// joinFilter:  used in JOIN queries where comments is aliased as c.
+	const countFilter = `(deleted_at IS NULL OR reply_count > 0)`
+	const joinFilter = `(c.deleted_at IS NULL OR c.reply_count > 0)`
+
 	if parentID == "" {
 		err = pool.QueryRow(ctx, `
 			SELECT COUNT(*) FROM comments
-			WHERE  photoid = $1 AND parent_commentid IS NULL AND deleted_at IS NULL
-		`, photoid).Scan(&total)
+			WHERE  photoid = $1 AND parent_commentid IS NULL AND `+countFilter,
+			photoid).Scan(&total)
 	} else {
 		err = pool.QueryRow(ctx, `
 			SELECT COUNT(*) FROM comments
-			WHERE  parent_commentid = $1 AND deleted_at IS NULL
-		`, parentID).Scan(&total)
+			WHERE  parent_commentid = $1 AND `+countFilter,
+			parentID).Scan(&total)
 	}
 	if err != nil {
 		return nil, 0, err
 	}
 
-	var rows interface{ Next() bool; Scan(...any) error; Close(); Err() error }
+	const selectCols = `
+		c.commentid::text,
+		CASE WHEN c.deleted_at IS NOT NULL THEN '' ELSE c.comment_text END,
+		c.reply_count, c.created_at,
+		u.userid::text, u.username,
+		COALESCE(u.profile_image, '/avatars/' || md5(lower(trim(COALESCE(u.email, u.userid::text))))),
+		c.deleted_at IS NOT NULL`
+
+	var rows interface {
+		Next() bool
+		Scan(...any) error
+		Close()
+		Err() error
+	}
 	if parentID == "" {
 		rows, err = pool.Query(ctx, `
-			SELECT c.commentid::text, c.comment_text, c.reply_count, c.created_at,
-			       u.userid::text, u.username,
-			       COALESCE(u.profile_image, '/avatars/' || md5(lower(trim(COALESCE(u.email, u.userid::text)))))
+			SELECT `+selectCols+`
 			FROM   comments c
 			JOIN   users    u ON u.userid = c.author_userid
 			WHERE  c.photoid = $1
 			  AND  c.parent_commentid IS NULL
-			  AND  c.deleted_at IS NULL
+			  AND  `+joinFilter+`
 			ORDER  BY c.created_at
 			LIMIT  $2 OFFSET $3
 		`, photoid, limit, offset)
 	} else {
 		rows, err = pool.Query(ctx, `
-			SELECT c.commentid::text, c.comment_text, c.reply_count, c.created_at,
-			       u.userid::text, u.username,
-			       COALESCE(u.profile_image, '/avatars/' || md5(lower(trim(COALESCE(u.email, u.userid::text)))))
+			SELECT `+selectCols+`
 			FROM   comments c
 			JOIN   users    u ON u.userid = c.author_userid
 			WHERE  c.parent_commentid = $1
-			  AND  c.deleted_at IS NULL
+			  AND  `+joinFilter+`
 			ORDER  BY c.created_at
 			LIMIT  $2 OFFSET $3
 		`, parentID, limit, offset)
@@ -290,6 +306,7 @@ func fetchComments(ctx context.Context, pool *db.Pool, photoid, parentID string,
 		if err := rows.Scan(
 			&c.CommentID, &c.Comment, &c.ReplyCount, &c.Date,
 			&c.Author.UserID, &c.Author.Username, &c.Author.TN,
+			&c.Deleted,
 		); err != nil {
 			return nil, 0, err
 		}

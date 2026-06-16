@@ -12,8 +12,8 @@ import (
 // wait a delay that starts at 10 seconds and doubles on every attempt.
 
 type regRecord struct {
-	delay       time.Duration
-	allowAfter  time.Time
+	delay      time.Duration
+	allowAfter time.Time
 }
 
 const regBaseDelay = 10 * time.Second

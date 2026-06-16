@@ -158,21 +158,21 @@ func (h *EmojisHandler) Unreact(w http.ResponseWriter, r *http.Request, _ httpro
 func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	q := r.URL.Query()
 	search := strings.TrimSpace(q.Get("search"))
-	group  := strings.TrimSpace(q.Get("group"))
+	group := strings.TrimSpace(q.Get("group"))
 	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
 
 	// Build WHERE clause — only return base emojis (exclude skintone variants).
 	where := "is_active = TRUE AND base_hexcode IS NULL"
-	args  := []any{}
-	n     := 1
+	args := []any{}
+	n := 1
 	if search != "" {
 		where += fmt.Sprintf(" AND (alt_text ILIKE $%d OR tags ILIKE $%d)", n, n)
-		args   = append(args, "%"+search+"%")
+		args = append(args, "%"+search+"%")
 		n++
 	}
 	if group != "" {
 		where += fmt.Sprintf(" AND emoji_group = $%d", n)
-		args   = append(args, group)
+		args = append(args, group)
 		n++
 	}
 
