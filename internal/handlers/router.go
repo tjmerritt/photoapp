@@ -26,6 +26,7 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	labels      := &LabelsHandler{DB: pool, Cfg: cfg}
 	emojis      := &EmojisHandler{DB: pool, Cfg: cfg}
 	comments    := &CommentsHandler{DB: pool, Cfg: cfg}
+	search      := &SearchHandler{DB: pool}
 	imgProxy    := &ImgProxyHandler{Cache: imgCache}
 	admin       := &AdminHandler{DB: pool, Cfg: cfg}
 
@@ -55,6 +56,7 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	r.GET("/api/v1/emoji/types",                          emojis.ListTypes)
 	r.GET("/api/v1/emoji/variants",                       emojis.ListVariants)
 	r.GET("/api/v1/comments",                             comments.List)
+	r.HandlerFunc(http.MethodGet, "/api/v1/search",       search.ServeHTTP)
 
 	// ── Write endpoints (auth required) ───────────────────────────────────────
 

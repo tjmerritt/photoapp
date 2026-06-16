@@ -659,6 +659,8 @@ function photoApp() {
 
     testUser: null,
 
+    searchQuery: '',
+
     thumbUrl(url, cssWidth) { return thumbUrl(url, cssWidth); },
     labelColorFor(name) { return labelColorFor(name); },
     avatarSrc(user) { return avatarSrc(user); },
@@ -756,6 +758,43 @@ function photoApp() {
         window.history.replaceState(null, '', `?${qs}`);
       } catch (e) { this.error = e.message; }
       this.loading = false;
+    },
+
+    // ── Search ──────────────────────────────────────────────────────────────
+    // Calls /api/v1/search, loads the top result as the main photo, and injects
+    // the remaining results (up to 12) into the related photos sidebar.
+    async doSearch() {
+      const q = this.searchQuery.trim();
+      if (!q) return;
+      try {
+        const resp = await fetch(`/api/v1/search?q=${encodeURIComponent(q)}`, {
+          headers: this.authHeaders(),
+        });
+        if (!resp.ok) throw new Error(`Search failed (${resp.status})`);
+        const data = await resp.json();
+        const results = data.results || [];
+        if (results.length === 0) {
+          this.showToast('No photos found.');
+          return;
+        }
+        // Load the top result as the main photo (handles loading state & errors).
+        await this.loadPhoto(results[0].photoid);
+        // Replace the related sidebar with the other search results.
+        if (this.photo && results.length > 1) {
+          this.photo.related = results.slice(1).map(r => ({
+            photoid:  r.photoid,
+            imageurl: r.imageurl,
+            clickurl: `/?photoid=${encodeURIComponent(r.photoid)}`,
+            width:    r.width,
+            height:   r.height,
+          }));
+        }
+        // Preserve the search query in the URL so the page is shareable.
+        const qs = new URLSearchParams({ photoid: this.photo.photoid, q });
+        window.history.replaceState(null, '', `?${qs}`);
+      } catch(e) {
+        this.showToast(`Search failed: ${e.message}`);
+      }
     },
 
     showToast(message) {

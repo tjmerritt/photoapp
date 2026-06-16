@@ -94,9 +94,9 @@
 
     <!-- Search -->
     <div class="flex-1 max-w-sm mx-2">
-      <input type="search" placeholder="Search photos…"
+      <input type="search" x-model="searchQuery" placeholder="Search photos…"
              class="w-full px-3 py-1.5 text-sm border border-[var(--border)] rounded-full bg-gray-50 focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition"
-             @keydown.enter.prevent="showToast('Search is not yet implemented.')" />
+             @keydown.enter.prevent="doSearch()" />
     </div>
 
     <div class="ml-auto flex items-center gap-1">
