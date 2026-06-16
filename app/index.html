@@ -440,8 +440,18 @@
           </template>
           <template x-if="currentUser">
             <button @click="openLabelModal(null)"
-                    class="w-8 h-8 rounded-full bg-gray-200 hover:bg-accent hover:text-white transition flex items-center justify-center text-lg font-light shadow-sm"
-                    title="Add label">+</button>
+                    class="w-8 h-8 rounded-full bg-gray-200 hover:bg-accent hover:text-white transition flex items-center justify-center shadow-sm"
+                    title="Add label">
+              <svg viewBox="0 0 20 20" width="20" height="20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <!-- label body: rectangle split slightly left of center -->
+                <rect x="2" y="6" width="14" height="9" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+                <line x1="7.5" y1="6.75" x2="7.5" y2="14.25" stroke="currentColor" stroke-width="1.5"/>
+                <!-- plus badge top-right -->
+                <circle cx="15.5" cy="5" r="3.75" fill="white" stroke="currentColor" stroke-width="1"/>
+                <line x1="15.5" y1="3.2" x2="15.5" y2="6.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                <line x1="13.7" y1="5" x2="17.3" y2="5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+              </svg>
+            </button>
           </template>
         </div>
       </div>
@@ -487,8 +497,22 @@
             </div>
           </template>
           <button @click="$dispatch('open-emoji-picker')"
-                  class="w-8 h-8 rounded-full bg-gray-200 hover:bg-accent hover:text-white transition flex items-center justify-center text-lg font-light shadow-sm"
-                  title="Add emoji">+</button>
+                  class="w-8 h-8 rounded-full bg-gray-200 hover:bg-accent hover:text-white transition flex items-center justify-center shadow-sm"
+                  title="Add emoji">
+            <svg viewBox="0 0 20 20" width="20" height="20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <!-- smiley face -->
+              <circle cx="9" cy="11" r="6.5" stroke="currentColor" stroke-width="1.5"/>
+              <!-- eyes -->
+              <circle cx="7" cy="9.5" r="0.8" fill="currentColor"/>
+              <circle cx="11" cy="9.5" r="0.8" fill="currentColor"/>
+              <!-- smile -->
+              <path d="M6.5 12.5 Q9 15 11.5 12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/>
+              <!-- plus badge top-right -->
+              <circle cx="15.5" cy="5" r="3.75" fill="white" stroke="currentColor" stroke-width="1"/>
+              <line x1="15.5" y1="3.2" x2="15.5" y2="6.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+              <line x1="13.7" y1="5" x2="17.3" y2="5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            </svg>
+          </button>
         </div>
       </div>
 
