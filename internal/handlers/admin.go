@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/julienschmidt/httprouter"
@@ -39,6 +40,7 @@ func (h *AdminHandler) ListPhotos(w http.ResponseWriter, r *http.Request, _ http
 	if err := h.DB.QueryRow(r.Context(),
 		`SELECT COUNT(*) FROM photos WHERE deleted_at IS NULL`,
 	).Scan(&total); err != nil {
+		slog.Error("ListPhotos", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -54,6 +56,7 @@ func (h *AdminHandler) ListPhotos(w http.ResponseWriter, r *http.Request, _ http
 		LIMIT  $1 OFFSET $2
 	`, limit, offset)
 	if err != nil {
+		slog.Error("ListPhotos", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -63,6 +66,7 @@ func (h *AdminHandler) ListPhotos(w http.ResponseWriter, r *http.Request, _ http
 	for rows.Next() {
 		var p adminPhoto
 		if err := rows.Scan(&p.PhotoID, &p.ImageURL, &p.Title, &p.IsPublic); err != nil {
+			slog.Error("ListPhotos", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
 		}
@@ -70,6 +74,7 @@ func (h *AdminHandler) ListPhotos(w http.ResponseWriter, r *http.Request, _ http
 		photos = append(photos, p)
 	}
 	if err := rows.Err(); err != nil {
+		slog.Error("ListPhotos", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -110,6 +115,7 @@ func (h *AdminHandler) SetPublic(w http.ResponseWriter, r *http.Request, _ httpr
 		WHERE  photoid = $2 AND deleted_at IS NULL
 	`, body.IsPublic, photoid)
 	if err != nil {
+		slog.Error("SetPublic", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}

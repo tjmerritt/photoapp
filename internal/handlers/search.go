@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -140,6 +141,7 @@ ORDER  BY r.total_score DESC
 
 	rows, err := h.DB.Query(ctx, sqlSearch, terms, exhibitionID, canSeeNonPublic)
 	if err != nil {
+		slog.Error("ServeHTTP", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -149,6 +151,7 @@ ORDER  BY r.total_score DESC
 	for rows.Next() {
 		var sr models.SearchResult
 		if err := rows.Scan(&sr.PhotoID, &sr.ImageURL, &sr.Width, &sr.Height); err != nil {
+			slog.Error("ServeHTTP", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
 		}
@@ -156,6 +159,7 @@ ORDER  BY r.total_score DESC
 		results = append(results, sr)
 	}
 	if err := rows.Err(); err != nil {
+		slog.Error("ServeHTTP", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}

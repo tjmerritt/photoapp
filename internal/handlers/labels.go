@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/jackc/pgx/v5"
@@ -29,6 +30,7 @@ func (h *LabelsHandler) List(w http.ResponseWriter, r *http.Request, _ httproute
 
 	labels, total, err := fetchLabels(r.Context(), h.DB, photoid, offset, limit)
 	if err != nil {
+		slog.Error("List", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -76,6 +78,7 @@ func (h *LabelsHandler) Create(w http.ResponseWriter, r *http.Request, _ httprou
 		RETURNING labelid::text
 	`, photoid, userID, req.Name, req.Value).Scan(&labelid)
 	if err != nil {
+		slog.Error("Create", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -119,6 +122,7 @@ func (h *LabelsHandler) Update(w http.ResponseWriter, r *http.Request, ps httpro
 		return
 	}
 	if err != nil {
+		slog.Error("Update", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -140,6 +144,7 @@ func (h *LabelsHandler) Update(w http.ResponseWriter, r *http.Request, ps httpro
 		UPDATE labels SET name=$1, value=$2 WHERE labelid=$3
 	`, newName, newValue, labelid)
 	if err != nil {
+		slog.Error("Update", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -170,6 +175,7 @@ func (h *LabelsHandler) Delete(w http.ResponseWriter, r *http.Request, ps httpro
 		return
 	}
 	if err != nil {
+		slog.Error("Delete", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -182,6 +188,7 @@ func (h *LabelsHandler) Delete(w http.ResponseWriter, r *http.Request, ps httpro
 		UPDATE labels SET deleted_at=NOW() WHERE labelid=$1
 	`, labelid)
 	if err != nil {
+		slog.Error("Delete", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -195,6 +202,7 @@ func (h *LabelsHandler) Names(w http.ResponseWriter, r *http.Request, _ httprout
 		SELECT DISTINCT name FROM labels WHERE deleted_at IS NULL ORDER BY name
 	`)
 	if err != nil {
+		slog.Error("Names", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
@@ -222,6 +230,7 @@ func (h *LabelsHandler) Values(w http.ResponseWriter, r *http.Request, _ httprou
 		SELECT DISTINCT value FROM labels WHERE name=$1 AND deleted_at IS NULL ORDER BY value
 	`, name)
 	if err != nil {
+		slog.Error("Values", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
