@@ -93,9 +93,16 @@
     </a>
 
     <!-- Search -->
-    <form class="flex-1 max-w-sm mx-2" @submit.prevent="doSearch()">
+    <form class="flex-1 max-w-sm mx-2 flex items-center gap-1" @submit.prevent="doSearch()">
       <input type="search" x-model="searchQuery" placeholder="Search photos…"
-             class="w-full px-3 py-1.5 text-sm border border-[var(--border)] rounded-full bg-gray-50 focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition" />
+             class="flex-1 min-w-0 px-3 py-1.5 text-sm border border-[var(--border)] rounded-full bg-gray-50 focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition" />
+      <button type="submit"
+              class="shrink-0 p-1.5 rounded-full bg-gray-100 hover:bg-accent hover:text-white transition"
+              title="Search">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 115 11a6 6 0 0112 0z"/>
+        </svg>
+      </button>
     </form>
 
     <div class="ml-auto flex items-center gap-1">
