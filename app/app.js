@@ -767,11 +767,7 @@ function photoApp() {
       // Read directly from the DOM element to bypass any x-model sync lag on iOS.
       const inputEl = this.$refs && this.$refs.searchInput;
       const q = (inputEl ? inputEl.value : this.searchQuery).trim();
-      if (!q) {
-        this.showToast('Enter a search term.');
-        return;
-      }
-      this.showToast(`Searching for "${q}"…`);
+      if (!q) return;
       try {
         const resp = await fetch(`/api/v1/search?q=${encodeURIComponent(q)}`, {
           headers: this.authHeaders(),
@@ -783,19 +779,13 @@ function photoApp() {
           this.showToast('No photos found.');
           return;
         }
-        this.showToast(`Found ${results.length} photo${results.length > 1 ? 's' : ''}, loading…`);
         // Save error state before loadPhoto so we can detect failure.
         const prevError = this.error;
-        const prevPhotoID = this.photo && this.photo.photoid;
         await this.loadPhoto(results[0].photoid);
         // loadPhoto catches its own errors into this.error; surface them as toasts.
         if (this.error && this.error !== prevError) {
           this.showToast(`Could not load photo: ${this.error}`);
           return;
-        }
-        if (!this.photo || this.photo.photoid === prevPhotoID) {
-          // Either photo didn't change or loadPhoto silently returned nothing.
-          this.showToast(this.error ? `Error: ${this.error}` : 'Photo loaded (already displayed).');
         }
         // Replace the related sidebar with the other search results.
         // Use a fresh object to guarantee Alpine's reactivity picks up the change.

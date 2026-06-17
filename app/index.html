@@ -378,6 +378,19 @@
         </template>
       </div>
 
+      <!-- Related photos grid (mobile only) -->
+      <template x-if="photo.related && photo.related.length">
+        <div class="md:hidden grid grid-cols-4 gap-2">
+          <template x-for="rel in photo.related" :key="rel.photoid">
+            <a href="#" @click.prevent="loadPhoto(rel.photoid)"
+               class="block rounded-xl overflow-hidden ring-1 ring-[var(--border)] hover:ring-accent/60 transition shadow-sm">
+              <img :src="thumbUrl(rel.imageurl, 90)" :alt="rel.photoid"
+                   class="w-full aspect-square object-cover hover:opacity-90 transition" />
+            </a>
+          </template>
+        </div>
+      </template>
+
       <!-- Title + Description -->
       <div class="bg-white rounded-2xl ring-1 ring-[var(--border)] shadow-sm px-6 py-5"
            x-data="titleEditor(photo)">
