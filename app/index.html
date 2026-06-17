@@ -94,7 +94,7 @@
 
     <!-- Search -->
     <div class="flex-1 max-w-sm mx-2 flex items-center gap-1">
-      <input type="search" x-model="searchQuery" placeholder="Search photos…"
+      <input type="search" x-ref="searchInput" x-model="searchQuery" placeholder="Search photos…"
              class="flex-1 min-w-0 px-3 py-1.5 text-sm border border-[var(--border)] rounded-full bg-gray-50 focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition"
              @keyup.enter="doSearch()" />
       <button type="button" @click="doSearch()"

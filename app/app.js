@@ -764,8 +764,14 @@ function photoApp() {
     // Calls /api/v1/search, loads the top result as the main photo, and injects
     // the remaining results (up to 12) into the related photos sidebar.
     async doSearch() {
-      const q = this.searchQuery.trim();
-      if (!q) return;
+      // Read directly from the DOM element to bypass any x-model sync lag on iOS.
+      const inputEl = this.$refs && this.$refs.searchInput;
+      const q = (inputEl ? inputEl.value : this.searchQuery).trim();
+      if (!q) {
+        this.showToast('Enter a search term.');
+        return;
+      }
+      this.showToast(`Searching for "${q}"…`);
       try {
         const resp = await fetch(`/api/v1/search?q=${encodeURIComponent(q)}`, {
           headers: this.authHeaders(),
@@ -777,23 +783,41 @@ function photoApp() {
           this.showToast('No photos found.');
           return;
         }
-        // Load the top result as the main photo (handles loading state & errors).
+        this.showToast(`Found ${results.length} photo${results.length > 1 ? 's' : ''}, loading…`);
+        // Save error state before loadPhoto so we can detect failure.
+        const prevError = this.error;
+        const prevPhotoID = this.photo && this.photo.photoid;
         await this.loadPhoto(results[0].photoid);
-        // Replace the related sidebar with the other search results.
-        if (this.photo && results.length > 1) {
-          this.photo.related = results.slice(1).map(r => ({
-            photoid:  r.photoid,
-            imageurl: r.imageurl,
-            clickurl: `/?photoid=${encodeURIComponent(r.photoid)}`,
-            width:    r.width,
-            height:   r.height,
-          }));
+        // loadPhoto catches its own errors into this.error; surface them as toasts.
+        if (this.error && this.error !== prevError) {
+          this.showToast(`Could not load photo: ${this.error}`);
+          return;
         }
-        // Preserve the search query in the URL so the page is shareable.
+        if (!this.photo || this.photo.photoid === prevPhotoID) {
+          // Either photo didn't change or loadPhoto silently returned nothing.
+          this.showToast(this.error ? `Error: ${this.error}` : 'Photo loaded (already displayed).');
+        }
+        // Replace the related sidebar with the other search results.
+        // Use a fresh object to guarantee Alpine's reactivity picks up the change.
+        if (this.photo && results.length > 1) {
+          this.photo = {
+            ...this.photo,
+            related: results.slice(1).map(r => ({
+              photoid:  r.photoid,
+              imageurl: r.imageurl,
+              clickurl: `/?photoid=${encodeURIComponent(r.photoid)}`,
+              width:    r.width,
+              height:   r.height,
+            })),
+          };
+        }
+        // Scroll the newly loaded photo into view.
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        // Preserve both photoid and query in the URL.
         const qs = new URLSearchParams({ photoid: this.photo.photoid, q });
         window.history.replaceState(null, '', `?${qs}`);
       } catch(e) {
-        this.showToast(`Search failed: ${e.message}`);
+        this.showToast(`Search error: ${e.message}`);
       }
     },
 
