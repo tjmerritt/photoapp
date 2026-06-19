@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Phōtos — Coming Soon</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --brand:   #1a1a2e;
+      --accent:  #e94560;
+      --surface: #f7f5f2;
+      --card:    #ffffff;
+      --muted:   #6b7280;
+      --border:  #e5e1db;
+    }
+
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: var(--surface);
+      color: var(--brand);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    h1, h2, h3 {
+      font-family: ui-serif, Georgia, "Times New Roman", serif;
+    }
+
+    /* ── Navbar ── */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      box-shadow: 0 1px 3px rgba(0,0,0,.06);
+    }
+
+    .nav-inner {
+      max-width: 80rem;
+      margin: 0 auto;
+      padding: 0 1rem;
+      height: 3.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      text-decoration: none;
+      flex-shrink: 0;
+    }
+
+    .logo-icon {
+      width: 2rem;
+      height: 2rem;
+      border-radius: 0.5rem;
+      background: var(--brand);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .logo-icon svg { color: #fff; }
+
+    .logo-name {
+      font-family: ui-serif, Georgia, serif;
+      font-size: 1.125rem;
+      font-weight: 700;
+      color: var(--brand);
+    }
+
+    @media (max-width: 640px) { .logo-name { display: none; } }
+
+    /* ── Main ── */
+    main {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 1rem;
+    }
+
+    .card {
+      background: var(--card);
+      border-radius: 1.25rem;
+      border: 1px solid var(--border);
+      box-shadow: 0 4px 24px rgba(26,26,46,.07);
+      padding: 3rem 2.5rem;
+      max-width: 30rem;
+      width: 100%;
+      text-align: center;
+    }
+
+    .icon-ring {
+      width: 5rem;
+      height: 5rem;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 2px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 1.75rem;
+    }
+
+    .icon-ring svg {
+      width: 2.25rem;
+      height: 2.25rem;
+      color: var(--muted);
+    }
+
+    .card h1 {
+      font-size: 1.875rem;
+      line-height: 1.2;
+      margin-bottom: 0.75rem;
+      color: var(--brand);
+    }
+
+    .card p {
+      color: var(--muted);
+      font-size: 0.9375rem;
+      line-height: 1.65;
+    }
+
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 1.75rem 0;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      background: var(--accent);
+      color: #fff;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 0.3rem 0.85rem;
+      border-radius: 9999px;
+      margin-bottom: 1.25rem;
+    }
+
+    .pill svg {
+      width: 0.875rem;
+      height: 0.875rem;
+    }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      background: var(--card);
+    }
+
+    .footer-inner {
+      max-width: 80rem;
+      margin: 0 auto;
+      padding: 1.25rem 1rem;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+
+<body>
+
+<!-- ══ NAVBAR ════════════════════════════════════════════════════════════════ -->
+<nav>
+  <div class="nav-inner">
+    <a href="/" class="logo">
+      <div class="logo-icon">
+        <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/>
+        </svg>
+      </div>
+      <span class="logo-name">Phōtos</span>
+    </a>
+  </div>
+</nav>
+
+<!-- ══ MAIN ══════════════════════════════════════════════════════════════════ -->
+<main>
+  <div class="card">
+
+    <div class="icon-ring">
+      <!-- Clock / hourglass -->
+      <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              d="M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z"/>
+      </svg>
+    </div>
+
+    <div class="pill">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20A10 10 0 0012 2z"/>
+      </svg>
+      Not yet available
+    </div>
+
+    <h1>This site isn't set up yet</h1>
+
+    <hr class="divider" />
+
+    <p>
+      This domain hasn't been configured for a Phōtos exhibition.
+      If you're the owner, add this hostname to your exhibition settings
+      and it will be live within a minute.
+    </p>
+
+  </div>
+</main>
+
+<!-- ══ FOOTER ════════════════════════════════════════════════════════════════ -->
+<footer>
+  <div class="footer-inner">
+    <span>© 2024 Phōtos. All rights reserved.</span>
+  </div>
+</footer>
+
+</body>
+</html>
