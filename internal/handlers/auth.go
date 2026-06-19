@@ -43,16 +43,18 @@ type AuthHandler struct {
 
 // ── Session helpers ───────────────────────────────────────────────────────────
 
-func (h *AuthHandler) createSession(ctx context.Context, userID string) (string, error) {
+func (h *AuthHandler) createSession(r *http.Request, userID string) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
 	}
 	token := fmt.Sprintf("%x", raw)
-	_, err := h.DB.Exec(ctx, `
-		INSERT INTO sessions (userid, token_hash, expires_at)
-		VALUES ($1, $2, $3)
-	`, userID, token, time.Now().Add(sessionDuration))
+	ua := r.Header.Get("User-Agent")
+	ip := clientIP(r)
+	_, err := h.DB.Exec(r.Context(), `
+		INSERT INTO sessions (userid, token_hash, expires_at, user_agent, ip_address)
+		VALUES ($1, $2, $3, $4, $5)
+	`, userID, token, time.Now().Add(sessionDuration), ua, ip)
 	return token, err
 }
 
@@ -104,7 +106,7 @@ func (h *AuthHandler) LookupSession(ctx context.Context, token string) string {
 
 // finishLogin creates a session, sets the cookie, and redirects home.
 func (h *AuthHandler) finishLogin(w http.ResponseWriter, r *http.Request, userID string) {
-	token, err := h.createSession(r.Context(), userID)
+	token, err := h.createSession(r, userID)
 	if err != nil {
 		slog.Error("createSession failed", "error", err)
 		http.Error(w, "Session creation failed", http.StatusInternalServerError)
@@ -664,7 +666,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request, _ httprou
 		return
 	}
 
-	token, err := h.createSession(r.Context(), userID)
+	token, err := h.createSession(r, userID)
 	if err != nil {
 		slog.Error("Register", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "session creation failed")
@@ -701,7 +703,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request, _ httprouter
 		return
 	}
 
-	token, err := h.createSession(r.Context(), userID)
+	token, err := h.createSession(r, userID)
 	if err != nil {
 		slog.Error("Login", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "session creation failed")
