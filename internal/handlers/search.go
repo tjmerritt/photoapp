@@ -248,15 +248,28 @@ scores(photoid, total_score) AS (
 	for i, lf := range pq.Labels {
 		alias := fmt.Sprintf("lf%d", i)
 		na := next(lf.Name)
-		nameExpr := ilike(alias+".name", na)
 		if lf.Value != "" {
+			// Explicit label:Name=Value — both name and value must match.
 			va := next(lf.Value)
+			nameExpr := ilike(alias+".name", na)
 			valueExpr := ilike(alias+".value", va)
 			fmt.Fprintf(&b, "JOIN labels %s ON %s.photoid = p.photoid AND %s.deleted_at IS NULL AND %s AND %s\n",
 				alias, alias, alias, nameExpr, valueExpr)
 		} else {
-			fmt.Fprintf(&b, "JOIN labels %s ON %s.photoid = p.photoid AND %s.deleted_at IS NULL AND %s\n",
-				alias, alias, alias, nameExpr)
+			// label:Name only — match by label name first; if no label name matches
+			// exist anywhere, fall back to matching by label value instead.
+			fmt.Fprintf(&b, `JOIN (
+    SELECT DISTINCT photoid FROM labels
+    WHERE deleted_at IS NULL
+      AND (
+          name ILIKE '%%' || %s || '%%'
+          OR (    value ILIKE '%%' || %s || '%%'
+              AND NOT EXISTS (
+                  SELECT 1 FROM labels WHERE deleted_at IS NULL AND name ILIKE '%%' || %s || '%%'
+              ))
+      )
+) %s ON %s.photoid = p.photoid
+`, na, na, na, alias, alias)
 		}
 	}
 
