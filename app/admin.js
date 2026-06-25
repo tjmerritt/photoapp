@@ -45,6 +45,12 @@ function adminApp() {
     },
 
     async changeExhibition() {
+      // If the selected exhibition lives on a different host, navigate there.
+      const ex = this.exhibitions.find(function(e) { return e.exhibitionid === this.selectedExhibition; }, this);
+      if (ex && ex.hostname && ex.hostname !== window.location.host) {
+        window.location.href = window.location.protocol + '//' + ex.hostname + '/admin';
+        return;
+      }
       // Reset and reload when the user picks a different exhibition.
       this.photos = [];
       this.offset = 0;

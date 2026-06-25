@@ -30,6 +30,7 @@ type adminPhoto struct {
 type adminExhibition struct {
 	ExhibitionID string `json:"exhibitionid"`
 	Name         string `json:"name"`
+	Hostname     string `json:"hostname"`
 }
 
 // GET /api/v1/admin/exhibitions
@@ -44,7 +45,14 @@ func (h *AdminHandler) ListExhibitions(w http.ResponseWriter, r *http.Request, _
 	userID, _ := middleware.UserID(r.Context())
 
 	rows, err := h.DB.Query(r.Context(), `
-		SELECT e.exhibitionid::text, e.name
+		SELECT e.exhibitionid::text, e.name,
+		       COALESCE((
+		           SELECT eh.hostname
+		           FROM   exhibition_hostnames eh
+		           WHERE  eh.exhibitionid = e.exhibitionid
+		           ORDER  BY eh.created_at
+		           LIMIT  1
+		       ), '') AS hostname
 		FROM   exhibitions e
 		JOIN   user_exhibitions ue ON ue.exhibitionid = e.exhibitionid
 		WHERE  ue.userid = $1
@@ -61,7 +69,7 @@ func (h *AdminHandler) ListExhibitions(w http.ResponseWriter, r *http.Request, _
 	exhibitions := make([]adminExhibition, 0)
 	for rows.Next() {
 		var e adminExhibition
-		if err := rows.Scan(&e.ExhibitionID, &e.Name); err != nil {
+		if err := rows.Scan(&e.ExhibitionID, &e.Name, &e.Hostname); err != nil {
 			slog.Error("ListExhibitions", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
