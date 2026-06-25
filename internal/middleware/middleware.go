@@ -6,6 +6,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,22 +33,52 @@ func ExhibitionID(ctx context.Context) string {
 }
 
 // ExhibitionLookup resolves an exhibition ID from a hostname.
-type ExhibitionLookup func(ctx context.Context, hostname string) string
+// Returns (id, true) when the hostname is registered, ("", false) when not.
+type ExhibitionLookup func(ctx context.Context, hostname string) (string, bool)
 
 // Exhibition extracts the Host header and looks up the corresponding
 // exhibitionid. Tries the full host:port first, then host only.
-// The result is injected into the context; requests with no match get "".
-func Exhibition(lookup ExhibitionLookup) func(http.Handler) http.Handler {
+// When the hostname is not registered in exhibition_hostnames, every request
+// (including API calls) receives the contents of appDir/newdomain.html with
+// Cache-Control: max-age=60. The file is read once and cached in memory.
+func Exhibition(lookup ExhibitionLookup, appDir string) func(http.Handler) http.Handler {
+	var (
+		fileMu   sync.Mutex
+		body     []byte
+		readErr  error
+		loadedAt time.Time
+	)
+	load := func() {
+		fileMu.Lock()
+		defer fileMu.Unlock()
+		if time.Since(loadedAt) > 60*time.Second {
+			body, readErr = os.ReadFile(filepath.Join(appDir, "newdomain.html"))
+			loadedAt = time.Now()
+		}
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if lookup != nil {
 				hostport := r.Host
-				id := lookup(r.Context(), hostport)
-				if id == "" {
+				id, known := lookup(r.Context(), hostport)
+				if !known {
 					// Strip port and try bare hostname.
 					if host, _, err := net.SplitHostPort(hostport); err == nil {
-						id = lookup(r.Context(), host)
+						id, known = lookup(r.Context(), host)
 					}
+				}
+				if !known {
+					load()
+					if readErr != nil {
+						http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+						return
+					}
+					w.Header().Set("Content-Type", "text/html; charset=utf-8")
+					w.Header().Set("Cache-Control", "max-age=60")
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write(body)
+					return
 				}
 				if id != "" {
 					r = r.WithContext(context.WithValue(r.Context(), ctxExhibitionID, id))

@@ -411,7 +411,8 @@ func patchLabels(ctx context.Context, pool *pgxpool.Pool, photoID, ownerID strin
 	return tx.Commit(ctx)
 }
 
-// replaceLabels deletes existing labels for a photo and inserts the new set.
+// replaceLabels deletes only the labels whose names appear in the incoming set,
+// then inserts the new values. Labels with other names are left untouched.
 func replaceLabels(ctx context.Context, pool *pgxpool.Pool, photoID, ownerID string, labels []label) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -419,8 +420,12 @@ func replaceLabels(ctx context.Context, pool *pgxpool.Pool, photoID, ownerID str
 	}
 	defer tx.Rollback(ctx)
 
+	names := make([]string, len(labels))
+	for i, l := range labels {
+		names[i] = l.name
+	}
 	if _, err := tx.Exec(ctx,
-		`DELETE FROM labels WHERE photoid = $1`, photoID,
+		`DELETE FROM labels WHERE photoid = $1 AND name = ANY($2)`, photoID, names,
 	); err != nil {
 		return err
 	}
