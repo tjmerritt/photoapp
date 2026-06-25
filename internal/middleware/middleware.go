@@ -43,14 +43,18 @@ type ExhibitionLookup func(ctx context.Context, hostname string) (string, bool)
 // Cache-Control: max-age=60. The file is read once and cached in memory.
 func Exhibition(lookup ExhibitionLookup, appDir string) func(http.Handler) http.Handler {
 	var (
-		once    sync.Once
-		body    []byte
-		readErr error
+		fileMu   sync.Mutex
+		body     []byte
+		readErr  error
+		loadedAt time.Time
 	)
 	load := func() {
-		once.Do(func() {
+		fileMu.Lock()
+		defer fileMu.Unlock()
+		if time.Since(loadedAt) > 60*time.Second {
 			body, readErr = os.ReadFile(filepath.Join(appDir, "newdomain.html"))
-		})
+			loadedAt = time.Now()
+		}
 	}
 
 	return func(next http.Handler) http.Handler {
