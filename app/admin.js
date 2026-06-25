@@ -38,7 +38,10 @@ function adminApp() {
         return;
       }
 
-      this.selectedExhibition = this.exhibitions[0].exhibitionid;
+      const params = new URLSearchParams(window.location.search);
+      const requestedID = params.get('exhibitionid');
+      const match = requestedID && this.exhibitions.find(function(e) { return e.exhibitionid === requestedID; });
+      this.selectedExhibition = match ? match.exhibitionid : this.exhibitions[0].exhibitionid;
       await this.loadMore();
       await this.$nextTick();
       this.initScroll();
@@ -48,7 +51,7 @@ function adminApp() {
       // If the selected exhibition lives on a different host, navigate there.
       const ex = this.exhibitions.find(function(e) { return e.exhibitionid === this.selectedExhibition; }, this);
       if (ex && ex.hostname && ex.hostname !== window.location.host) {
-        window.location.href = window.location.protocol + '//' + ex.hostname + '/admin';
+        window.location.href = window.location.protocol + '//' + ex.hostname + '/admin?exhibitionid=' + encodeURIComponent(ex.exhibitionid);
         return;
       }
       // Reset and reload when the user picks a different exhibition.
