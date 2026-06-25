@@ -206,5 +206,31 @@ func (h *AdminHandler) SetPublic(w http.ResponseWriter, r *http.Request, _ httpr
 		return
 	}
 
+	// Keep the "Public" label in sync with is_public.
+	publicVal := "False"
+	if body.IsPublic {
+		publicVal = "True"
+	}
+	userID, _ := middleware.UserID(r.Context())
+
+	// Update an existing "Public" label if one exists.
+	ct2, err := h.DB.Exec(r.Context(), `
+		UPDATE labels
+		SET    value = $1, updated_at = NOW()
+		WHERE  photoid = $2 AND name = 'Public' AND deleted_at IS NULL
+	`, publicVal, photoid)
+	if err != nil {
+		slog.Error("SetPublic update label", "error", err)
+	} else if ct2.RowsAffected() == 0 {
+		// No existing label – insert one.
+		_, err = h.DB.Exec(r.Context(), `
+			INSERT INTO labels (photoid, added_by_userid, name, value)
+			VALUES ($1, $2, 'Public', $3)
+		`, photoid, userID, publicVal)
+		if err != nil {
+			slog.Error("SetPublic insert label", "error", err)
+		}
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
