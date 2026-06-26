@@ -763,6 +763,15 @@ function photoApp() {
     // ── Search ──────────────────────────────────────────────────────────────
     // Calls /api/v1/search, loads the top result as the main photo, and injects
     // the remaining results (up to 12) into the related photos sidebar.
+    // navigatePhoto handles clicks on related-photo links.
+    // Plain clicks load the photo in-page; modifier-key clicks (⌘, Ctrl, Shift)
+    // and middle-clicks fall through so the browser opens a new tab/window.
+    navigatePhoto(event, photoid) {
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.button === 1) return;
+      event.preventDefault();
+      this.loadPhoto(photoid);
+    },
+
     async doSearch() {
       // Read directly from the DOM element to bypass any x-model sync lag on iOS.
       const inputEl = this.$refs && this.$refs.searchInput;

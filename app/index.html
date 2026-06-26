@@ -370,7 +370,7 @@
           <div class="w-36 shrink-0 hidden md:flex flex-col gap-3 overflow-y-auto pr-1"
                :style="photo.image.height > photo.image.width ? 'max-height:85vh' : 'max-height:70vh'">
             <template x-for="rel in photo.related" :key="rel.photoid">
-              <a href="#" @click.prevent="loadPhoto(rel.photoid)" class="block rounded-xl overflow-hidden ring-1 ring-[var(--border)] hover:ring-accent/60 transition shadow-sm shrink-0">
+              <a :href="rel.clickurl" @click="navigatePhoto($event, rel.photoid)" class="block rounded-xl overflow-hidden ring-1 ring-[var(--border)] hover:ring-accent/60 transition shadow-sm shrink-0">
                 <img :src="thumbUrl(rel.imageurl, 144)" :alt="rel.photoid" class="w-full h-24 object-cover hover:opacity-90 transition" />
               </a>
             </template>
@@ -382,7 +382,7 @@
       <template x-if="photo.related && photo.related.length">
         <div class="md:hidden grid grid-cols-4 gap-2">
           <template x-for="rel in photo.related" :key="rel.photoid">
-            <a href="#" @click.prevent="loadPhoto(rel.photoid)"
+            <a :href="rel.clickurl" @click="navigatePhoto($event, rel.photoid)"
                class="block rounded-xl overflow-hidden ring-1 ring-[var(--border)] hover:ring-accent/60 transition shadow-sm">
               <img :src="thumbUrl(rel.imageurl, 90)" :alt="rel.photoid"
                    class="w-full aspect-square object-cover hover:opacity-90 transition" />
@@ -428,25 +428,28 @@
                  :class="activeLabelID === label.labelid
                    ? 'ring-2 ring-accent'
                    : 'ring-1 ring-[var(--border)]'"
-                 x-data="{ hovered: false }" @mouseenter="hovered = true" @mouseleave="hovered = false">
+                 x-data="{ open: false }" @click.outside="open = false">
+              <!-- Clicking the name toggles inline edit/delete controls (logged-in users only) -->
               <span class="label-name flex items-center px-3 py-1 text-white font-medium text-xs rounded-l-full"
+                    :class="currentUser ? 'cursor-pointer' : ''"
                     :style="'background:' + labelColorFor(label.name)"
+                    @click.stop="currentUser && (open = !open)"
                     x-text="label.name"></span>
               <span class="flex items-center px-3 py-1 bg-white text-brand font-medium rounded-r-full cursor-pointer hover:bg-gray-50 transition-colors"
                     @click.stop="loadPhoto(photo.photoid, activeLabelID === label.labelid ? null : label.labelid)"
                     :title="activeLabelID === label.labelid ? 'Clear label filter' : 'Find photos with this label'"
                     x-text="label.value"></span>
-              <template x-if="testUser && hovered">
+              <template x-if="currentUser && open">
                 <span class="absolute left-1/2 -translate-x-1/2 top-full flex flex-col items-center z-10" style="padding-top:3px">
                   <span class="flex items-center gap-1 bg-white border border-[var(--border)] rounded-lg shadow-md px-1 py-0.5">
-                    <button @click.stop="openLabelModal(label)"
+                    <button @click.stop="open = false; openLabelModal(label)"
                             class="w-6 h-6 flex items-center justify-center rounded hover:bg-gray-100 text-muted hover:text-brand transition"
                             title="Edit">
                       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 112.828 2.828L11.828 15.828a2 2 0 01-1.414.586H9v-2a2 2 0 01.586-1.414z"/>
                       </svg>
                     </button>
-                    <button @click.stop="deleteLabel(label)"
+                    <button @click.stop="open = false; deleteLabel(label)"
                             class="w-6 h-6 flex items-center justify-center rounded hover:bg-red-50 text-muted hover:text-red-500 transition"
                             title="Delete">
                       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
