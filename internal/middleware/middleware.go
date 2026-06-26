@@ -187,7 +187,7 @@ func Logger(next http.Handler) http.Handler {
 
 		attrs := []any{
 			"method",      r.Method,
-			"path",        r.URL.Path,
+			"path",        r.URL.RequestURI(),
 			"status",      rw.status,
 			"duration_ms", time.Since(start).Milliseconds(),
 			"ip",          ip,
