@@ -370,7 +370,7 @@
           <div class="w-36 shrink-0 hidden md:flex flex-col gap-3 overflow-y-auto pr-1"
                :style="photo.image.height > photo.image.width ? 'max-height:85vh' : 'max-height:70vh'">
             <template x-for="rel in photo.related" :key="rel.photoid">
-              <a href="#" @click.prevent="loadPhoto(rel.photoid)" class="block rounded-xl overflow-hidden ring-1 ring-[var(--border)] hover:ring-accent/60 transition shadow-sm shrink-0">
+              <a :href="rel.clickurl" @click="navigatePhoto($event, rel.photoid)" class="block rounded-xl overflow-hidden ring-1 ring-[var(--border)] hover:ring-accent/60 transition shadow-sm shrink-0">
                 <img :src="thumbUrl(rel.imageurl, 144)" :alt="rel.photoid" class="w-full h-24 object-cover hover:opacity-90 transition" />
               </a>
             </template>
@@ -382,7 +382,7 @@
       <template x-if="photo.related && photo.related.length">
         <div class="md:hidden grid grid-cols-4 gap-2">
           <template x-for="rel in photo.related" :key="rel.photoid">
-            <a href="#" @click.prevent="loadPhoto(rel.photoid)"
+            <a :href="rel.clickurl" @click="navigatePhoto($event, rel.photoid)"
                class="block rounded-xl overflow-hidden ring-1 ring-[var(--border)] hover:ring-accent/60 transition shadow-sm">
               <img :src="thumbUrl(rel.imageurl, 90)" :alt="rel.photoid"
                    class="w-full aspect-square object-cover hover:opacity-90 transition" />
