@@ -38,7 +38,7 @@ make run
 
 ## Authentication
 
-PhotoApp supports three login methods: Google, Apple, and local email/password. Each requires configuration before use.
+PhotoApp supports four login methods: Google, Apple, Facebook, and local email/password. Each requires configuration before use.
 
 ### Google OAuth2 Setup
 
@@ -131,6 +131,41 @@ APPLE_REDIRECT_URL=https://yourdomain.com/auth/apple/callback
 
 ---
 
+### Facebook Login Setup
+
+**1. Create a Facebook App**
+
+1. Go to [https://developers.facebook.com/apps](https://developers.facebook.com/apps) and click **Create App**.
+2. Choose **Consumer** (or **Business** if applicable) as the use case, then click **Next**.
+3. Enter an app name and contact email, then click **Create App**.
+
+**2. Add Facebook Login**
+
+1. In the left sidebar, click **Add Product** and choose **Facebook Login → Set Up**.
+2. Select **Web**, enter your site URL (e.g. `http://localhost:8080`), and click **Save**.
+3. Go to **Facebook Login → Settings** in the left sidebar.
+4. Under **Valid OAuth Redirect URIs** add:
+   - Development: `http://localhost:8080/auth/facebook/callback`
+   - Production: `https://yourdomain.com/auth/facebook/callback`
+5. Click **Save Changes**.
+
+**3. Gather credentials**
+
+1. Go to **Settings → Basic** in the left sidebar.
+2. Copy the **App ID** (this is your `FACEBOOK_CLIENT_ID`) and the **App Secret** (click **Show** to reveal it).
+
+> **Note:** While your app is in Development mode, only app admins and testers can log in. Go to **App Review → Requests** or **Roles → Test Users** to add testers, or submit for review to make the app public.
+
+**4. Set environment variables**
+
+```env
+FACEBOOK_CLIENT_ID=your-app-id
+FACEBOOK_CLIENT_SECRET=your-app-secret
+FACEBOOK_REDIRECT_URL=http://localhost:8080/auth/facebook/callback
+```
+
+---
+
 ### Local Email/Password Auth
 
 No external setup required. Registration is rate-limited per IP: the first attempt is allowed immediately, then the wait doubles on each subsequent attempt (10 s → 20 s → 40 s → …).
@@ -157,6 +192,9 @@ SESSION_SECRET=a-long-random-string-at-least-32-chars
 | `APPLE_KEY_ID` | For Apple login | Key identifier from developer portal |
 | `APPLE_PRIVATE_KEY` | For Apple login | PEM content of the `.p8` private key |
 | `APPLE_REDIRECT_URL` | Optional | Overrides `BASE_URL + /auth/apple/callback` |
+| `FACEBOOK_CLIENT_ID` | For Facebook login | App ID from Facebook Developer portal |
+| `FACEBOOK_CLIENT_SECRET` | For Facebook login | App Secret from Facebook Developer portal |
+| `FACEBOOK_REDIRECT_URL` | Optional | Overrides `BASE_URL + /auth/facebook/callback` |
 
 ---
 

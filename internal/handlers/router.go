@@ -112,6 +112,8 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	r.GET("/auth/google/callback",       authHandler.GoogleCallback)
 	r.GET("/auth/apple",                 authHandler.AppleLogin)
 	r.POST("/auth/apple/callback",       authHandler.AppleCallback)
+	r.GET("/auth/facebook",              authHandler.FacebookLogin)
+	r.GET("/auth/facebook/callback",     authHandler.FacebookCallback)
 	r.POST("/auth/register",             authHandler.Register)
 	r.POST("/auth/login",                authHandler.Login)
 	r.PATCH("/auth/profile",             authHandler.UpdateProfile)

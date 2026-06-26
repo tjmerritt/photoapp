@@ -47,6 +47,11 @@ type Config struct {
 	ApplePrivateKey    string // PEM content of the .p8 key file
 	AppleRedirectURL   string
 
+	// Facebook Login
+	FacebookClientID     string
+	FacebookClientSecret string
+	FacebookRedirectURL  string
+
 	// Base URL (needed to build absolute redirect URIs)
 	BaseURL string
 }
@@ -97,6 +102,9 @@ func Load() (*Config, error) {
 		AppleKeyID:      envStr("APPLE_KEY_ID", ""),
 		ApplePrivateKey: envStr("APPLE_PRIVATE_KEY", ""),
 		AppleRedirectURL: envStr("APPLE_REDIRECT_URL", ""),
+		FacebookClientID:     envStr("FACEBOOK_CLIENT_ID", ""),
+		FacebookClientSecret: envStr("FACEBOOK_CLIENT_SECRET", ""),
+		FacebookRedirectURL:  envStr("FACEBOOK_REDIRECT_URL", ""),
 	}, nil
 }
 
