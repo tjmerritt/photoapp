@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,8 @@ const (
 	ctxRequestID           ctxKey = "requestid"
 	ctxExhibitionID        ctxKey = "exhibitionid"
 	ctxAuthorizedNonPublic ctxKey = "authorized_non_public"
+	ctxUsername            ctxKey = "username"
+	ctxSessionID           ctxKey = "sessionid"
 )
 
 // ExhibitionID retrieves the current exhibition ID from the context.
@@ -89,6 +92,20 @@ func Exhibition(lookup ExhibitionLookup, appDir string) func(http.Handler) http.
 	}
 }
 
+// Username retrieves the authenticated username from the request context.
+// Returns "" for unauthenticated requests.
+func Username(ctx context.Context) string {
+	v, _ := ctx.Value(ctxUsername).(string)
+	return v
+}
+
+// SessionID retrieves the short session identifier from the request context.
+// Returns "" for unauthenticated requests or test-user (header) auth.
+func SessionID(ctx context.Context) string {
+	v, _ := ctx.Value(ctxSessionID).(string)
+	return v
+}
+
 // UserID retrieves the authenticated user ID from the request context.
 // Returns ("", false) when no user is present (unauthenticated request).
 func UserID(ctx context.Context) (string, bool) {
@@ -146,18 +163,49 @@ func RequestID(next http.Handler) http.Handler {
 	})
 }
 
-// Logger logs method, path, status and latency for every request.
+// Logger logs method, path, status, latency, IP, host, username, and session
+// for every request. It runs inside Auth so all context values are available.
 func Logger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rw, r)
-		slog.Info("request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", rw.status,
+
+		ctx := r.Context()
+
+		// Client IP: prefer X-Forwarded-For (first entry), fall back to RemoteAddr.
+		ip := r.Header.Get("X-Forwarded-For")
+		if ip == "" {
+			if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+				ip = h
+			} else {
+				ip = r.RemoteAddr
+			}
+		} else if idx := strings.IndexByte(ip, ','); idx != -1 {
+			ip = strings.TrimSpace(ip[:idx])
+		}
+
+		attrs := []any{
+			"method",      r.Method,
+			"path",        r.URL.Path,
+			"status",      rw.status,
 			"duration_ms", time.Since(start).Milliseconds(),
-		)
+			"ip",          ip,
+			"host",        r.Host,
+		}
+		if rid, ok := ctx.Value(ctxRequestID).(string); ok && rid != "" {
+			attrs = append(attrs, "request_id", rid)
+		}
+		if user := Username(ctx); user != "" {
+			attrs = append(attrs, "user", user)
+		} else if uid, ok := UserID(ctx); ok {
+			attrs = append(attrs, "user", uid) // fall back to userid when username not loaded
+		}
+		if sid := SessionID(ctx); sid != "" {
+			attrs = append(attrs, "session", sid)
+		}
+
+		slog.Info("request", attrs...)
 	})
 }
 
@@ -169,9 +217,10 @@ type SessionLookup func(ctx context.Context, token string) string
 // It is called once per request after the user is resolved.
 type UserFlagsLookup func(ctx context.Context, userID string) UserFlags
 
-// UserFlags holds permission flags loaded for an authenticated user.
+// UserFlags holds per-user data loaded once per request after auth resolves.
 type UserFlags struct {
 	AuthorizedNonPublic bool
+	Username            string
 }
 
 // Auth resolves the acting user from:
@@ -186,12 +235,17 @@ func Auth(headerName string, sessionLookup SessionLookup, flagsLookup UserFlagsL
 	const cookieName = "photoapp_session"
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var uid string
+			var uid, sessionID string
 
 			// 1. Session cookie.
 			if cookie, err := r.Cookie(cookieName); err == nil && cookie.Value != "" {
 				if sessionLookup != nil {
 					uid = sessionLookup(r.Context(), cookie.Value)
+				}
+				if uid != "" {
+					// Store first 8 hex chars as a short, safe session identifier.
+					n := min(8, len(cookie.Value))
+					sessionID = cookie.Value[:n]
 				}
 			}
 
@@ -202,9 +256,15 @@ func Auth(headerName string, sessionLookup SessionLookup, flagsLookup UserFlagsL
 
 			if uid != "" {
 				ctx := context.WithValue(r.Context(), ctxUserID, uid)
+				if sessionID != "" {
+					ctx = context.WithValue(ctx, ctxSessionID, sessionID)
+				}
 				if flagsLookup != nil {
 					flags := flagsLookup(ctx, uid)
 					ctx = context.WithValue(ctx, ctxAuthorizedNonPublic, flags.AuthorizedNonPublic)
+					if flags.Username != "" {
+						ctx = context.WithValue(ctx, ctxUsername, flags.Username)
+					}
 				}
 				r = r.WithContext(ctx)
 			}

@@ -83,9 +83,9 @@ func (h *AuthHandler) clearSessionCookie(w http.ResponseWriter) {
 func (h *AuthHandler) LookupUserFlags(ctx context.Context, userID string) middleware.UserFlags {
 	var flags middleware.UserFlags
 	_ = h.DB.QueryRow(ctx, `
-		SELECT authorized_non_public FROM users
+		SELECT authorized_non_public, username FROM users
 		WHERE  userid = $1 AND deleted_at IS NULL
-	`, userID).Scan(&flags.AuthorizedNonPublic)
+	`, userID).Scan(&flags.AuthorizedNonPublic, &flags.Username)
 	return flags
 }
 
