@@ -24,6 +24,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	"golang.org/x/oauth2/facebook"
 
 	"github.com/tjmerritt/photoapp/internal/config"
 	"github.com/tjmerritt/photoapp/internal/db"
@@ -215,8 +216,11 @@ func (h *AuthHandler) localizeExternalProfileImage(ctx context.Context, userID, 
 // findOrCreateOAuthUser looks up a user by their provider+sub, creating one if needed.
 func (h *AuthHandler) findOrCreateOAuthUser(ctx context.Context, provider, sub, email, name, picture string) (string, error) {
 	col := "google_id"
-	if provider == "apple" {
+	switch provider {
+	case "apple":
 		col = "apple_id"
+	case "facebook":
+		col = "facebook_id"
 	}
 
 	var userID string
@@ -317,8 +321,9 @@ func (h *AuthHandler) uniqueUsername(ctx context.Context, base string) string {
 // Public endpoint; no authentication required.
 func (h *AuthHandler) Config(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	middleware.WriteJSON(w, http.StatusOK, map[string]bool{
-		"googleEnabled": h.Cfg.GoogleClientID != "",
-		"appleEnabled":  h.Cfg.AppleClientID != "",
+		"googleEnabled":   h.Cfg.GoogleClientID != "",
+		"appleEnabled":    h.Cfg.AppleClientID != "",
+		"facebookEnabled": h.Cfg.FacebookClientID != "",
 	})
 }
 
@@ -597,6 +602,89 @@ func appleJWKToRSA(nB64, eB64 string) (*rsa.PublicKey, error) {
 		eInt = eInt<<8 | int(b)
 	}
 	return &rsa.PublicKey{N: n, E: eInt}, nil
+}
+
+// ── Facebook Login ────────────────────────────────────────────────────────────
+
+func (h *AuthHandler) facebookConfig() *oauth2.Config {
+	redirectURL := h.Cfg.FacebookRedirectURL
+	if redirectURL == "" {
+		redirectURL = h.Cfg.BaseURL + "/auth/facebook/callback"
+	}
+	return &oauth2.Config{
+		ClientID:     h.Cfg.FacebookClientID,
+		ClientSecret: h.Cfg.FacebookClientSecret,
+		RedirectURL:  redirectURL,
+		Scopes:       []string{"public_profile", "email"},
+		Endpoint:     facebook.Endpoint,
+	}
+}
+
+// GET /auth/facebook
+func (h *AuthHandler) FacebookLogin(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	if h.Cfg.FacebookClientID == "" {
+		http.Error(w, "Facebook login not configured", http.StatusNotImplemented)
+		return
+	}
+	state := uuid.New().String()
+	http.SetCookie(w, &http.Cookie{Name: "oauth_state", Value: state, Path: "/", HttpOnly: true, MaxAge: 600})
+	http.Redirect(w, r, h.facebookConfig().AuthCodeURL(state, oauth2.AccessTypeOnline), http.StatusTemporaryRedirect)
+}
+
+// GET /auth/facebook/callback
+func (h *AuthHandler) FacebookCallback(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	stateCookie, err := r.Cookie("oauth_state")
+	if err != nil || stateCookie.Value != r.URL.Query().Get("state") {
+		http.Error(w, "Invalid OAuth state", http.StatusBadRequest)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: "oauth_state", Value: "", MaxAge: -1, Path: "/"})
+
+	token, err := h.facebookConfig().Exchange(r.Context(), r.URL.Query().Get("code"))
+	if err != nil {
+		slog.Error("Facebook token exchange failed", "error", err)
+		http.Error(w, "Token exchange failed", http.StatusInternalServerError)
+		return
+	}
+
+	resp, err := h.facebookConfig().Client(r.Context(), token).
+		Get("https://graph.facebook.com/me?fields=id,name,email,picture.type(large)")
+	if err != nil {
+		http.Error(w, "Failed to fetch user info", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	var info struct {
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Email   string `json:"email"`
+		Picture struct {
+			Data struct {
+				URL string `json:"url"`
+			} `json:"data"`
+		} `json:"picture"`
+	}
+	if err := json.Unmarshal(body, &info); err != nil || info.ID == "" {
+		http.Error(w, "Invalid user info from Facebook", http.StatusInternalServerError)
+		return
+	}
+
+	pictureURL := info.Picture.Data.URL
+
+	userID, err := h.findOrCreateOAuthUser(r.Context(), "facebook", info.ID, info.Email, info.Name, pictureURL)
+	if err != nil {
+		slog.Error("findOrCreateOAuthUser failed", "error", err)
+		http.Error(w, "User creation failed", http.StatusInternalServerError)
+		return
+	}
+
+	if pictureURL != "" {
+		h.localizeExternalProfileImage(r.Context(), userID, pictureURL)
+	}
+
+	h.finishLogin(w, r, userID)
 }
 
 // ── Local email/password auth ─────────────────────────────────────────────────
