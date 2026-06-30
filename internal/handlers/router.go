@@ -7,10 +7,11 @@ import (
 	"github.com/tjmerritt/photoapp/internal/config"
 	"github.com/tjmerritt/photoapp/internal/db"
 	"github.com/tjmerritt/photoapp/internal/middleware"
+	"github.com/tjmerritt/photoapp/internal/permissions"
 )
 
 // NewRouter builds and returns the fully configured HTTP router.
-func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhibitionHandler *ExhibitionHandler) (http.Handler, error) {
+func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhibitionHandler *ExhibitionHandler, checker *permissions.Checker) (http.Handler, error) {
 	r := httprouter.New()
 
 	// ── Image cache ───────────────────────────────────────────────────────────
@@ -29,6 +30,7 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	search      := &SearchHandler{DB: pool}
 	imgProxy    := &ImgProxyHandler{Cache: imgCache}
 	admin       := &AdminHandler{DB: pool, Cfg: cfg}
+	perms       := &PermissionsHandler{Checker: checker}
 
 	// Convenience: wrap a httprouter.Handle with RequireAuth
 	auth := func(h httprouter.Handle) httprouter.Handle {
@@ -57,6 +59,7 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	r.GET("/api/v1/emoji/variants",                       emojis.ListVariants)
 	r.GET("/api/v1/comments",                             comments.List)
 	r.HandlerFunc(http.MethodGet, "/api/v1/search",       search.ServeHTTP)
+	r.GET("/api/v1/permissions",                          perms.ServeHTTP)
 
 	// ── Write endpoints (auth required) ───────────────────────────────────────
 
