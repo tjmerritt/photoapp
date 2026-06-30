@@ -11,19 +11,22 @@ record of gaps and proposed remedies.
 
 Several findings share a common prerequisite. Handlers that act on a photo need
 the photo's `exhibitionid` to perform meaningful permission checks (grants are
-scoped to exhibitions). Currently no handler fetches this. A shared helper
-should be introduced before wiring permissions into the photo-related handlers:
+scoped to exhibitions).
+
+**Status: RESOLVED** — `internal/handlers/resolve.go` provides:
 
 ```go
 // resolvePhotoExhibition returns the exhibitionid for the given photo,
 // or "" and pgx.ErrNoRows if the photo does not exist.
-func resolvePhotoExhibition(ctx context.Context, db *db.Pool, photoid string) (string, error)
+// Results are cached in a process-wide sync.Map (photoid → exhibitionid)
+// because the relationship is immutable — a photo never changes exhibitions.
+// Deleted photos are not re-queried because the cached exhibitionid remains
+// correct even after soft-deletion. The cache clears on server restart.
+func resolvePhotoExhibition(ctx context.Context, pool *db.Pool, photoid string) (string, error)
 ```
 
-Additionally, the `PermissionsHandler` and `Checker` are already wired into the
-router, but no existing handler holds a reference to `*permissions.Checker`. Each
-handler struct that needs permission checks must gain a `Checker *permissions.Checker`
-field, or a shared helper must be passed through the router.
+The `PermissionsHandler`, `PhotoHandler`, `SearchHandler`, and `AdminHandler`
+are already wired with `Checker *permissions.Checker` fields via the router.
 
 ---
 
