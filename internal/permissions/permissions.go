@@ -8,21 +8,81 @@
 //   - Team       — members of a named team (entity_ref = teamid)
 //   - User       — a specific user (entity_ref = userid)
 //
-// A Resource is what is being acted on:
+// # Ownership model
+//
+// Photos and Galleries both belong directly to an Exhibition.
+// Displays belong to a Gallery. Labels, Emojis, and Comments belong to a Photo.
+// Displays reference Photos via slots but do not own them.
+//
+//	Exhibition
+//	├── Gallery
+//	│   └── Display          (slots reference Photos)
+//	└── Photo
+//	    ├── Label
+//	    ├── Emoji reaction
+//	    └── Comment
+//
+// # Resource scope types
+//
 //   - Global (nil scope) — applies to the whole exhibition
 //   - Exhibition         — a specific exhibition
-//   - Gallery            — a specific gallery
+//   - Gallery            — a specific gallery (covers Displays within it)
 //   - Display            — a specific display
-//   - Photo              — a specific photo
+//   - Photo              — a specific photo (covers its Labels, Emojis, Comments)
 //
-// A Permission is what the entity wants to do:
-//   - View, Create, Modify, Delete
-//   - Admin, LabelAdmin, EmojiAdmin, UserAdmin, GalleryAdmin
+// # Permission hierarchy
 //
-// Roles bundle a set of permissions and are granted to entities, optionally
-// scoped to a resource. Checking is hierarchical: a grant on Exhibition X
-// covers any Gallery/Display/Photo within it; a global (nil) grant covers
-// everything in the exhibition.
+// Grants nest along the ownership chain. A grant at a parent scope covers all
+// children. The two independent chains are:
+//
+//	Gallery chain:  Global → Exhibition → Gallery → Display
+//	Photo chain:    Global → Exhibition → Photo
+//
+// Photos are NOT under the Gallery chain. galleryID is only meaningful when
+// checking Display permissions. For all Photo, Label, Emoji, and Comment
+// permission checks, pass galleryID = "".
+//
+//	Call site                       exhibitionID  galleryID  resourceType  resourceRef
+//	───────────────────────────────────────────────────────────────────────────────────
+//	Check gallery G                 E             ""         Gallery       G
+//	Check display D in gallery G    E             G          Display       D
+//	Check photo P                   E             ""         Photo         P
+//	Check labels/emojis/comments    E             ""         Photo         P
+//	Check a global/admin permission E             ""         ""            ""
+//
+// # Permissions
+//
+// Gallery-level (checking a Gallery resource or a global grant):
+//
+//	GalleryView, GalleryCreate, GalleryModify, GalleryDelete
+//
+// Display-level (checking a Display resource, or a Gallery/Exhibition/global grant):
+//
+//	DisplayView, DisplayCreate, DisplayModify, DisplayDelete
+//
+// Photo-level:
+//
+//	PhotoCreate, PhotoDelete
+//
+// Photo label permissions:
+//
+//	PhotoLabelView, PhotoLabelCreate, PhotoLabelModify, PhotoLabelDelete
+//
+// Photo emoji permissions (no Modify — reactions are add or remove only):
+//
+//	PhotoEmojiView, PhotoEmojiCreate, PhotoEmojiDelete
+//
+// Photo comment permissions:
+//
+//	PhotoCommentView, PhotoCommentCreate, PhotoCommentModify, PhotoCommentDelete
+//
+// Administrative permissions:
+//
+//	Admin, LabelAdmin, EmojiAdmin, UserAdmin, GalleryAdmin
+//
+// Handlers check the fine-grained permission for the specific action being
+// performed. Ownership checks (e.g. "can only modify your own label") are
+// enforced in the handler after the permission check passes.
 package permissions
 
 import (
@@ -50,12 +110,54 @@ const (
 	ResourcePhoto      = "Photo"
 )
 
-// Permission values — what action is requested.
+// Gallery permissions.
 const (
-	PermView         = "View"
-	PermCreate       = "Create"
-	PermModify       = "Modify"
-	PermDelete       = "Delete"
+	PermGalleryView   = "GalleryView"
+	PermGalleryCreate = "GalleryCreate"
+	PermGalleryModify = "GalleryModify"
+	PermGalleryDelete = "GalleryDelete"
+)
+
+// Display permissions.
+const (
+	PermDisplayView   = "DisplayView"
+	PermDisplayCreate = "DisplayCreate"
+	PermDisplayModify = "DisplayModify"
+	PermDisplayDelete = "DisplayDelete"
+)
+
+// Photo permissions.
+const (
+	PermPhotoCreate = "PhotoCreate" // upload a new photo
+	PermPhotoDelete = "PhotoDelete" // delete a photo
+)
+
+// Photo label permissions.
+const (
+	PermPhotoLabelView   = "PhotoLabelView"
+	PermPhotoLabelCreate = "PhotoLabelCreate"
+	PermPhotoLabelModify = "PhotoLabelModify"
+	PermPhotoLabelDelete = "PhotoLabelDelete"
+)
+
+// Photo emoji permissions.
+// There is no PhotoEmojiModify — reactions are added or removed, not edited.
+const (
+	PermPhotoEmojiView   = "PhotoEmojiView"
+	PermPhotoEmojiCreate = "PhotoEmojiCreate"
+	PermPhotoEmojiDelete = "PhotoEmojiDelete"
+)
+
+// Photo comment permissions.
+const (
+	PermPhotoCommentView   = "PhotoCommentView"
+	PermPhotoCommentCreate = "PhotoCommentCreate"
+	PermPhotoCommentModify = "PhotoCommentModify"
+	PermPhotoCommentDelete = "PhotoCommentDelete"
+)
+
+// Administrative permissions.
+const (
 	PermAdmin        = "Admin"
 	PermLabelAdmin   = "LabelAdmin"
 	PermEmojiAdmin   = "EmojiAdmin"
@@ -81,17 +183,31 @@ type Checker struct {
 	DB *db.Pool
 }
 
-// Check reports whether the user identified by userID holds permission on
-// (resourceType, resourceRef) within exhibitionID.
+// Check reports whether the user identified by userID holds permission on the
+// given resource.
 //
-//   - Pass userID = "" for unauthenticated (Public) requests.
-//   - Pass resourceType = "" / resourceRef = "" to check a global permission
-//     (not scoped to any specific resource).
-//   - exhibitionID is used for exhibition-level grant matching; pass "" to
-//     skip that tier.
+// Parameters:
+//
+//	userID       — the authenticated user's ID; "" for unauthenticated (Public)
+//	exhibitionID — the current exhibition; matched against Exhibition-scoped grants
+//	galleryID    — the gallery a Display belongs to; pass "" for everything else.
+//	               Gallery-scoped grants satisfy Display permission checks when
+//	               galleryID matches. Photos, Labels, Emojis, and Comments do not
+//	               go through the Gallery tier — always pass "" for those.
+//	resourceType — the type being acted on (ResourceGallery, ResourceDisplay,
+//	               ResourcePhoto); "" to check a global/admin permission only
+//	resourceRef  — the UUID of the specific resource; "" when resourceType is ""
+//	permission   — the permission string (e.g. PermDisplayModify, PermPhotoLabelCreate)
+//
+// Matching follows the ownership chain:
+//
+//	Display: Global → Exhibition → Gallery → Display
+//	Photo:   Global → Exhibition → Photo
+//
+// A grant at any ancestor tier satisfies the check.
 func (c *Checker) Check(
 	ctx context.Context,
-	userID, exhibitionID,
+	userID, exhibitionID, galleryID,
 	resourceType, resourceRef,
 	permission string,
 ) (bool, error) {
@@ -117,15 +233,21 @@ func (c *Checker) Check(
 			                         ))
 			       )
 			  AND  (
+			           -- Global grant: applies everywhere
 			           erg.resource_type IS NULL
+			           -- Exhibition-level grant: covers all galleries/displays/photos within
 			        OR ($3 <> '' AND erg.resource_type = 'Exhibition'
 			                     AND erg.resource_ref = $3)
-			        OR ($4 <> '' AND $5 <> ''
-			                     AND erg.resource_type = $4
-			                     AND erg.resource_ref  = $5)
+			           -- Gallery-level grant: covers all displays within this gallery
+			        OR ($4 <> '' AND erg.resource_type = 'Gallery'
+			                     AND erg.resource_ref = $4)
+			           -- Exact resource match
+			        OR ($5 <> '' AND $6 <> ''
+			                     AND erg.resource_type = $5
+			                     AND erg.resource_ref  = $6)
 			       )
 		)
-	`, permission, userID, exhibitionID, resourceType, resourceRef).Scan(&exists)
+	`, permission, userID, exhibitionID, galleryID, resourceType, resourceRef).Scan(&exists)
 	return exists, err
 }
 
@@ -133,11 +255,11 @@ func (c *Checker) Check(
 // where the error is unrecoverable (e.g. startup validation).
 func (c *Checker) MustCheck(
 	ctx context.Context,
-	userID, exhibitionID,
+	userID, exhibitionID, galleryID,
 	resourceType, resourceRef,
 	permission string,
 ) bool {
-	ok, err := c.Check(ctx, userID, exhibitionID, resourceType, resourceRef, permission)
+	ok, err := c.Check(ctx, userID, exhibitionID, galleryID, resourceType, resourceRef, permission)
 	if err != nil {
 		panic(fmt.Sprintf("permissions.MustCheck: %v", err))
 	}
@@ -145,9 +267,13 @@ func (c *Checker) MustCheck(
 }
 
 // UserPermissions returns all effective permission grants for userID within
-// exhibitionID. The result set is deduplicated: if the same permission is
-// granted via multiple paths (role, entity, or resource scope), it appears
-// only once per unique (permission, resource_type, resource_ref) triple.
+// the current exhibition. Returns global grants, exhibition-scoped grants, and
+// all resource-scoped grants (Gallery, Display, Photo) so the frontend can
+// reason about per-resource access without additional round-trips.
+//
+// The result is deduplicated: the same (permission, resource_type, resource_ref)
+// triple appears only once even if it is reachable via multiple roles or entity
+// memberships.
 //
 // Pass userID = "" to get permissions for an unauthenticated visitor.
 func (c *Checker) UserPermissions(
@@ -176,9 +302,16 @@ func (c *Checker) UserPermissions(
 		                         ))
 		       )
 		  AND  (
+		           -- Global grants
 		           erg.resource_type IS NULL
+		           -- Exhibition-level grants
 		        OR ($2 <> '' AND erg.resource_type = 'Exhibition'
 		                     AND erg.resource_ref = $2)
+		           -- Gallery, Display, and Photo grants within this exhibition.
+		           -- We include all resource-scoped grants whose role belongs to
+		           -- this exhibition so the frontend has the complete picture.
+		        OR ($2 <> '' AND erg.resource_type IN ('Gallery', 'Display', 'Photo')
+		                     AND r.exhibitionid = $2::uuid)
 		       )
 		ORDER  BY rp.permission, erg.resource_type, erg.resource_ref
 	`, userID, exhibitionID)
@@ -199,14 +332,15 @@ func (c *Checker) UserPermissions(
 }
 
 // HasAny reports whether the user holds at least one of the given permissions
-// at the global or exhibition level. Useful for showing/hiding UI sections.
+// at the global or exhibition level. Useful for showing/hiding UI sections
+// without knowing a specific resource ID.
 func (c *Checker) HasAny(
 	ctx context.Context,
 	userID, exhibitionID string,
-	permissions ...string,
+	perms ...string,
 ) (bool, error) {
-	for _, p := range permissions {
-		ok, err := c.Check(ctx, userID, exhibitionID, "", "", p)
+	for _, p := range perms {
+		ok, err := c.Check(ctx, userID, exhibitionID, "", "", "", p)
 		if err != nil {
 			return false, err
 		}

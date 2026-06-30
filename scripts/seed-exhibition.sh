@@ -89,30 +89,51 @@ ON CONFLICT (exhibitionid, name) DO NOTHING;
 
 -- ── Role permissions ──────────────────────────────────────────────────────────
 
--- Viewer: read-only
-INSERT INTO role_permissions (roleid, permission)
-SELECT roleid, perm
-FROM   roles,
-       (VALUES ('View')) AS p(perm)
-WHERE  exhibitionid = '$EXHIBITION_ID'::uuid
-  AND  name = 'Viewer'
-ON CONFLICT DO NOTHING;
-
--- Contributor: standard CRUD
-INSERT INTO role_permissions (roleid, permission)
-SELECT roleid, perm
-FROM   roles,
-       (VALUES ('View'), ('Create'), ('Modify'), ('Delete')) AS p(perm)
-WHERE  exhibitionid = '$EXHIBITION_ID'::uuid
-  AND  name = 'Contributor'
-ON CONFLICT DO NOTHING;
-
--- Admin: full access
+-- Viewer: read-only access to galleries, displays, photos, and their annotations.
 INSERT INTO role_permissions (roleid, permission)
 SELECT roleid, perm
 FROM   roles,
        (VALUES
-           ('View'), ('Create'), ('Modify'), ('Delete'),
+           ('GalleryView'),
+           ('DisplayView'),
+           ('PhotoLabelView'),
+           ('PhotoEmojiView'),
+           ('PhotoCommentView')
+       ) AS p(perm)
+WHERE  exhibitionid = '$EXHIBITION_ID'::uuid
+  AND  name = 'Viewer'
+ON CONFLICT DO NOTHING;
+
+-- Contributor: can browse galleries/displays, upload photos, and fully manage
+-- labels, emoji reactions, and comments. PhotoDelete and gallery/display
+-- creation/deletion are intentionally omitted — only Admins may do those.
+INSERT INTO role_permissions (roleid, permission)
+SELECT roleid, perm
+FROM   roles,
+       (VALUES
+           ('GalleryView'),
+           ('DisplayView'),
+           ('PhotoCreate'),
+           ('PhotoLabelView'),   ('PhotoLabelCreate'),   ('PhotoLabelModify'),   ('PhotoLabelDelete'),
+           ('PhotoEmojiView'),   ('PhotoEmojiCreate'),   ('PhotoEmojiDelete'),
+           ('PhotoCommentView'), ('PhotoCommentCreate'), ('PhotoCommentModify'), ('PhotoCommentDelete')
+       ) AS p(perm)
+WHERE  exhibitionid = '$EXHIBITION_ID'::uuid
+  AND  name = 'Contributor'
+ON CONFLICT DO NOTHING;
+
+-- Admin: all permissions including gallery/display management, photo deletion,
+-- and administrative controls.
+INSERT INTO role_permissions (roleid, permission)
+SELECT roleid, perm
+FROM   roles,
+       (VALUES
+           ('GalleryView'),   ('GalleryCreate'),   ('GalleryModify'),   ('GalleryDelete'),
+           ('DisplayView'),   ('DisplayCreate'),   ('DisplayModify'),   ('DisplayDelete'),
+           ('PhotoCreate'),   ('PhotoDelete'),
+           ('PhotoLabelView'),   ('PhotoLabelCreate'),   ('PhotoLabelModify'),   ('PhotoLabelDelete'),
+           ('PhotoEmojiView'),   ('PhotoEmojiCreate'),   ('PhotoEmojiDelete'),
+           ('PhotoCommentView'), ('PhotoCommentCreate'), ('PhotoCommentModify'), ('PhotoCommentDelete'),
            ('Admin'), ('LabelAdmin'), ('EmojiAdmin'), ('UserAdmin'), ('GalleryAdmin')
        ) AS p(perm)
 WHERE  exhibitionid = '$EXHIBITION_ID'::uuid
