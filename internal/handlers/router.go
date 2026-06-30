@@ -21,15 +21,15 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	}
 
 	// ── Handler instances ─────────────────────────────────────────────────────
-	photos      := &PhotoHandler{DB: pool, Cfg: cfg}
+	photos      := &PhotoHandler{DB: pool, Cfg: cfg, Checker: checker}
 	patchPhoto  := &PatchPhotoHandler{DB: pool, Cfg: cfg}
 	users       := &UserHandler{DB: pool}
 	labels      := &LabelsHandler{DB: pool, Cfg: cfg}
 	emojis      := &EmojisHandler{DB: pool, Cfg: cfg}
 	comments    := &CommentsHandler{DB: pool, Cfg: cfg}
-	search      := &SearchHandler{DB: pool}
+	search      := &SearchHandler{DB: pool, Checker: checker}
 	imgProxy    := &ImgProxyHandler{Cache: imgCache}
-	admin       := &AdminHandler{DB: pool, Cfg: cfg}
+	admin       := &AdminHandler{DB: pool, Cfg: cfg, Checker: checker}
 	perms       := &PermissionsHandler{Checker: checker}
 
 	// Convenience: wrap a httprouter.Handle with RequireAuth
@@ -80,7 +80,7 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	r.PATCH("/api/v1/comments/:commentid",                auth(comments.Update))
 	r.DELETE("/api/v1/comments/:commentid",               auth(comments.Delete))
 
-	// ── Admin endpoints (auth + authorized_non_public enforced in handler) ──────
+	// ── Admin endpoints (auth + PermAdmin enforced in handler) ───────────────────
 	r.GET("/api/v1/admin/exhibitions", auth(admin.ListExhibitions))
 	r.GET("/api/v1/admin/photos",      auth(admin.ListPhotos))
 	r.PATCH("/api/v1/admin/photo",     auth(admin.SetPublic))

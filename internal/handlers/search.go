@@ -9,6 +9,7 @@ import (
 	"github.com/tjmerritt/photoapp/internal/db"
 	"github.com/tjmerritt/photoapp/internal/middleware"
 	"github.com/tjmerritt/photoapp/internal/models"
+	"github.com/tjmerritt/photoapp/internal/permissions"
 )
 
 // SearchHandler handles GET /api/v1/search?q=<query>
@@ -26,7 +27,8 @@ import (
 //
 // Any remaining tokens are scored as free text across all fields.
 type SearchHandler struct {
-	DB *db.Pool
+	DB      *db.Pool
+	Checker *permissions.Checker
 }
 
 // ── Query Parsing ─────────────────────────────────────────────────────────────
@@ -143,11 +145,11 @@ func parseSearchQuery(raw string) parsedQuery {
 // Fixed parameters:
 //
 //	$1 = exhibitionID string ('' means all exhibitions)
-//	$2 = canSeeNonPublic bool
+//	$2 = canSeePrivate bool (true when caller holds PrivatePhotoView)
 //
 // Additional parameters are appended dynamically starting at $3.
-func buildSearchSQL(pq parsedQuery, exhibitionID string, canSeeNonPublic bool) (string, []interface{}) {
-	args := []interface{}{exhibitionID, canSeeNonPublic}
+func buildSearchSQL(pq parsedQuery, exhibitionID string, canSeePrivate bool) (string, []interface{}) {
+	args := []interface{}{exhibitionID, canSeePrivate}
 	argN := 2
 
 	// next registers a new query argument and returns its placeholder.
@@ -343,9 +345,10 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	exhibitionID := middleware.ExhibitionID(ctx)
-	canSeeNonPublic := middleware.AuthorizedNonPublic(ctx)
+	userID, _ := middleware.UserID(ctx)
+	canSeePrivate, _ := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermPrivatePhotoView)
 
-	sql, args := buildSearchSQL(pq, exhibitionID, canSeeNonPublic)
+	sql, args := buildSearchSQL(pq, exhibitionID, canSeePrivate)
 
 	rows, err := h.DB.Query(ctx, sql, args...)
 	if err != nil {

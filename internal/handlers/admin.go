@@ -10,12 +10,14 @@ import (
 	"github.com/tjmerritt/photoapp/internal/config"
 	"github.com/tjmerritt/photoapp/internal/db"
 	"github.com/tjmerritt/photoapp/internal/middleware"
+	"github.com/tjmerritt/photoapp/internal/permissions"
 )
 
 // AdminHandler handles admin-only photo management endpoints.
 type AdminHandler struct {
-	DB  *db.Pool
-	Cfg *config.Config
+	DB      *db.Pool
+	Cfg     *config.Config
+	Checker *permissions.Checker
 }
 
 // adminPhoto is the shape returned by GET /api/v1/admin/photos.
@@ -35,14 +37,15 @@ type adminExhibition struct {
 
 // GET /api/v1/admin/exhibitions
 // Returns exhibitions the logged-in user is a member of.
-// Requires: authenticated + authorized_non_public.
+// Requires: authenticated + PermAdmin.
 func (h *AdminHandler) ListExhibitions(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	if !middleware.AuthorizedNonPublic(r.Context()) {
+	userID, _ := middleware.UserID(r.Context())
+	exhibitionID := middleware.ExhibitionID(r.Context())
+	ok, err := h.Checker.Check(r.Context(), userID, exhibitionID, "", "", "", permissions.PermAdmin)
+	if err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
-
-	userID, _ := middleware.UserID(r.Context())
 
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT e.exhibitionid::text, e.name,
@@ -89,9 +92,11 @@ func (h *AdminHandler) ListExhibitions(w http.ResponseWriter, r *http.Request, _
 
 // GET /api/v1/admin/photos?offset=&limit=&exhibitionid=
 // Returns photos, optionally filtered to a single exhibition.
-// Requires: authenticated + authorized_non_public.
+// Requires: authenticated + PermAdmin.
 func (h *AdminHandler) ListPhotos(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	if !middleware.AuthorizedNonPublic(r.Context()) {
+	userID, _ := middleware.UserID(r.Context())
+	ok, err := h.Checker.Check(r.Context(), userID, middleware.ExhibitionID(r.Context()), "", "", "", permissions.PermAdmin)
+	if err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -179,9 +184,12 @@ func (h *AdminHandler) ListPhotos(w http.ResponseWriter, r *http.Request, _ http
 
 // PATCH /api/v1/admin/photo?photoid=
 // Body: {"is_public": true|false}
-// Requires: authenticated + authorized_non_public.
+// Requires: authenticated + PermAdmin.
 func (h *AdminHandler) SetPublic(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	if !middleware.AuthorizedNonPublic(r.Context()) {
+	userID, _ := middleware.UserID(r.Context())
+	exhibitionID := middleware.ExhibitionID(r.Context())
+	ok, err := h.Checker.Check(r.Context(), userID, exhibitionID, "", "", "", permissions.PermAdmin)
+	if err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -219,7 +227,6 @@ func (h *AdminHandler) SetPublic(w http.ResponseWriter, r *http.Request, _ httpr
 	if body.IsPublic {
 		publicVal = "True"
 	}
-	userID, _ := middleware.UserID(r.Context())
 
 	// Update an existing "Public" label if one exists.
 	ct2, err := h.DB.Exec(r.Context(), `

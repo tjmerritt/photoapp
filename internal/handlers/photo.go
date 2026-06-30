@@ -12,12 +12,14 @@ import (
 	"github.com/tjmerritt/photoapp/internal/db"
 	"github.com/tjmerritt/photoapp/internal/middleware"
 	"github.com/tjmerritt/photoapp/internal/models"
+	"github.com/tjmerritt/photoapp/internal/permissions"
 )
 
 // PhotoHandler handles GET /api/v1/photo?photoid=<id>
 type PhotoHandler struct {
-	DB  *db.Pool
-	Cfg *config.Config
+	DB      *db.Pool
+	Cfg     *config.Config
+	Checker *permissions.Checker
 }
 
 func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -33,8 +35,8 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	currentUser, _ := middleware.UserID(r.Context())
 	exhibitionID := middleware.ExhibitionID(r.Context())
-	canSeeNonPublic := middleware.AuthorizedNonPublic(r.Context())
 	ctx := r.Context()
+	canSeePrivate, _ := h.Checker.Check(ctx, currentUser, exhibitionID, "", "", "", permissions.PermPrivatePhotoView)
 
 	// ── Core photo row ────────────────────────────────────────────────────────
 	var row pgx.Row
@@ -52,7 +54,7 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			  AND (p.is_public OR $2)
 			ORDER BY random()
 			LIMIT 1
-		`, exhibitionID, canSeeNonPublic)
+		`, exhibitionID, canSeePrivate)
 	} else {
 		row = h.DB.QueryRow(ctx, `
 			SELECT
@@ -65,7 +67,7 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			WHERE p.photoid = $1 AND p.deleted_at IS NULL
 			  AND ($2 = '' OR p.exhibitionid::text = $2)
 			  AND (p.is_public OR $3)
-		`, photoid, exhibitionID, canSeeNonPublic)
+		`, photoid, exhibitionID, canSeePrivate)
 	}
 
 	var (
@@ -135,9 +137,9 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// ── Related photos ────────────────────────────────────────────────────────
 	var related []models.RelatedPhoto
 	if labelID != "" {
-		related, err = fetchRelatedByLabel(ctx, h.DB, photoid, labelID, exhibitionID, canSeeNonPublic)
+		related, err = fetchRelatedByLabel(ctx, h.DB, photoid, labelID, exhibitionID, canSeePrivate)
 	} else {
-		related, err = fetchRelated(ctx, h.DB, photoid, exhibitionID, canSeeNonPublic)
+		related, err = fetchRelated(ctx, h.DB, photoid, exhibitionID, canSeePrivate)
 	}
 	if err != nil {
 		slog.Error("ServeHTTP", "error", err)

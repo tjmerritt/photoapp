@@ -41,10 +41,11 @@ Comments
 	Modify
 	Delete
 Photo
-	View
-	Create		-- Upload a photo
-	Modify		-- Implies all permisions for Labels, Emoji, and Comments for a photo
-	Delete		-- Delete a photo
+	PrivatePhotoView -- See photos where is_public = false. Without this, only public photos are visible.
+	                 -- Granted to users by adding them to a team whose role includes this permission.
+	                 -- Not granted to Public or LoggedIn by default; Admin role holds it.
+	Create		 -- Upload a photo
+	Delete		 -- Delete a photo
 Display
 	View
 	Create

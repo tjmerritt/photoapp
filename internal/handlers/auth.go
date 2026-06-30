@@ -79,14 +79,14 @@ func (h *AuthHandler) clearSessionCookie(w http.ResponseWriter) {
 	})
 }
 
-// LookupUserFlags returns permission flags for an authenticated user.
+// LookupUserFlags returns per-user data for an authenticated user.
 // Called once per request after the user ID is resolved.
 func (h *AuthHandler) LookupUserFlags(ctx context.Context, userID string) middleware.UserFlags {
 	var flags middleware.UserFlags
 	_ = h.DB.QueryRow(ctx, `
-		SELECT authorized_non_public, username FROM users
+		SELECT username FROM users
 		WHERE  userid = $1 AND deleted_at IS NULL
-	`, userID).Scan(&flags.AuthorizedNonPublic, &flags.Username)
+	`, userID).Scan(&flags.Username)
 	return flags
 }
 

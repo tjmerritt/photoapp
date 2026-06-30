@@ -31,27 +31,17 @@ field, or a shared helper must be passed through the router.
 
 **Handler:** `PhotoHandler.ServeHTTP`
 
-**Current behavior:** Photo visibility is gated on `canSeeNonPublic`, a boolean
-loaded from the `users.authorized_non_public` column. Labels, emojis, and
-comments are returned unconditionally for any photo the caller can see — there
-is no check against `PhotoLabelView`, `PhotoEmojiView`, or `PhotoCommentView`.
+**Status: RESOLVED** — `canSeeNonPublic` replaced with
+`checker.Check(ctx, userID, exhibitionID, "", "", "", PermPrivatePhotoView)`.
+The `authorized_non_public` column is dropped in migration 013.
 
-**Problem:** The `authorized_non_public` flag is a legacy side-channel that
-predates the permissions model. It is not expressed as a role grant in
-`entity_role_grants` and cannot be administered through the role system.
+To grant a user access to private photos, add them to a team whose role
+includes `PrivatePhotoView`. The seed script grants this permission to the
+Admin role by default.
 
-**Proposed solution:**
-- Replace `canSeeNonPublic` with a call to
-  `checker.Check(ctx, userID, exhibitionID, "", "", "", PermAdmin)` (or a
-  dedicated `PrivatePhotoView` permission) to determine whether the caller may
-  see non-public photos.
-- Gate the labels block on `PhotoLabelView`, the emojis block on
-  `PhotoEmojiView`, and the comments block on `PhotoCommentView`, each checked
-  at the exhibition level. Because the default `Viewer` role (granted to
-  `Public`) already includes all three, this is a no-op for current behavior
-  but correctly respects future role configuration.
-- The exact policy for private-photo visibility (which permission grants access)
-  should be decided before implementing.
+Remaining gap: Labels, emojis, and comments are returned unconditionally for
+any photo the caller can see — there is no check against `PhotoLabelView`,
+`PhotoEmojiView`, or `PhotoCommentView` (see Finding 2 and Finding 8).
 
 ---
 
@@ -223,22 +213,10 @@ resolve the exhibition.
 
 **Handler:** `SearchHandler.ServeHTTP` / `buildSearchSQL`
 
-**Current behavior:** The query filter `(p.is_public OR $2)` uses the legacy
-`canSeeNonPublic` flag passed as a SQL argument.
-
-**Problem:** Same root cause as Finding 1 — the flag is not tied to the role
-system and cannot be administered through it.
-
-**Proposed solution:** Replace `canSeeNonPublic` with a permission check at
-request time:
-
-```go
-canSeeAll, _ := checker.Check(ctx, userID, exhibitionID, "", "", "", PermAdmin)
-```
-
-Pass `canSeeAll` into `buildSearchSQL` in place of `canSeeNonPublic`. The
-argument name and SQL filter remain structurally the same; only the source of
-the boolean changes.
+**Status: RESOLVED** — `canSeeNonPublic` replaced with
+`checker.Check(ctx, userID, exhibitionID, "", "", "", PermPrivatePhotoView)`.
+The boolean is passed into `buildSearchSQL` under the name `canSeePrivate`;
+the SQL filter `(p.is_public OR $2)` is structurally unchanged.
 
 ---
 
@@ -247,27 +225,10 @@ the boolean changes.
 **Handler:** `AdminHandler.ListExhibitions`, `AdminHandler.ListPhotos`,
 `AdminHandler.SetPublic`
 
-**Current behavior:** All three endpoints gate on
-`middleware.AuthorizedNonPublic()` — the old boolean flag — rather than the
-permission model.
-
-**Problem:** Admin access cannot be managed through roles. Granting or revoking
-admin access requires a direct `UPDATE users SET authorized_non_public = TRUE`
-in the database.
-
-**Proposed solution:** Replace the `AuthorizedNonPublic` guard with:
-
-```go
-ok, err := checker.Check(ctx, userID, exhibitionID, "", "", "", PermAdmin)
-if err != nil || !ok {
-    middleware.WriteError(w, http.StatusForbidden, "admin access required")
-    return
-}
-```
-
-Once all admin endpoints are migrated, the `authorized_non_public` column on
-`users` and the `AuthorizedNonPublic` context key in middleware can be
-deprecated and eventually removed.
+**Status: RESOLVED** — All three admin endpoints now call
+`checker.Check(ctx, userID, exhibitionID, "", "", "", PermAdmin)`.
+The `AuthorizedNonPublic()` middleware function and `authorized_non_public`
+DB column have been removed (migration 013).
 
 ---
 
@@ -296,7 +257,7 @@ else → 403
 
 | Endpoint | Current gate | Missing check | Notes |
 |---|---|---|---|
-| `GET /api/v1/photo` | `is_public` flag | `PermAdmin` for non-public; `PhotoLabel/Emoji/CommentView` per block | Replace legacy flag |
+| `GET /api/v1/photo` | `is_public` flag | ~~`PermPrivatePhotoView` for non-public~~ ✓ done; `PhotoLabel/Emoji/CommentView` per block still pending | |
 | `GET /api/v1/labels` | none | `PhotoLabelView` | |
 | `POST /api/v1/labels` | auth only | `PhotoLabelCreate`; restricted-label → `PermLabelAdmin` | Needs exhibition resolution |
 | `PATCH /api/v1/labels/:id` | auth + ownership | `PhotoLabelModify`; `PermLabelAdmin` override | |
@@ -310,8 +271,8 @@ else → 403
 | `POST /api/v1/comments` | auth only | `PhotoCommentCreate` | Needs exhibition resolution |
 | `PATCH /api/v1/comments/:id` | auth + ownership | `PhotoCommentModify`; `PermAdmin` override | |
 | `DELETE /api/v1/comments/:id` | auth + ownership | `PhotoCommentDelete`; `PermAdmin` override | |
-| `GET /api/v1/search` | `is_public` flag | `PermAdmin` for non-public visibility | Replace legacy flag |
+| `GET /api/v1/search` | `is_public` flag | ~~`PermPrivatePhotoView`~~ ✓ done | |
 | `PATCH /api/v1/photo` | auth + ownership | `PermAdmin` override | |
-| `GET /api/v1/admin/exhibitions` | `authorized_non_public` flag | `PermAdmin` | Replace legacy flag |
-| `GET /api/v1/admin/photos` | `authorized_non_public` flag | `PermAdmin` | Replace legacy flag |
-| `PATCH /api/v1/admin/photo` | `authorized_non_public` flag | `PermAdmin` | Replace legacy flag |
+| `GET /api/v1/admin/exhibitions` | `authorized_non_public` flag | ~~`PermAdmin`~~ ✓ done | |
+| `GET /api/v1/admin/photos` | `authorized_non_public` flag | ~~`PermAdmin`~~ ✓ done | |
+| `PATCH /api/v1/admin/photo` | `authorized_non_public` flag | ~~`PermAdmin`~~ ✓ done | |
