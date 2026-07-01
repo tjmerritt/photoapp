@@ -12,23 +12,34 @@ import (
 	"github.com/tjmerritt/photoapp/internal/db"
 	"github.com/tjmerritt/photoapp/internal/middleware"
 	"github.com/tjmerritt/photoapp/internal/models"
+	"github.com/tjmerritt/photoapp/internal/permissions"
 )
 
 type LabelsHandler struct {
-	DB  *db.Pool
-	Cfg *config.Config
+	DB      *db.Pool
+	Cfg     *config.Config
+	Checker *permissions.Checker
 }
 
 // GET /api/v1/labels?photoid=&offset=&limit=
 func (h *LabelsHandler) List(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
 	photoid := r.URL.Query().Get("photoid")
 	if photoid == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "photoid is required")
 		return
 	}
+
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := middleware.ExhibitionID(ctx)
+	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermPhotoLabelView); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
 
-	labels, total, err := fetchLabels(r.Context(), h.DB, photoid, offset, limit)
+	labels, total, err := fetchLabels(ctx, h.DB, photoid, offset, limit)
 	if err != nil {
 		slog.Error("List", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -46,12 +57,13 @@ func (h *LabelsHandler) List(w http.ResponseWriter, r *http.Request, _ httproute
 
 // POST /api/v1/labels?photoid=  (requires auth)
 func (h *LabelsHandler) Create(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
 	photoid := r.URL.Query().Get("photoid")
 	if photoid == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "photoid is required")
 		return
 	}
-	userID := middleware.MustUserID(r.Context())
+	userID := middleware.MustUserID(ctx)
 
 	var req models.AddLabelRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -63,16 +75,23 @@ func (h *LabelsHandler) Create(w http.ResponseWriter, r *http.Request, _ httprou
 		return
 	}
 
-	// Verify photo exists
-	var exists bool
-	_ = h.DB.QueryRow(r.Context(), `SELECT TRUE FROM photos WHERE photoid=$1 AND deleted_at IS NULL`, photoid).Scan(&exists)
-	if !exists {
+	// Resolve exhibition for this photo (also verifies photo exists).
+	exhibitionID, err := resolvePhotoExhibition(ctx, h.DB, photoid)
+	if err != nil {
 		middleware.WriteError(w, http.StatusNotFound, "photo not found")
 		return
 	}
 
+	// Require PhotoLabelCreate permission scoped to this photo.
+	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", permissions.ResourcePhoto, photoid, permissions.PermPhotoLabelCreate); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	// TODO(phase-5b): if label_names.restricted = TRUE for req.Name, also require PermLabelAdmin.
+
 	var labelid string
-	err := h.DB.QueryRow(r.Context(), `
+	err = h.DB.QueryRow(ctx, `
 		INSERT INTO labels (photoid, added_by_userid, name, value)
 		VALUES ($1, $2, $3, $4)
 		RETURNING labelid::text
@@ -84,7 +103,7 @@ func (h *LabelsHandler) Create(w http.ResponseWriter, r *http.Request, _ httprou
 	}
 
 	var username string
-	_ = h.DB.QueryRow(r.Context(), `SELECT username FROM users WHERE userid=$1`, userID).Scan(&username)
+	_ = h.DB.QueryRow(ctx, `SELECT username FROM users WHERE userid=$1`, userID).Scan(&username)
 
 	middleware.WriteJSON(w, http.StatusCreated, models.Label{
 		LabelID:  labelid,
@@ -110,13 +129,15 @@ func (h *LabelsHandler) Update(w http.ResponseWriter, r *http.Request, ps httpro
 		return
 	}
 
-	// Fetch existing label and check ownership
-	var existingName, existingValue, ownerID string
-	err := h.DB.QueryRow(r.Context(), `
-		SELECT name, value, added_by_userid::text
+	ctx := r.Context()
+
+	// Fetch existing label, ownership, and photoid for permission resolution.
+	var existingName, existingValue, ownerID, photoid string
+	err := h.DB.QueryRow(ctx, `
+		SELECT name, value, added_by_userid::text, photoid::text
 		FROM   labels
 		WHERE  labelid = $1 AND deleted_at IS NULL
-	`, labelid).Scan(&existingName, &existingValue, &ownerID)
+	`, labelid).Scan(&existingName, &existingValue, &ownerID, &photoid)
 	if err == pgx.ErrNoRows {
 		middleware.WriteError(w, http.StatusNotFound, "label not found")
 		return
@@ -127,8 +148,11 @@ func (h *LabelsHandler) Update(w http.ResponseWriter, r *http.Request, ps httpro
 		return
 	}
 	if ownerID != userID {
-		middleware.WriteError(w, http.StatusForbidden, "you may only edit your own labels")
-		return
+		exhibitionID, _ := resolvePhotoExhibition(ctx, h.DB, photoid)
+		if ok, _ := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermLabelAdmin); !ok {
+			middleware.WriteError(w, http.StatusForbidden, "you may only edit your own labels")
+			return
+		}
 	}
 
 	newName := existingName
@@ -140,7 +164,7 @@ func (h *LabelsHandler) Update(w http.ResponseWriter, r *http.Request, ps httpro
 		newValue = *req.Value
 	}
 
-	_, err = h.DB.Exec(r.Context(), `
+	_, err = h.DB.Exec(ctx, `
 		UPDATE labels SET name=$1, value=$2 WHERE labelid=$3
 	`, newName, newValue, labelid)
 	if err != nil {
@@ -150,7 +174,7 @@ func (h *LabelsHandler) Update(w http.ResponseWriter, r *http.Request, ps httpro
 	}
 
 	var username string
-	_ = h.DB.QueryRow(r.Context(), `SELECT username FROM users WHERE userid=$1`, userID).Scan(&username)
+	_ = h.DB.QueryRow(ctx, `SELECT username FROM users WHERE userid=$1`, userID).Scan(&username)
 
 	middleware.WriteJSON(w, http.StatusOK, models.Label{
 		LabelID:  labelid,
@@ -166,10 +190,12 @@ func (h *LabelsHandler) Delete(w http.ResponseWriter, r *http.Request, ps httpro
 	labelid := ps.ByName("labelid")
 	userID := middleware.MustUserID(r.Context())
 
-	var ownerID string
-	err := h.DB.QueryRow(r.Context(), `
-		SELECT added_by_userid::text FROM labels WHERE labelid=$1 AND deleted_at IS NULL
-	`, labelid).Scan(&ownerID)
+	ctx := r.Context()
+
+	var ownerID, photoid string
+	err := h.DB.QueryRow(ctx, `
+		SELECT added_by_userid::text, photoid::text FROM labels WHERE labelid=$1 AND deleted_at IS NULL
+	`, labelid).Scan(&ownerID, &photoid)
 	if err == pgx.ErrNoRows {
 		middleware.WriteError(w, http.StatusNotFound, "label not found")
 		return
@@ -180,11 +206,14 @@ func (h *LabelsHandler) Delete(w http.ResponseWriter, r *http.Request, ps httpro
 		return
 	}
 	if ownerID != userID {
-		middleware.WriteError(w, http.StatusForbidden, "you may only delete your own labels")
-		return
+		exhibitionID, _ := resolvePhotoExhibition(ctx, h.DB, photoid)
+		if ok, _ := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermLabelAdmin); !ok {
+			middleware.WriteError(w, http.StatusForbidden, "you may only delete your own labels")
+			return
+		}
 	}
 
-	_, err = h.DB.Exec(r.Context(), `
+	_, err = h.DB.Exec(ctx, `
 		UPDATE labels SET deleted_at=NOW() WHERE labelid=$1
 	`, labelid)
 	if err != nil {

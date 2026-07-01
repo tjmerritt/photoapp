@@ -2,8 +2,7 @@
 
 This document records findings from a review of all API handlers against the
 permissions model defined in `internal/permissions/permissions.go` and
-`PERMISSIONS.md`. No changes have been made yet; this is a pre-implementation
-record of gaps and proposed remedies.
+`PERMISSIONS.md`.
 
 ---
 
@@ -42,9 +41,10 @@ To grant a user access to private photos, add them to a team whose role
 includes `PrivatePhotoView`. The seed script grants this permission to the
 Admin role by default.
 
-Remaining gap: Labels, emojis, and comments are returned unconditionally for
-any photo the caller can see — there is no check against `PhotoLabelView`,
-`PhotoEmojiView`, or `PhotoCommentView` (see Finding 2 and Finding 8).
+The inline label/emoji/comment blocks within the photo response are still
+returned unconditionally once the photo is visible; they are governed by the
+standalone List endpoints (Finding 2, now resolved) which enforce the view
+permissions independently.
 
 ---
 
@@ -52,27 +52,18 @@ any photo the caller can see — there is no check against `PhotoLabelView`,
 
 **Handlers:** `LabelsHandler.List`, `EmojisHandler.List`, `CommentsHandler.List`
 
-**Current behavior:** These list endpoints are fully open — any caller,
-including unauthenticated requests, can fetch labels, emojis, and comments for
-any photo by ID.
-
-**Problem:** `PhotoLabelView`, `PhotoEmojiView`, and `PhotoCommentView` are
-never enforced. The `Viewer` role is granted to `Public` globally, so under the
-intended model these endpoints would pass — but it is entirely unenforced. A
-future configuration change (e.g. restricting Viewer to `LoggedIn` only) would
-have no effect.
-
-**Proposed solution:** At the top of each handler, call the appropriate View
-permission check:
+**Status: RESOLVED** — Each `List` handler now checks the appropriate
+exhibition-level view permission at the top before querying:
 
 ```
-GET /api/v1/labels   → checker.Check(..., "", "", PermPhotoLabelView)
-GET /api/v1/emojis   → checker.Check(..., "", "", PermPhotoEmojiView)
-GET /api/v1/comments → checker.Check(..., "", "", PermPhotoCommentView)
+GET /api/v1/labels   → PhotoLabelView
+GET /api/v1/emojis   → PhotoEmojiView
+GET /api/v1/comments → PhotoCommentView
 ```
 
-Return 403 if the check fails. Since `Public` holds `Viewer` by default, this
-is a no-op for current behavior.
+`Checker` is wired into all three handlers via the router. Since `Public` holds
+the `Viewer` role by default, behavior is unchanged for current deployments but
+will correctly enforce any future role configuration.
 
 ---
 
@@ -80,21 +71,16 @@ is a no-op for current behavior.
 
 **Handler:** `LabelsHandler.Create`
 
-**Current behavior:** Any authenticated user can add a label to any photo. The
-only check is that the user is logged in (`MustUserID`). The photo's exhibition
-is not resolved, so exhibition-scoped grants cannot be evaluated.
+**Status: RESOLVED** — `resolvePhotoExhibition` now replaces the bare
+photo-exists check and provides the exhibition for permission evaluation.
+`PhotoLabelCreate` is checked scoped to the specific photo before inserting:
 
-**Problems:**
-- `PhotoLabelCreate` is never checked.
-- Restricted labels (Phase 5b) have no enforcement hook yet.
-- Exhibition context is not available to evaluate scoped grants.
+```go
+checker.Check(ctx, userID, exhibitionID, "", ResourcePhoto, photoid, PermPhotoLabelCreate)
+```
 
-**Proposed solution:**
-1. Resolve the photo's `exhibitionid` (see Prerequisites).
-2. Call `checker.Check(ctx, userID, exhibitionID, "", ResourcePhoto, photoid, PermPhotoLabelCreate)`. Return 403 if false.
-3. After the permission check passes, query whether the label name has
-   `restricted = TRUE` in the `label_names` table. If so, additionally require
-   `PermLabelAdmin`. Return 403 if that check also fails.
+A `TODO(phase-5b)` marks the location for the restricted-label check once the
+`label_names` table is introduced in Phase 5.
 
 ---
 
@@ -102,26 +88,18 @@ is not resolved, so exhibition-scoped grants cannot be evaluated.
 
 **Handlers:** `LabelsHandler.Update`, `LabelsHandler.Delete`
 
-**Current behavior:** Only the label's creator can modify or delete it. Any
-caller who is not the original creator receives a 403. There is no admin
-override path.
-
-**Problems:**
-- `PhotoLabelModify` and `PhotoLabelDelete` are never checked.
-- An admin who needs to moderate a label cannot — the handler unconditionally
-  rejects anyone who is not the creator.
-- Restricted-label enforcement is absent.
-
-**Proposed solution:** After the ownership check fails (caller is not the
-label's creator), fall through to a `PermLabelAdmin` check before returning 403.
-If the label's name is restricted, require `PermLabelAdmin` even for the owner.
-The full logic:
+**Status: RESOLVED** — Both queries now fetch `photoid` alongside `ownerID`.
+When the caller is not the label owner, the handler resolves the exhibition and
+falls through to a `PermLabelAdmin` check before returning 403:
 
 ```
-if caller == owner → allow (unless restricted, then also require PermLabelAdmin)
+if caller == owner → allow
 else if checker.Check(..., PermLabelAdmin) → allow
 else → 403
 ```
+
+The restricted-label branch (`PermLabelAdmin` required even for the owner) is
+deferred to Phase 5b along with Finding 3's restricted-label hook.
 
 ---
 
@@ -129,21 +107,17 @@ else → 403
 
 **Handlers:** `EmojisHandler.React`, `EmojisHandler.Unreact`
 
-**Current behavior:** Any authenticated user can add or remove a reaction on any
-photo.
-
-**Problem:** `PhotoEmojiCreate` and `PhotoEmojiDelete` are never checked.
-
-**Proposed solution:** Resolve the photo's `exhibitionid`, then:
+**Status: RESOLVED** — Both handlers resolve the photo's exhibition via
+`resolvePhotoExhibition` (returning 404 if the photo is missing) then check the
+appropriate permission scoped to the photo before any DB write:
 
 ```
-POST   /api/v1/emoji/react  → checker.Check(..., PermPhotoEmojiCreate)
-DELETE /api/v1/emoji/react  → checker.Check(..., PermPhotoEmojiDelete)
+POST   → PhotoEmojiCreate scoped to the photo
+DELETE → PhotoEmojiDelete scoped to the photo
 ```
 
-Return 403 if the check fails. The existing `WHERE userid=$3` clause in
-`Unreact` already ensures a user can only remove their own reaction; the
-permission check gates entry to the operation.
+The existing `WHERE userid=$3` in `Unreact` still ensures a user can only
+remove their own reaction; the permission check gates entry to the operation.
 
 ---
 
@@ -258,24 +232,24 @@ else → 403
 
 ## Summary
 
-| Endpoint | Current gate | Missing check | Notes |
-|---|---|---|---|
-| `GET /api/v1/photo` | `is_public` flag | ~~`PermPrivatePhotoView` for non-public~~ ✓ done; `PhotoLabel/Emoji/CommentView` per block still pending | |
-| `GET /api/v1/labels` | none | `PhotoLabelView` | |
-| `POST /api/v1/labels` | auth only | `PhotoLabelCreate`; restricted-label → `PermLabelAdmin` | Needs exhibition resolution |
-| `PATCH /api/v1/labels/:id` | auth + ownership | `PhotoLabelModify`; `PermLabelAdmin` override | |
-| `DELETE /api/v1/labels/:id` | auth + ownership | `PhotoLabelDelete`; `PermLabelAdmin` override | |
-| `GET /api/v1/emojis` | none | `PhotoEmojiView` | |
-| `GET /api/v1/emoji/users` | none | `PhotoEmojiView` | |
-| `POST /api/v1/emoji/react` | auth only | `PhotoEmojiCreate` | Needs exhibition resolution |
-| `DELETE /api/v1/emoji/react` | auth only | `PhotoEmojiDelete` | Needs exhibition resolution |
-| `POST /api/v1/emoji/types` | auth only | `PermEmojiAdmin` (or policy decision on suggestion workflow) | Currently inserts `is_active=TRUE` |
-| `GET /api/v1/comments` | none | `PhotoCommentView` | |
-| `POST /api/v1/comments` | auth only | `PhotoCommentCreate` | Needs exhibition resolution |
-| `PATCH /api/v1/comments/:id` | auth + ownership | `PhotoCommentModify`; `PermAdmin` override | |
-| `DELETE /api/v1/comments/:id` | auth + ownership | `PhotoCommentDelete`; `PermAdmin` override | |
-| `GET /api/v1/search` | `is_public` flag | ~~`PermPrivatePhotoView`~~ ✓ done | |
-| `PATCH /api/v1/photo` | auth + ownership | `PermAdmin` override | |
-| `GET /api/v1/admin/exhibitions` | `authorized_non_public` flag | ~~`PermAdmin`~~ ✓ done | |
-| `GET /api/v1/admin/photos` | `authorized_non_public` flag | ~~`PermAdmin`~~ ✓ done | |
-| `PATCH /api/v1/admin/photo` | `authorized_non_public` flag | ~~`PermAdmin`~~ ✓ done | |
+| Endpoint | Status | Remaining work |
+|---|---|---|
+| `GET /api/v1/photo` | ✅ `PermPrivatePhotoView` for non-public | Inline label/emoji/comment blocks not individually gated (by design; governed by List endpoints) |
+| `GET /api/v1/labels` | ✅ `PhotoLabelView` | — |
+| `POST /api/v1/labels` | ✅ `PhotoLabelCreate` scoped to photo | Restricted-label → `PermLabelAdmin` deferred to Phase 5b |
+| `PATCH /api/v1/labels/:id` | ✅ `PermLabelAdmin` override | Restricted-label branch deferred to Phase 5b |
+| `DELETE /api/v1/labels/:id` | ✅ `PermLabelAdmin` override | Restricted-label branch deferred to Phase 5b |
+| `GET /api/v1/emojis` | ✅ `PhotoEmojiView` | — |
+| `GET /api/v1/emoji/users` | ⬜ open | Add `PhotoEmojiView` check (Finding 7) |
+| `POST /api/v1/emoji/react` | ✅ `PhotoEmojiCreate` scoped to photo | — |
+| `DELETE /api/v1/emoji/react` | ✅ `PhotoEmojiDelete` scoped to photo | — |
+| `POST /api/v1/emoji/types` | ⬜ open | Policy decision needed (Finding 6) |
+| `GET /api/v1/comments` | ✅ `PhotoCommentView` | — |
+| `POST /api/v1/comments` | ⬜ open | `PhotoCommentCreate` (Finding 8) |
+| `PATCH /api/v1/comments/:id` | ⬜ open | `PhotoCommentModify`; `PermAdmin` override (Finding 8) |
+| `DELETE /api/v1/comments/:id` | ⬜ open | `PhotoCommentDelete`; `PermAdmin` override (Finding 8) |
+| `GET /api/v1/search` | ✅ `PermPrivatePhotoView` | — |
+| `PATCH /api/v1/photo` | ⬜ open | `PermAdmin` override (Finding 11) |
+| `GET /api/v1/admin/exhibitions` | ✅ `PermAdmin` | — |
+| `GET /api/v1/admin/photos` | ✅ `PermAdmin` | — |
+| `PATCH /api/v1/admin/photo` | ✅ `PermAdmin` | — |

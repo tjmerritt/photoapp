@@ -16,23 +16,34 @@ import (
 	"github.com/tjmerritt/photoapp/internal/db"
 	"github.com/tjmerritt/photoapp/internal/middleware"
 	"github.com/tjmerritt/photoapp/internal/models"
+	"github.com/tjmerritt/photoapp/internal/permissions"
 )
 
 type EmojisHandler struct {
-	DB  *db.Pool
-	Cfg *config.Config
+	DB      *db.Pool
+	Cfg     *config.Config
+	Checker *permissions.Checker
 }
 
 // GET /api/v1/emojis?photoid=&offset=&limit=
 func (h *EmojisHandler) List(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
 	photoid := r.URL.Query().Get("photoid")
 	if photoid == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "photoid is required")
 		return
 	}
+
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := middleware.ExhibitionID(ctx)
+	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermPhotoEmojiView); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
 
-	emojis, total, err := fetchEmojis(r.Context(), h.DB, photoid, offset, limit, 3)
+	emojis, total, err := fetchEmojis(ctx, h.DB, photoid, offset, limit, 3)
 	if err != nil {
 		slog.Error("List", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -88,24 +99,35 @@ func (h *EmojisHandler) ListUsers(w http.ResponseWriter, r *http.Request, _ http
 // POST /api/v1/emoji/react?photoid=&emojiid=  (requires auth)
 // Adds the current user's reaction to a photo with the given emoji.
 func (h *EmojisHandler) React(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
 	photoid := r.URL.Query().Get("photoid")
 	emojiid := r.URL.Query().Get("emojiid")
-	userID := middleware.MustUserID(r.Context())
+	userID := middleware.MustUserID(ctx)
 
 	if photoid == "" || emojiid == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "photoid and emojiid are required")
 		return
 	}
 
+	exhibitionID, err := resolvePhotoExhibition(ctx, h.DB, photoid)
+	if err != nil {
+		middleware.WriteError(w, http.StatusNotFound, "photo not found")
+		return
+	}
+	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", permissions.ResourcePhoto, photoid, permissions.PermPhotoEmojiCreate); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	// Verify emoji type exists and is active
 	var active bool
-	err := h.DB.QueryRow(r.Context(), `SELECT is_active FROM emoji_types WHERE emojiid=$1`, emojiid).Scan(&active)
+	err = h.DB.QueryRow(ctx, `SELECT is_active FROM emoji_types WHERE emojiid=$1`, emojiid).Scan(&active)
 	if err == pgx.ErrNoRows || !active {
 		middleware.WriteError(w, http.StatusBadRequest, "emoji not found or inactive")
 		return
 	}
 
-	_, err = h.DB.Exec(r.Context(), `
+	_, err = h.DB.Exec(ctx, `
 		INSERT INTO emoji_reactions (photoid, emojiid, userid)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (photoid, emojiid, userid) DO NOTHING
@@ -117,7 +139,7 @@ func (h *EmojisHandler) React(w http.ResponseWriter, r *http.Request, _ httprout
 	}
 
 	// Refresh counts materialised view
-	_ = h.DB.RefreshEmojiCounts(r.Context())
+	_ = h.DB.RefreshEmojiCounts(ctx)
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -125,16 +147,27 @@ func (h *EmojisHandler) React(w http.ResponseWriter, r *http.Request, _ httprout
 // DELETE /api/v1/emoji/react?photoid=&emojiid=  (requires auth)
 // Removes the current user's reaction.
 func (h *EmojisHandler) Unreact(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
 	photoid := r.URL.Query().Get("photoid")
 	emojiid := r.URL.Query().Get("emojiid")
-	userID := middleware.MustUserID(r.Context())
+	userID := middleware.MustUserID(ctx)
 
 	if photoid == "" || emojiid == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "photoid and emojiid are required")
 		return
 	}
 
-	ct, err := h.DB.Exec(r.Context(), `
+	exhibitionID, err := resolvePhotoExhibition(ctx, h.DB, photoid)
+	if err != nil {
+		middleware.WriteError(w, http.StatusNotFound, "photo not found")
+		return
+	}
+	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", permissions.ResourcePhoto, photoid, permissions.PermPhotoEmojiDelete); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	ct, err := h.DB.Exec(ctx, `
 		DELETE FROM emoji_reactions
 		WHERE photoid=$1 AND emojiid=$2 AND userid=$3
 	`, photoid, emojiid, userID)
@@ -148,7 +181,7 @@ func (h *EmojisHandler) Unreact(w http.ResponseWriter, r *http.Request, _ httpro
 		return
 	}
 
-	_ = h.DB.RefreshEmojiCounts(r.Context())
+	_ = h.DB.RefreshEmojiCounts(ctx)
 
 	w.WriteHeader(http.StatusNoContent)
 }

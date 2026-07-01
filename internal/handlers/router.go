@@ -24,9 +24,9 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	photos      := &PhotoHandler{DB: pool, Cfg: cfg, Checker: checker}
 	patchPhoto  := &PatchPhotoHandler{DB: pool, Cfg: cfg}
 	users       := &UserHandler{DB: pool}
-	labels      := &LabelsHandler{DB: pool, Cfg: cfg}
-	emojis      := &EmojisHandler{DB: pool, Cfg: cfg}
-	comments    := &CommentsHandler{DB: pool, Cfg: cfg}
+	labels      := &LabelsHandler{DB: pool, Cfg: cfg, Checker: checker}
+	emojis      := &EmojisHandler{DB: pool, Cfg: cfg, Checker: checker}
+	comments    := &CommentsHandler{DB: pool, Cfg: cfg, Checker: checker}
 	search      := &SearchHandler{DB: pool, Checker: checker}
 	imgProxy    := &ImgProxyHandler{Cache: imgCache}
 	admin       := &AdminHandler{DB: pool, Cfg: cfg, Checker: checker}

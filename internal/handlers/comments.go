@@ -12,24 +12,35 @@ import (
 	"github.com/tjmerritt/photoapp/internal/db"
 	"github.com/tjmerritt/photoapp/internal/middleware"
 	"github.com/tjmerritt/photoapp/internal/models"
+	"github.com/tjmerritt/photoapp/internal/permissions"
 )
 
 type CommentsHandler struct {
-	DB  *db.Pool
-	Cfg *config.Config
+	DB      *db.Pool
+	Cfg     *config.Config
+	Checker *permissions.Checker
 }
 
 // GET /api/v1/comments?photoid=&parentid=&offset=&limit=
 func (h *CommentsHandler) List(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
 	photoid := r.URL.Query().Get("photoid")
 	parentID := r.URL.Query().Get("parentid")
 	if photoid == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "photoid is required")
 		return
 	}
+
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := middleware.ExhibitionID(ctx)
+	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermPhotoCommentView); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
 
-	comments, total, err := fetchComments(r.Context(), h.DB, photoid, parentID, offset, limit)
+	comments, total, err := fetchComments(ctx, h.DB, photoid, parentID, offset, limit)
 	if err != nil {
 		slog.Error("List", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
