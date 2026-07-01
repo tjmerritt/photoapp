@@ -22,7 +22,7 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 
 	// ── Handler instances ─────────────────────────────────────────────────────
 	photos      := &PhotoHandler{DB: pool, Cfg: cfg, Checker: checker}
-	patchPhoto  := &PatchPhotoHandler{DB: pool, Cfg: cfg}
+	patchPhoto  := &PatchPhotoHandler{DB: pool, Cfg: cfg, Checker: checker}
 	users       := &UserHandler{DB: pool}
 	labels      := &LabelsHandler{DB: pool, Cfg: cfg, Checker: checker}
 	emojis      := &EmojisHandler{DB: pool, Cfg: cfg, Checker: checker}

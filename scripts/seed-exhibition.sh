@@ -130,7 +130,7 @@ FROM   roles,
        (VALUES
            ('GalleryView'),   ('GalleryCreate'),   ('GalleryModify'),   ('GalleryDelete'),
            ('DisplayView'),   ('DisplayCreate'),   ('DisplayModify'),   ('DisplayDelete'),
-           ('PhotoCreate'),   ('PhotoDelete'),     ('PrivatePhotoView'),
+           ('PhotoCreate'),   ('PhotoDelete'),     ('PrivatePhotoView'),     ('PhotoDescriptionModify'),
            ('PhotoLabelView'),   ('PhotoLabelCreate'),   ('PhotoLabelModify'),   ('PhotoLabelDelete'),
            ('PhotoEmojiView'),   ('PhotoEmojiCreate'),   ('PhotoEmojiDelete'),
            ('PhotoCommentView'), ('PhotoCommentCreate'), ('PhotoCommentModify'), ('PhotoCommentDelete'),

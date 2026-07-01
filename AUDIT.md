@@ -203,24 +203,23 @@ DB column have been removed (migration 013).
 
 ---
 
-## Finding 11 — `PATCH /api/v1/photo`: ownership-only check, no admin override
+## Finding 11 — `PATCH /api/v1/photo`: ownership-only check, no permission override
 
 **Handler:** `PatchPhotoHandler.ServeHTTP`
 
-**Current behavior:** Only the photo owner or the user who last set the title
-can change the title. Anyone else receives a 403 unconditionally.
-
-**Problem:** An admin who needs to correct a title on any photo cannot do so
-through the API.
-
-**Proposed solution:** After the ownership check fails, fall through to an admin
-check before returning 403:
+**Status: RESOLVED** — A dedicated `PermPhotoDescriptionModify` permission now
+covers non-owner edits. After the ownership check fails the handler falls
+through to a permission check before returning 403:
 
 ```
 if caller == owner || caller == titleUserID → allow
-else if checker.Check(..., PermAdmin) → allow
+else if checker.Check(..., PermPhotoDescriptionModify) → allow
 else → 403
 ```
+
+The exhibition is resolved via `resolvePhotoExhibition` (cached). The
+permission is granted to the Admin role in the seed script. Operators can
+grant it to any team or user independently.
 
 ---
 
@@ -243,7 +242,7 @@ else → 403
 | `PATCH /api/v1/comments/:id` | ✅ `PermAdmin` override | — |
 | `DELETE /api/v1/comments/:id` | ✅ `PermAdmin` override | — |
 | `GET /api/v1/search` | ✅ `PermPrivatePhotoView` | — |
-| `PATCH /api/v1/photo` | ⬜ open | `PermAdmin` override (Finding 11) |
+| `PATCH /api/v1/photo` | ✅ `PhotoDescriptionModify` override | — |
 | `GET /api/v1/admin/exhibitions` | ✅ `PermAdmin` | — |
 | `GET /api/v1/admin/photos` | ✅ `PermAdmin` | — |
 | `PATCH /api/v1/admin/photo` | ✅ `PermAdmin` | — |

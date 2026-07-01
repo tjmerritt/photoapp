@@ -62,7 +62,7 @@
 //
 // Photo-level:
 //
-//	PhotoCreate, PhotoDelete, PrivatePhotoView
+//	PhotoCreate, PhotoDelete, PrivatePhotoView, PhotoDescriptionModify
 //
 // Photo label permissions:
 //
@@ -132,9 +132,10 @@ const (
 
 // Photo permissions.
 const (
-	PermPhotoCreate      = "PhotoCreate"      // upload a new photo
-	PermPhotoDelete      = "PhotoDelete"      // delete a photo
-	PermPrivatePhotoView = "PrivatePhotoView" // view photos where is_public = false
+	PermPhotoCreate             = "PhotoCreate"             // upload a new photo
+	PermPhotoDelete             = "PhotoDelete"             // delete a photo
+	PermPrivatePhotoView        = "PrivatePhotoView"        // view photos where is_public = false
+	PermPhotoDescriptionModify  = "PhotoDescriptionModify"  // edit a photo's title or description when not the owner
 )
 
 // Photo label permissions.

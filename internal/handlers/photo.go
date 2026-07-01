@@ -202,10 +202,12 @@ func (h *UserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // PatchPhotoHandler handles PATCH /api/v1/photo?photoid=<id>
-// Allows the title owner or photo owner to update the title text.
+// Allows the title owner or photo owner to update the title/description.
+// Users holding PermPhotoDescriptionModify may edit any photo's title.
 type PatchPhotoHandler struct {
-	DB  *db.Pool
-	Cfg *config.Config
+	DB      *db.Pool
+	Cfg     *config.Config
+	Checker *permissions.Checker
 }
 
 func (h *PatchPhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -251,8 +253,11 @@ func (h *PatchPhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if currentUser != ownerID && currentUser != titleUserID {
-		middleware.WriteError(w, http.StatusForbidden, "not allowed to edit this title")
-		return
+		exhibitionID, _ := resolvePhotoExhibition(ctx, h.DB, photoid)
+		if ok, _ := h.Checker.Check(ctx, currentUser, exhibitionID, "", "", "", permissions.PermPhotoDescriptionModify); !ok {
+			middleware.WriteError(w, http.StatusForbidden, "not allowed to edit this title")
+			return
+		}
 	}
 
 	_, err = h.DB.Exec(ctx, `
