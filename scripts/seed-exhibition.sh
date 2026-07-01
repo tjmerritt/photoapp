@@ -134,6 +134,7 @@ FROM   roles,
            ('PhotoLabelView'),   ('PhotoLabelCreate'),   ('PhotoLabelModify'),   ('PhotoLabelDelete'),
            ('PhotoEmojiView'),   ('PhotoEmojiCreate'),   ('PhotoEmojiDelete'),
            ('PhotoCommentView'), ('PhotoCommentCreate'), ('PhotoCommentModify'), ('PhotoCommentDelete'),
+           ('EmojiUpload'),
            ('Admin'), ('LabelAdmin'), ('EmojiAdmin'), ('UserAdmin'), ('GalleryAdmin')
        ) AS p(perm)
 WHERE  exhibitionid = '$EXHIBITION_ID'::uuid

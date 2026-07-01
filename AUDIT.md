@@ -125,23 +125,20 @@ remove their own reaction; the permission check gates entry to the operation.
 
 **Handler:** `EmojisHandler.UploadType`
 
-**Current behavior:** Any authenticated user can upload a new emoji type. The
-upload comment says "any authenticated user may upload." The inserted row has
-`is_active = TRUE`, making the emoji immediately usable by everyone.
+**Status: RESOLVED** — A dedicated `PermEmojiUpload` permission now gates this
+endpoint. The handler resolves `userID` and `exhibitionID`, then checks:
 
-**Problem:** There is no `EmojiAdmin` check. A non-admin user can introduce new
-site-wide emoji types without any approval.
+```go
+if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermEmojiUpload); err != nil || !ok {
+    middleware.WriteError(w, http.StatusForbidden, "forbidden")
+    return
+}
+```
 
-**Proposed solution:** Two valid policies — decide before implementing:
-
-- **Admin-only upload:** Require `PermEmojiAdmin` to upload. Simplest to
-  enforce.
-- **User suggestion with admin activation:** Allow any `Contributor` to upload
-  but insert with `is_active = FALSE`. Require `PermEmojiAdmin` to activate.
-  This matches a moderation workflow.
-
-Either way, the current `is_active = TRUE` on insert should change unless the
-admin-only policy is chosen.
+`EmojiUpload` is granted only to the Admin role in the seed script. Operators
+can grant it to any team or user independently of `EmojiAdmin` — for example,
+a designated "emoji curator" team could hold `EmojiUpload` without full admin
+access.
 
 ---
 
@@ -240,7 +237,7 @@ else → 403
 | `GET /api/v1/emoji/users` | ✅ `PhotoEmojiView` | — |
 | `POST /api/v1/emoji/react` | ✅ `PhotoEmojiCreate` scoped to photo | — |
 | `DELETE /api/v1/emoji/react` | ✅ `PhotoEmojiDelete` scoped to photo | — |
-| `POST /api/v1/emoji/types` | ⬜ open | Policy decision needed (Finding 6) |
+| `POST /api/v1/emoji/types` | ✅ `EmojiUpload` | — |
 | `GET /api/v1/comments` | ✅ `PhotoCommentView` | — |
 | `POST /api/v1/comments` | ✅ `PhotoCommentCreate` scoped to photo | — |
 | `PATCH /api/v1/comments/:id` | ✅ `PermAdmin` override | — |

@@ -76,6 +76,10 @@
 //
 //	PhotoCommentView, PhotoCommentCreate, PhotoCommentModify, PhotoCommentDelete
 //
+// Emoji type permissions (site-wide):
+//
+//	EmojiUpload
+//
 // Administrative permissions:
 //
 //	Admin, LabelAdmin, EmojiAdmin, UserAdmin, GalleryAdmin
@@ -155,6 +159,11 @@ const (
 	PermPhotoCommentCreate = "PhotoCommentCreate"
 	PermPhotoCommentModify = "PhotoCommentModify"
 	PermPhotoCommentDelete = "PhotoCommentDelete"
+)
+
+// Emoji type permissions (site-wide, not scoped to a photo).
+const (
+	PermEmojiUpload = "EmojiUpload" // upload a new custom emoji type
 )
 
 // Administrative permissions.

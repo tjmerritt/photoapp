@@ -341,12 +341,18 @@ func (h *EmojisHandler) ListVariants(w http.ResponseWriter, r *http.Request, _ h
 	middleware.WriteJSON(w, http.StatusOK, map[string]any{"variants": variants})
 }
 
-// POST /api/v1/emoji/types  – upload a new custom emoji image (requires auth)
+// POST /api/v1/emoji/types  – upload a new custom emoji image (requires EmojiUpload permission)
 // Accepts multipart/form-data with fields:
 //   - image  : the image file (PNG, GIF, WebP recommended)
 //   - alttext: accessibility label (required)
 func (h *EmojisHandler) UploadType(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	_ = middleware.MustUserID(r.Context()) // any authenticated user may upload
+	ctx := r.Context()
+	userID := middleware.MustUserID(ctx)
+	exhibitionID := middleware.ExhibitionID(ctx)
+	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermEmojiUpload); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
 
 	if err := r.ParseMultipartForm(8 << 20); err != nil { // 8 MB max
 		middleware.WriteError(w, http.StatusBadRequest, "could not parse form (max 8MB)")
@@ -418,7 +424,7 @@ func (h *EmojisHandler) UploadType(w http.ResponseWriter, r *http.Request, _ htt
 	// Insert into emoji_types (inactive until an admin activates it,
 	// or set is_active=TRUE to allow immediate use — adjust per policy)
 	var emojiid string
-	err = h.DB.QueryRow(r.Context(), `
+	err = h.DB.QueryRow(ctx, `
 		INSERT INTO emoji_types (emojiid, image_url, alt_text, is_active)
 		VALUES ($1, $2, $3, TRUE)
 		RETURNING emojiid::text
