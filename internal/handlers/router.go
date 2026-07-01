@@ -31,6 +31,9 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	imgProxy    := &ImgProxyHandler{Cache: imgCache}
 	admin       := &AdminHandler{DB: pool, Cfg: cfg, Checker: checker}
 	perms       := &PermissionsHandler{Checker: checker}
+	galleries   := &GalleriesHandler{DB: pool, Cfg: cfg, Checker: checker}
+	displays    := &DisplaysHandler{DB: pool, Cfg: cfg, Checker: checker}
+	templates   := &TemplatesHandler{DB: pool, Checker: checker}
 
 	// Convenience: wrap a httprouter.Handle with RequireAuth
 	auth := func(h httprouter.Handle) httprouter.Handle {
@@ -61,6 +64,12 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	r.HandlerFunc(http.MethodGet, "/api/v1/search",       search.ServeHTTP)
 	r.GET("/api/v1/permissions",                          perms.ServeHTTP)
 
+	// Galleries and displays (view — no auth required; permission-checked in handler)
+	r.GET("/api/v1/galleries",                            galleries.List)
+	r.GET("/api/v1/galleries/:galleryid",                 galleries.Get)
+	r.GET("/api/v1/displays/:displayid",                  displays.Get)
+	r.GET("/api/v1/display-templates",                    templates.List)
+
 	// ── Write endpoints (auth required) ───────────────────────────────────────
 
 	// Labels
@@ -79,6 +88,21 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	r.POST("/api/v1/comments",                            auth(comments.Create))
 	r.PATCH("/api/v1/comments/:commentid",                auth(comments.Update))
 	r.DELETE("/api/v1/comments/:commentid",               auth(comments.Delete))
+
+	// Galleries (write — auth required; permission-checked in handler)
+	r.POST("/api/v1/galleries",                           auth(galleries.Create))
+	r.PATCH("/api/v1/galleries/:galleryid",               auth(galleries.Update))
+	r.DELETE("/api/v1/galleries/:galleryid",              auth(galleries.Delete))
+
+	// Displays (write — auth required; permission-checked in handler)
+	r.POST("/api/v1/galleries/:galleryid/displays",       auth(displays.Create))
+	r.PATCH("/api/v1/displays/:displayid",                auth(displays.Update))
+	r.DELETE("/api/v1/displays/:displayid",               auth(displays.Delete))
+
+	// Display templates (write — PermAdmin enforced in handler)
+	r.POST("/api/v1/display-templates",                   auth(templates.Create))
+	r.PATCH("/api/v1/display-templates/:templateid",      auth(templates.Update))
+	r.DELETE("/api/v1/display-templates/:templateid",     auth(templates.Delete))
 
 	// ── Admin endpoints (auth + PermAdmin enforced in handler) ───────────────────
 	r.GET("/api/v1/admin/exhibitions", auth(admin.ListExhibitions))

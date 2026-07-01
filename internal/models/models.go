@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // ── Shared ────────────────────────────────────────────────────────────────────
 
@@ -184,6 +187,152 @@ type SearchResponse struct {
 	Total   int            `json:"total"`
 	Results []SearchResult `json:"results"`
 }
+
+// ── Galleries ────────────────────────────────────────────────────────────────
+
+// GallerySummary is one row in GET /api/v1/galleries.
+type GallerySummary struct {
+	GalleryID    string    `json:"galleryid"`
+	Title        string    `json:"title"`
+	SortOrder    int       `json:"sort_order"`
+	DisplayCount int       `json:"display_count"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// GalleryDetail is the full response for GET /api/v1/galleries/:galleryid.
+type GalleryDetail struct {
+	GalleryID       string           `json:"galleryid"`
+	Title           string           `json:"title"`
+	SortOrder       int              `json:"sort_order"`
+	PlacardsDefault json.RawMessage  `json:"placard_defaults,omitempty"`
+	Displays        []DisplaySummary `json:"displays"`
+	CreatedAt       time.Time        `json:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at"`
+}
+
+// GalleriesResponse is returned by GET /api/v1/galleries.
+type GalleriesResponse struct {
+	ExhibitionID string           `json:"exhibitionid"`
+	Offset       int              `json:"offset"`
+	Pages        Pages            `json:"pages"`
+	Galleries    []GallerySummary `json:"galleries"`
+}
+
+// ── Displays ─────────────────────────────────────────────────────────────────
+
+// TemplateSummary is the compact template shape embedded in display responses.
+type TemplateSummary struct {
+	TemplateID string `json:"templateid"`
+	Name       string `json:"name"`
+	PhotoCount int    `json:"photo_count"`
+}
+
+// DisplaySummary is a brief display entry embedded in GalleryDetail.
+type DisplaySummary struct {
+	DisplayID   string           `json:"displayid"`
+	SortOrder   int              `json:"sort_order"`
+	Template    *TemplateSummary `json:"template,omitempty"`
+	SlotCount   int              `json:"slot_count"`
+	FilledSlots int              `json:"filled_slots"`
+	CreatedAt   time.Time        `json:"created_at"`
+	UpdatedAt   time.Time        `json:"updated_at"`
+}
+
+// SlotPhoto is the photo shape embedded inside a display slot.
+type SlotPhoto struct {
+	PhotoID  string `json:"photoid"`
+	ImageURL string `json:"imageurl"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+}
+
+// DisplaySlot is one slot in a DisplayDetail.
+type DisplaySlot struct {
+	SlotID    string          `json:"slotid"`
+	SlotIndex int             `json:"slot_index"`
+	Photo     *SlotPhoto      `json:"photo,omitempty"`
+	RichText  *string         `json:"rich_text,omitempty"`
+	Placard   json.RawMessage `json:"placard,omitempty"`
+}
+
+// DisplayDetail is the full response for GET /api/v1/displays/:displayid.
+type DisplayDetail struct {
+	DisplayID string           `json:"displayid"`
+	GalleryID string           `json:"galleryid"`
+	SortOrder int              `json:"sort_order"`
+	Template  *TemplateSummary `json:"template,omitempty"`
+	Slots     []DisplaySlot    `json:"slots"`
+	CreatedAt time.Time        `json:"created_at"`
+	UpdatedAt time.Time        `json:"updated_at"`
+}
+
+// ── Display Templates ────────────────────────────────────────────────────────
+
+// DisplayTemplate is the full shape of a display template.
+type DisplayTemplate struct {
+	TemplateID    string          `json:"templateid"`
+	Name          string          `json:"name"`
+	PhotoCount    int             `json:"photo_count"`
+	SlotPositions json.RawMessage `json:"slot_positions"`
+	Presentation  json.RawMessage `json:"presentation"`
+}
+
+// TemplatesResponse is returned by GET /api/v1/display-templates.
+type TemplatesResponse struct {
+	Templates []DisplayTemplate `json:"templates"`
+}
+
+// ── Gallery / Display / Template write request bodies ────────────────────────
+
+type CreateGalleryRequest struct {
+	Title     string `json:"title"`
+	SortOrder *int   `json:"sort_order"`
+}
+
+type UpdateGalleryRequest struct {
+	Title           *string         `json:"title"`
+	SortOrder       *int            `json:"sort_order"`
+	PlacardsDefault json.RawMessage `json:"placard_defaults"` // nil/absent = no change
+	DisplayOrder    []string        `json:"display_order"`    // displayids in new order
+}
+
+type CreateDisplayRequest struct {
+	TemplateID *string `json:"templateid"`
+	SortOrder  *int    `json:"sort_order"`
+}
+
+// SlotUpdate sets the full state of one slot. PhotoID "" clears the photo.
+// RichText "" clears rich text. Placard nil/absent leaves placard unchanged;
+// Placard []byte("null") or empty clears the placard.
+type SlotUpdate struct {
+	SlotIndex int             `json:"slot_index"`
+	PhotoID   string          `json:"photoid"`   // "" to clear
+	RichText  string          `json:"rich_text"` // "" to clear
+	Placard   json.RawMessage `json:"placard"`   // null/absent to clear
+}
+
+type UpdateDisplayRequest struct {
+	TemplateID *string      `json:"templateid"` // nil = no change; "" = clear
+	SortOrder  *int         `json:"sort_order"`
+	Slots      []SlotUpdate `json:"slots"`
+}
+
+type CreateTemplateRequest struct {
+	Name          string          `json:"name"`
+	PhotoCount    int             `json:"photo_count"`
+	SlotPositions json.RawMessage `json:"slot_positions"`
+	Presentation  json.RawMessage `json:"presentation"`
+}
+
+type UpdateTemplateRequest struct {
+	Name          *string         `json:"name"`
+	PhotoCount    *int            `json:"photo_count"`
+	SlotPositions json.RawMessage `json:"slot_positions"` // nil/absent = no change
+	Presentation  json.RawMessage `json:"presentation"`   // nil/absent = no change
+}
+
+// ── EmojiTypeResponse ────────────────────────────────────────────────────────
 
 // EmojiTypeResponse is returned after uploading a new emoji type.
 type EmojiTypeResponse struct {

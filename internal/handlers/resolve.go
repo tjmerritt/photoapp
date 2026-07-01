@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/jackc/pgx/v5"
+	//"github.com/jackc/pgx/v5"
 	"github.com/tjmerritt/photoapp/internal/db"
 )
 
@@ -34,7 +34,6 @@ func (s *syncMap[K, V]) Store(key K, val V) {
 }
 
 // photoExhibitionCache maps photoid → exhibitionid.
-//
 // A photo's exhibitionid is immutable — photos are never moved between
 // exhibitions after creation. It is therefore safe to cache these mappings
 // for the lifetime of the process without any invalidation logic.
@@ -72,4 +71,30 @@ func resolvePhotoExhibition(ctx context.Context, pool *db.Pool, photoid string) 
 	// simply overwrites with the same value — harmless.
 	photoExhibitionCache.Store(photoid, exhibitionID)
 	return exhibitionID, nil
+}
+
+// displayGalleryCache maps displayid → galleryid.
+// A display's galleryid is immutable — displays are never moved between
+// galleries after creation.
+var displayGalleryCache syncMap[string, string]
+
+// resolveDisplayGallery returns the galleryid for the given displayid.
+// Returns ("", pgx.ErrNoRows) when the display does not exist or has been
+// soft-deleted. Errors are not cached.
+func resolveDisplayGallery(ctx context.Context, pool *db.Pool, displayid string) (string, error) {
+	if v, ok := displayGalleryCache.Load(displayid); ok {
+		return v, nil
+	}
+
+	var galleryID string
+	err := pool.QueryRow(ctx, `
+		SELECT galleryid::text FROM displays
+		WHERE  displayid = $1 AND deleted_at IS NULL
+	`, displayid).Scan(&galleryID)
+	if err != nil {
+		return "", err
+	}
+
+	displayGalleryCache.Store(displayid, galleryID)
+	return galleryID, nil
 }
