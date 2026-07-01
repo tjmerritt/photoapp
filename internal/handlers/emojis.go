@@ -61,16 +61,25 @@ func (h *EmojisHandler) List(w http.ResponseWriter, r *http.Request, _ httproute
 
 // GET /api/v1/emoji/users?emoji=&offset=&limit=
 func (h *EmojisHandler) ListUsers(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
 	emojiid := r.URL.Query().Get("emoji")
 	photoid := r.URL.Query().Get("photoid")
 	if emojiid == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "emoji is required")
 		return
 	}
+
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := middleware.ExhibitionID(ctx)
+	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermPhotoEmojiView); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
 
 	var total int
-	err := h.DB.QueryRow(r.Context(), `
+	err := h.DB.QueryRow(ctx, `
 		SELECT COUNT(*) FROM emoji_reactions
 		WHERE emojiid=$1 AND ($2='' OR photoid::text=$2)
 	`, emojiid, photoid).Scan(&total)
@@ -80,7 +89,7 @@ func (h *EmojisHandler) ListUsers(w http.ResponseWriter, r *http.Request, _ http
 		return
 	}
 
-	users, err := fetchEmojiUsers(r.Context(), h.DB, photoid, emojiid, offset, limit)
+	users, err := fetchEmojiUsers(ctx, h.DB, photoid, emojiid, offset, limit)
 	if err != nil {
 		slog.Error("ListUsers", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")

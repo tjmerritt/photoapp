@@ -149,13 +149,16 @@ admin-only policy is chosen.
 
 **Handler:** `EmojisHandler.ListUsers`
 
-**Current behavior:** Anyone can list the users who reacted to a photo with a
-specific emoji.
+**Status: RESOLVED** — Same pattern as Finding 2. `ctx`, `userID`, and
+`exhibitionID` are set at the top; `PhotoEmojiView` is checked before any DB
+query:
 
-**Problem:** `PhotoEmojiView` is never checked.
-
-**Proposed solution:** Same pattern as Finding 2 — check `PhotoEmojiView` at
-the top of the handler before querying.
+```go
+if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermPhotoEmojiView); err != nil || !ok {
+    middleware.WriteError(w, http.StatusForbidden, "forbidden")
+    return
+}
+```
 
 ---
 
@@ -164,25 +167,19 @@ the top of the handler before querying.
 **Handlers:** `CommentsHandler.Create`, `CommentsHandler.Update`,
 `CommentsHandler.Delete`
 
-**Current behavior:** Any authenticated user can post a comment. Only the
-comment's author can edit or delete it. No admin override path exists.
-
-**Problems:**
-- `PhotoCommentCreate`, `PhotoCommentModify`, and `PhotoCommentDelete` are never
-  checked.
-- An admin who needs to moderate a comment cannot without a direct DB update.
-
-**Proposed solution:** Same pattern as labels (Finding 4):
+**Status: RESOLVED** — Same pattern as labels (Finding 4):
 
 ```
-POST   → checker.Check(..., PermPhotoCommentCreate)
-PATCH  → if caller == author → allow; else check PermAdmin → allow; else 403
-DELETE → if caller == author → allow; else check PermAdmin → allow; else 403
+POST   → resolvePhotoExhibition (404 if missing) → PhotoCommentCreate scoped to photo
+PATCH  → if caller == author → allow; else resolvePhotoExhibition → PermAdmin → allow; else 403
+DELETE → if caller == author → allow; else resolvePhotoExhibition → PermAdmin → allow; else 403
 ```
 
-Resolve `exhibitionid` from the photo before checking. For `Update` and
-`Delete`, the `photoid` is already fetched from the comments row — use that to
-resolve the exhibition.
+`Create` replaces the bare `SELECT TRUE FROM photos` exists-check with
+`resolvePhotoExhibition`, which also provides the exhibition for the
+`PhotoCommentCreate` check. For `Update`, `photoid` was already fetched in the
+existing row query — no query change needed. For `Delete`, `photoid::text` was
+added to the SELECT to enable exhibition resolution for the admin override.
 
 ---
 
@@ -240,14 +237,14 @@ else → 403
 | `PATCH /api/v1/labels/:id` | ✅ `PermLabelAdmin` override | Restricted-label branch deferred to Phase 5b |
 | `DELETE /api/v1/labels/:id` | ✅ `PermLabelAdmin` override | Restricted-label branch deferred to Phase 5b |
 | `GET /api/v1/emojis` | ✅ `PhotoEmojiView` | — |
-| `GET /api/v1/emoji/users` | ⬜ open | Add `PhotoEmojiView` check (Finding 7) |
+| `GET /api/v1/emoji/users` | ✅ `PhotoEmojiView` | — |
 | `POST /api/v1/emoji/react` | ✅ `PhotoEmojiCreate` scoped to photo | — |
 | `DELETE /api/v1/emoji/react` | ✅ `PhotoEmojiDelete` scoped to photo | — |
 | `POST /api/v1/emoji/types` | ⬜ open | Policy decision needed (Finding 6) |
 | `GET /api/v1/comments` | ✅ `PhotoCommentView` | — |
-| `POST /api/v1/comments` | ⬜ open | `PhotoCommentCreate` (Finding 8) |
-| `PATCH /api/v1/comments/:id` | ⬜ open | `PhotoCommentModify`; `PermAdmin` override (Finding 8) |
-| `DELETE /api/v1/comments/:id` | ⬜ open | `PhotoCommentDelete`; `PermAdmin` override (Finding 8) |
+| `POST /api/v1/comments` | ✅ `PhotoCommentCreate` scoped to photo | — |
+| `PATCH /api/v1/comments/:id` | ✅ `PermAdmin` override | — |
+| `DELETE /api/v1/comments/:id` | ✅ `PermAdmin` override | — |
 | `GET /api/v1/search` | ✅ `PermPrivatePhotoView` | — |
 | `PATCH /api/v1/photo` | ⬜ open | `PermAdmin` override (Finding 11) |
 | `GET /api/v1/admin/exhibitions` | ✅ `PermAdmin` | — |

@@ -69,9 +69,10 @@ func (h *CommentsHandler) List(w http.ResponseWriter, r *http.Request, _ httprou
 
 // POST /api/v1/comments?photoid=&parentid=  (requires auth)
 func (h *CommentsHandler) Create(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
 	photoid := r.URL.Query().Get("photoid")
 	parentID := r.URL.Query().Get("parentid")
-	userID := middleware.MustUserID(r.Context())
+	userID := middleware.MustUserID(ctx)
 
 	if photoid == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "photoid is required")
@@ -88,18 +89,23 @@ func (h *CommentsHandler) Create(w http.ResponseWriter, r *http.Request, _ httpr
 		return
 	}
 
-	// Verify photo exists
-	var exists bool
-	_ = h.DB.QueryRow(r.Context(), `SELECT TRUE FROM photos WHERE photoid=$1 AND deleted_at IS NULL`, photoid).Scan(&exists)
-	if !exists {
+	// Resolve exhibition for this photo (also verifies photo exists).
+	exhibitionID, err := resolvePhotoExhibition(ctx, h.DB, photoid)
+	if err != nil {
 		middleware.WriteError(w, http.StatusNotFound, "photo not found")
+		return
+	}
+
+	// Require PhotoCommentCreate permission scoped to this photo.
+	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", permissions.ResourcePhoto, photoid, permissions.PermPhotoCommentCreate); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 
 	// If replying, verify parent comment exists and belongs to same photo
 	if parentID != "" {
 		var parentPhoto string
-		err := h.DB.QueryRow(r.Context(), `
+		err := h.DB.QueryRow(ctx, `
 			SELECT photoid::text FROM comments WHERE commentid=$1 AND deleted_at IS NULL
 		`, parentID).Scan(&parentPhoto)
 		if err == pgx.ErrNoRows {
@@ -116,15 +122,14 @@ func (h *CommentsHandler) Create(w http.ResponseWriter, r *http.Request, _ httpr
 		commentid string
 		date      interface{}
 	)
-	var err error
 	if parentID != "" {
-		err = h.DB.QueryRow(r.Context(), `
+		err = h.DB.QueryRow(ctx, `
 			INSERT INTO comments (photoid, parent_commentid, author_userid, comment_text)
 			VALUES ($1, $2, $3, $4)
 			RETURNING commentid::text, created_at
 		`, photoid, parentID, userID, req.Comment).Scan(&commentid, &date)
 	} else {
-		err = h.DB.QueryRow(r.Context(), `
+		err = h.DB.QueryRow(ctx, `
 			INSERT INTO comments (photoid, author_userid, comment_text)
 			VALUES ($1, $2, $3)
 			RETURNING commentid::text, created_at
@@ -138,11 +143,11 @@ func (h *CommentsHandler) Create(w http.ResponseWriter, r *http.Request, _ httpr
 
 	var username string
 	var profileImage *string
-	_ = h.DB.QueryRow(r.Context(), `SELECT username, profile_image FROM users WHERE userid=$1`, userID).
+	_ = h.DB.QueryRow(ctx, `SELECT username, profile_image FROM users WHERE userid=$1`, userID).
 		Scan(&username, &profileImage)
 
 	// Re-fetch the full comment to get proper typed date
-	comments, _, err := fetchComments(r.Context(), h.DB, photoid, "", 0, 1)
+	comments, _, err := fetchComments(ctx, h.DB, photoid, "", 0, 1)
 	// find our new comment
 	for _, c := range comments {
 		if c.CommentID == commentid {
@@ -159,10 +164,11 @@ func (h *CommentsHandler) Create(w http.ResponseWriter, r *http.Request, _ httpr
 	})
 }
 
-// PATCH /api/v1/comments/:commentid  (requires auth; only the author may edit)
+// PATCH /api/v1/comments/:commentid  (requires auth; author or PermAdmin may edit)
 func (h *CommentsHandler) Update(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	ctx := r.Context()
 	commentid := ps.ByName("commentid")
-	userID := middleware.MustUserID(r.Context())
+	userID := middleware.MustUserID(ctx)
 
 	var req models.UpdateCommentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -175,7 +181,7 @@ func (h *CommentsHandler) Update(w http.ResponseWriter, r *http.Request, ps http
 	}
 
 	var authorID, photoid string
-	err := h.DB.QueryRow(r.Context(), `
+	err := h.DB.QueryRow(ctx, `
 		SELECT author_userid::text, photoid::text FROM comments
 		WHERE  commentid=$1 AND deleted_at IS NULL
 	`, commentid).Scan(&authorID, &photoid)
@@ -189,11 +195,14 @@ func (h *CommentsHandler) Update(w http.ResponseWriter, r *http.Request, ps http
 		return
 	}
 	if authorID != userID {
-		middleware.WriteError(w, http.StatusForbidden, "you may only edit your own comments")
-		return
+		exhibitionID, _ := resolvePhotoExhibition(ctx, h.DB, photoid)
+		if ok, _ := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermAdmin); !ok {
+			middleware.WriteError(w, http.StatusForbidden, "you may only edit your own comments")
+			return
+		}
 	}
 
-	_, err = h.DB.Exec(r.Context(), `
+	_, err = h.DB.Exec(ctx, `
 		UPDATE comments SET comment_text=$1 WHERE commentid=$2
 	`, req.Comment, commentid)
 	if err != nil {
@@ -205,10 +214,10 @@ func (h *CommentsHandler) Update(w http.ResponseWriter, r *http.Request, ps http
 	// Return updated comment
 	var username string
 	var profileImage *string
-	_ = h.DB.QueryRow(r.Context(), `SELECT username, profile_image FROM users WHERE userid=$1`, userID).
+	_ = h.DB.QueryRow(ctx, `SELECT username, profile_image FROM users WHERE userid=$1`, userID).
 		Scan(&username, &profileImage)
 
-	row := h.DB.QueryRow(r.Context(), `
+	row := h.DB.QueryRow(ctx, `
 		SELECT c.commentid::text, c.comment_text, c.reply_count, c.created_at,
 		       u.userid::text, u.username,
 		       COALESCE(u.profile_image, '/avatars/' || md5(lower(trim(COALESCE(u.email, u.userid::text)))))
@@ -231,15 +240,16 @@ func (h *CommentsHandler) Update(w http.ResponseWriter, r *http.Request, ps http
 	middleware.WriteJSON(w, http.StatusOK, c)
 }
 
-// DELETE /api/v1/comments/:commentid  (requires auth; only the author may delete)
+// DELETE /api/v1/comments/:commentid  (requires auth; author or PermAdmin may delete)
 func (h *CommentsHandler) Delete(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	ctx := r.Context()
 	commentid := ps.ByName("commentid")
-	userID := middleware.MustUserID(r.Context())
+	userID := middleware.MustUserID(ctx)
 
-	var authorID string
-	err := h.DB.QueryRow(r.Context(), `
-		SELECT author_userid::text FROM comments WHERE commentid=$1 AND deleted_at IS NULL
-	`, commentid).Scan(&authorID)
+	var authorID, photoid string
+	err := h.DB.QueryRow(ctx, `
+		SELECT author_userid::text, photoid::text FROM comments WHERE commentid=$1 AND deleted_at IS NULL
+	`, commentid).Scan(&authorID, &photoid)
 	if err == pgx.ErrNoRows {
 		middleware.WriteError(w, http.StatusNotFound, "comment not found")
 		return
@@ -250,12 +260,15 @@ func (h *CommentsHandler) Delete(w http.ResponseWriter, r *http.Request, ps http
 		return
 	}
 	if authorID != userID {
-		middleware.WriteError(w, http.StatusForbidden, "you may only delete your own comments")
-		return
+		exhibitionID, _ := resolvePhotoExhibition(ctx, h.DB, photoid)
+		if ok, _ := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermAdmin); !ok {
+			middleware.WriteError(w, http.StatusForbidden, "you may only delete your own comments")
+			return
+		}
 	}
 
 	// Soft-delete: the trigger will decrement the parent's reply_count
-	_, err = h.DB.Exec(r.Context(), `
+	_, err = h.DB.Exec(ctx, `
 		UPDATE comments SET deleted_at=NOW() WHERE commentid=$1
 	`, commentid)
 	if err != nil {
