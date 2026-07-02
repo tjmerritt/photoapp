@@ -47,10 +47,12 @@
       display: flex;
       gap: 4px;
       margin-bottom: 4px;
+      width: 100%;
+      overflow: hidden;
     }
     .wall-photo {
       display: block;
-      flex-shrink: 0;
+      min-width: 0;
       overflow: hidden;
       border-radius: 3px;
       position: relative;
@@ -327,11 +329,11 @@
 
     <!-- Photo wall rows -->
     <template x-for="row in rows" :key="row.startIndex">
-      <div class="wall-row">
+      <div class="wall-row" :style="`height:${row.height}px`">
         <template x-for="p in row.photos" :key="p.photoid">
           <a :href="`/photo.html?photoid=${p.photoid}`"
              class="wall-photo"
-             :style="`width:${p.displayWidth}px;height:${p.displayHeight}px`">
+             :style="`flex:${p.flexGrow} 1 0px`">
             <img :src="thumbUrl(p.imageurl, p.displayWidth)"
                  :alt="p.photoid"
                  loading="lazy" />

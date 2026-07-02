@@ -1071,26 +1071,33 @@ function emojiHover() {
 // ─────────────────────────────────────────────────────────────────────────────
 // packRows — justified row-layout algorithm for the photo wall.
 //
-// Groups `photos` into rows where each row is scaled so all photos share the
-// same height and their widths sum to `containerWidth`.
+// Groups `photos` into rows.  Each row has an explicit height (px) and each
+// photo carries a `flexGrow` weight so that CSS flex distributes widths
+// proportionally without relying on pixel-perfect container measurement.
+// This means horizontal layout is always correct regardless of when or how
+// containerWidth is measured — only the row *height* depends on it.
 //
 // n (photos per row) is chosen from {2, 3, 4} subject to:
 //   • n never repeats from the previous row.
-//   • n=4 is only used when ≥2 photos in the candidate set are portrait
-//     (h > w) OR the aspect ratios are "similar" (max/min < 1.5).
-//   • The last partial row is left-aligned at a capped height rather than
-//     stretched to fill the container.
+//   • n=4 only when ≥2 photos in the candidate window are portrait (h > w)
+//     OR all aspect ratios are "similar" (max/min < 1.5).
+//   • The last partial row uses TARGET_ROW_H instead of filling the container.
 //
 // Returns an array of row objects:
-//   { startIndex, photos: [{ photoid, imageurl, width, height,
-//                             displayWidth, displayHeight }] }
+//   { startIndex, height,
+//     photos: [{ photoid, imageurl, width, height, flexGrow, displayWidth }] }
+//
+// flexGrow   — CSS flex-grow value; proportional to aspect-corrected width.
+// displayWidth — best-guess pixel width used only as the imgproxy size hint;
+//               the actual rendered width is determined by CSS flex.
 // ─────────────────────────────────────────────────────────────────────────────
 function packRows(photos, containerWidth) {
-  if (!containerWidth || !photos.length) return [];
+  if (!photos.length) return [];
 
-  const GAP          = 4;   // px gap between photos in a row
-  const MAX_ROW_H    = 400; // px — cap very-tall rows (e.g. single portrait)
-  const TARGET_ROW_H = 240; // px — ideal height for partial last rows
+  const GAP          = 4;   // px gap between photos (matches CSS gap)
+  const MAX_ROW_H    = 400; // px — cap very-tall rows
+  const TARGET_ROW_H = 240; // px — target height for partial last rows
+  const MIN_ROW_H    = 80;  // px — floor so tiny images don't collapse
 
   const rows = [];
   let i = 0;
@@ -1101,19 +1108,15 @@ function packRows(photos, containerWidth) {
 
     // ── Choose n ──────────────────────────────────────────────────────────────
     let n;
-    // Candidate sizes: 2–4, excluding the previous row's n, capped by remaining.
     const candidates = [2, 3, 4].filter(x => x !== prevN && x <= remaining);
 
     if (candidates.length === 0) {
-      // Only happens when remaining===1 and prevN===2 is impossible (prevN could
-      // be 2 while remaining===1 if we started with 2-photo rows).  Just use 1.
-      n = remaining;
+      n = remaining; // forced (e.g. 1 photo left with prevN constraints)
     } else {
-      // Look at the upcoming photos to decide whether 4 is appropriate.
       const windowSize = Math.max(...candidates);
       const slice      = photos.slice(i, i + windowSize);
-      const portraits  = slice.filter(p => p.height > p.width).length;
-      const aspects    = slice.map(p => p.width / p.height);
+      const portraits  = slice.filter(p => (p.height || 1) > (p.width || 1)).length;
+      const aspects    = slice.map(p => (p.width || 1) / (p.height || 1));
       const maxA       = Math.max(...aspects);
       const minA       = Math.min(...aspects);
       const similar    = (minA > 0) && (maxA / minA < 1.5);
@@ -1127,42 +1130,49 @@ function packRows(photos, containerWidth) {
       }
     }
 
-    const rowPhotos  = photos.slice(i, i + n);
-    const isPartial  = rowPhotos.length < n; // last row didn't fill
+    const rowPhotos = photos.slice(i, i + n);
+    const isPartial = rowPhotos.length < n;
 
-    // ── Layout math ───────────────────────────────────────────────────────────
-    const maxNatH    = Math.max(...rowPhotos.map(p => p.height));
-    const totalGapPx = GAP * (rowPhotos.length - 1);
-
-    // Scale each photo so its height equals maxNatH.
+    // ── Compute aspect-corrected (nominal) widths ──────────────────────────────
+    // Scale every photo to the same height (maxNatH) so widths are comparable.
+    const maxNatH = Math.max(...rowPhotos.map(p => p.height || 1));
     let nominalW = 0;
     const photoScales = rowPhotos.map(p => {
-      const s = maxNatH / p.height;
-      nominalW += p.width * s;
+      const s = maxNatH / (p.height || 1);
+      nominalW += (p.width || 1) * s;
       return s;
     });
 
-    // Row scale: how much to shrink/grow to fit containerWidth.
-    const rowScale = (containerWidth - totalGapPx) / nominalW;
-
-    let rowHeight;
-    if (isPartial) {
-      // Don't stretch — use a target height, but don't exceed a natural fit.
-      rowHeight = Math.min(TARGET_ROW_H, Math.round(maxNatH * rowScale));
-    } else {
+    // ── Compute row height ────────────────────────────────────────────────────
+    // rowHeight controls how tall the row appears.  It depends on containerWidth
+    // but only affects the visual height, not whether photos overflow horizontally.
+    let rowHeight = TARGET_ROW_H;
+    if (containerWidth > 0) {
+      const totalGapPx = GAP * (rowPhotos.length - 1);
+      const rowScale   = (containerWidth - totalGapPx) / nominalW;
       rowHeight = Math.round(maxNatH * rowScale);
+      if (isPartial) rowHeight = Math.min(rowHeight, TARGET_ROW_H);
+      rowHeight = Math.min(rowHeight, MAX_ROW_H);
+      rowHeight = Math.max(rowHeight, MIN_ROW_H);
     }
-    rowHeight = Math.min(rowHeight, MAX_ROW_H);
 
+    // ── Build row ──────────────────────────────────────────────────────────────
+    // flexGrow = aspect-corrected nominal width (un-rounded) → CSS distributes
+    // the row's available space proportionally, always summing to 100% width.
+    // displayWidth = pixel estimate for the imgproxy size hint (not used for layout).
     const finalScale = rowHeight / maxNatH;
 
     rows.push({
       startIndex: i,
-      photos: rowPhotos.map((p, idx) => ({
-        ...p,
-        displayWidth:  Math.round(p.width  * photoScales[idx] * finalScale),
-        displayHeight: rowHeight,
-      })),
+      height:     rowHeight,
+      photos: rowPhotos.map((p, idx) => {
+        const scaledW = (p.width || 1) * photoScales[idx];
+        return {
+          ...p,
+          flexGrow:     scaledW,                                   // CSS flex-grow
+          displayWidth: Math.max(80, Math.round(scaledW * finalScale)), // thumbUrl hint
+        };
+      }),
     });
 
     prevN = rowPhotos.length;
