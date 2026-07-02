@@ -1236,6 +1236,13 @@ function wallApp() {
     limit:          40,
     containerWidth: 0,
 
+    // When more photos are coming, hide the last row so it doesn't reflow
+    // when the next batch lands and fills it out.
+    get visibleRows() {
+      if (this.hasMore && this.rows.length > 1) return this.rows.slice(0, -1);
+      return this.rows;
+    },
+
     async init() {
       // Auth setup — same flow as photoApp.init.
       try {

@@ -328,7 +328,7 @@
     </div>
 
     <!-- Photo wall rows -->
-    <template x-for="row in rows" :key="row.startIndex">
+    <template x-for="row in visibleRows" :key="row.startIndex">
       <div class="wall-row" :style="`height:${row.height}px`">
         <template x-for="p in row.photos" :key="p.photoid">
           <a :href="`/photo.html?photoid=${p.photoid}`"
