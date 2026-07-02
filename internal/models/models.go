@@ -332,6 +332,24 @@ type UpdateTemplateRequest struct {
 	Presentation  json.RawMessage `json:"presentation"`   // nil/absent = no change
 }
 
+// ── Photo list (wall) ─────────────────────────────────────────────────────────
+
+// PhotoListItem is the compact photo shape returned by GET /api/v1/photos.
+type PhotoListItem struct {
+	PhotoID  string `json:"photoid"`
+	ImageURL string `json:"imageurl"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+}
+
+// PhotoListResponse is returned by GET /api/v1/photos.
+type PhotoListResponse struct {
+	Total  int             `json:"total"`
+	Offset int             `json:"offset"`
+	Limit  int             `json:"limit"`
+	Photos []PhotoListItem `json:"photos"`
+}
+
 // ── EmojiTypeResponse ────────────────────────────────────────────────────────
 
 // EmojiTypeResponse is returned after uploading a new emoji type.

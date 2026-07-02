@@ -22,6 +22,7 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 
 	// ── Handler instances ─────────────────────────────────────────────────────
 	photos      := &PhotoHandler{DB: pool, Cfg: cfg, Checker: checker}
+	photoList   := &ListPhotosHandler{DB: pool, Checker: checker}
 	patchPhoto  := &PatchPhotoHandler{DB: pool, Cfg: cfg, Checker: checker}
 	users       := &UserHandler{DB: pool}
 	labels      := &LabelsHandler{DB: pool, Cfg: cfg, Checker: checker}
@@ -49,6 +50,7 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	// ── Read endpoints (no auth required) ─────────────────────────────────────
 	r.HandlerFunc(http.MethodGet, "/api/v1/imgproxy", imgProxy.ServeHTTP)
 	r.HandlerFunc(http.MethodGet, "/api/v1/photo", photos.ServeHTTP)
+	r.GET("/api/v1/photos", photoList.ServeHTTP)
 	r.PATCH("/api/v1/photo", auth(func(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
 		patchPhoto.ServeHTTP(w, req)
 	}))

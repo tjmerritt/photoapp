@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/julienschmidt/httprouter"
 	"github.com/tjmerritt/photoapp/internal/config"
 	"github.com/tjmerritt/photoapp/internal/db"
 	"github.com/tjmerritt/photoapp/internal/middleware"
@@ -163,6 +165,76 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	middleware.WriteJSON(w, http.StatusOK, photo)
+}
+
+// ListPhotosHandler handles GET /api/v1/photos?limit=N&offset=N
+// Returns a paginated list of photos for the exhibition wall.
+// Permission-checks PermPrivatePhotoView to include private photos.
+type ListPhotosHandler struct {
+	DB      *db.Pool
+	Checker *permissions.Checker
+}
+
+func (h *ListPhotosHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := middleware.ExhibitionID(ctx)
+	canSeePrivate, _ := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermPrivatePhotoView)
+
+	limit := 40
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 100 {
+			limit = v
+		}
+	}
+	offset := 0
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if v, err := strconv.Atoi(o); err == nil && v >= 0 {
+			offset = v
+		}
+	}
+
+	rows, err := h.DB.Query(ctx, `
+		SELECT photoid::text, image_url, image_width, image_height,
+		       COUNT(*) OVER() AS total
+		FROM   photos
+		WHERE  deleted_at IS NULL
+		  AND  ($1 = '' OR exhibitionid::text = $1)
+		  AND  (is_public OR $2)
+		ORDER  BY created_at DESC, photoid
+		LIMIT  $3 OFFSET $4
+	`, exhibitionID, canSeePrivate, limit, offset)
+	if err != nil {
+		slog.Error("ListPhotos", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	defer rows.Close()
+
+	total := 0
+	photos := []models.PhotoListItem{}
+	for rows.Next() {
+		var p models.PhotoListItem
+		if err := rows.Scan(&p.PhotoID, &p.ImageURL, &p.Width, &p.Height, &total); err != nil {
+			slog.Error("ListPhotos scan", "error", err)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		p.ImageURL = proxyImageURL(p.ImageURL)
+		photos = append(photos, p)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("ListPhotos", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, models.PhotoListResponse{
+		Total:  total,
+		Offset: offset,
+		Limit:  limit,
+		Photos: photos,
+	})
 }
 
 // UserHandler handles GET /api/v1/user?userid=<id>

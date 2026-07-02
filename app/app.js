@@ -804,7 +804,7 @@ function photoApp() {
             related: results.slice(1).map(r => ({
               photoid:  r.photoid,
               imageurl: r.imageurl,
-              clickurl: `/?photoid=${encodeURIComponent(r.photoid)}`,
+              clickurl: `/photo.html?photoid=${encodeURIComponent(r.photoid)}`,
               width:    r.width,
               height:   r.height,
             })),
@@ -1069,6 +1069,243 @@ function emojiHover() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// packRows — justified row-layout algorithm for the photo wall.
+//
+// Groups `photos` into rows where each row is scaled so all photos share the
+// same height and their widths sum to `containerWidth`.
+//
+// n (photos per row) is chosen from {2, 3, 4} subject to:
+//   • n never repeats from the previous row.
+//   • n=4 is only used when ≥2 photos in the candidate set are portrait
+//     (h > w) OR the aspect ratios are "similar" (max/min < 1.5).
+//   • The last partial row is left-aligned at a capped height rather than
+//     stretched to fill the container.
+//
+// Returns an array of row objects:
+//   { startIndex, photos: [{ photoid, imageurl, width, height,
+//                             displayWidth, displayHeight }] }
+// ─────────────────────────────────────────────────────────────────────────────
+function packRows(photos, containerWidth) {
+  if (!containerWidth || !photos.length) return [];
+
+  const GAP          = 4;   // px gap between photos in a row
+  const MAX_ROW_H    = 400; // px — cap very-tall rows (e.g. single portrait)
+  const TARGET_ROW_H = 240; // px — ideal height for partial last rows
+
+  const rows = [];
+  let i = 0;
+  let prevN = null;
+
+  while (i < photos.length) {
+    const remaining = photos.length - i;
+
+    // ── Choose n ──────────────────────────────────────────────────────────────
+    let n;
+    // Candidate sizes: 2–4, excluding the previous row's n, capped by remaining.
+    const candidates = [2, 3, 4].filter(x => x !== prevN && x <= remaining);
+
+    if (candidates.length === 0) {
+      // Only happens when remaining===1 and prevN===2 is impossible (prevN could
+      // be 2 while remaining===1 if we started with 2-photo rows).  Just use 1.
+      n = remaining;
+    } else {
+      // Look at the upcoming photos to decide whether 4 is appropriate.
+      const windowSize = Math.max(...candidates);
+      const slice      = photos.slice(i, i + windowSize);
+      const portraits  = slice.filter(p => p.height > p.width).length;
+      const aspects    = slice.map(p => p.width / p.height);
+      const maxA       = Math.max(...aspects);
+      const minA       = Math.min(...aspects);
+      const similar    = (minA > 0) && (maxA / minA < 1.5);
+
+      if (candidates.includes(4) && (portraits >= 2 || similar)) {
+        n = 4;
+      } else if (candidates.includes(3)) {
+        n = 3;
+      } else {
+        n = candidates[0];
+      }
+    }
+
+    const rowPhotos  = photos.slice(i, i + n);
+    const isPartial  = rowPhotos.length < n; // last row didn't fill
+
+    // ── Layout math ───────────────────────────────────────────────────────────
+    const maxNatH    = Math.max(...rowPhotos.map(p => p.height));
+    const totalGapPx = GAP * (rowPhotos.length - 1);
+
+    // Scale each photo so its height equals maxNatH.
+    let nominalW = 0;
+    const photoScales = rowPhotos.map(p => {
+      const s = maxNatH / p.height;
+      nominalW += p.width * s;
+      return s;
+    });
+
+    // Row scale: how much to shrink/grow to fit containerWidth.
+    const rowScale = (containerWidth - totalGapPx) / nominalW;
+
+    let rowHeight;
+    if (isPartial) {
+      // Don't stretch — use a target height, but don't exceed a natural fit.
+      rowHeight = Math.min(TARGET_ROW_H, Math.round(maxNatH * rowScale));
+    } else {
+      rowHeight = Math.round(maxNatH * rowScale);
+    }
+    rowHeight = Math.min(rowHeight, MAX_ROW_H);
+
+    const finalScale = rowHeight / maxNatH;
+
+    rows.push({
+      startIndex: i,
+      photos: rowPhotos.map((p, idx) => ({
+        ...p,
+        displayWidth:  Math.round(p.width  * photoScales[idx] * finalScale),
+        displayHeight: rowHeight,
+      })),
+    });
+
+    prevN = rowPhotos.length;
+    i    += rowPhotos.length;
+  }
+
+  return rows;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// wallApp — root Alpine component for the photo wall (index.html).
+// Shares auth helpers and navbar state with photoApp but replaces the main
+// content with a paginated, lazily-loaded justified photo grid.
+// ─────────────────────────────────────────────────────────────────────────────
+function wallApp() {
+  return {
+    // ── Auth / navbar state (mirrors photoApp) ────────────────────────────────
+    loggedInUser: null,
+    testUser:     null,
+    authConfig:   { googleEnabled: false, appleEnabled: false },
+    toast:        { visible: false, message: '', timer: null },
+
+    get currentUser() { return this.loggedInUser || this.testUser || null; },
+
+    thumbUrl(url, w)  { return thumbUrl(url, w); },
+    avatarSrc(user)   { return avatarSrc(user);  },
+    labelColorFor(n)  { return labelColorFor(n); },
+
+    authHeaders() {
+      if (this.loggedInUser) return {};
+      return this.testUser ? { 'X-User-ID': this.testUser.userid } : {};
+    },
+
+    selectTestUser(user) {
+      this.testUser           = user;
+      window._testUserID      = user ? user.userid : null;
+      window._currentUser     = user;
+    },
+
+    async logout() {
+      await fetch('/auth/logout', { method: 'POST' });
+      this.loggedInUser   = null;
+      window._testUserID  = null;
+      window._loggedIn    = false;
+      window._currentUser = null;
+    },
+
+    showToast(message) {
+      clearTimeout(this.toast.timer);
+      this.toast.message = message;
+      this.toast.visible = true;
+      this.toast.timer   = setTimeout(() => { this.toast.visible = false; }, 3500);
+    },
+
+    // ── Wall state ────────────────────────────────────────────────────────────
+    photos:         [],   // all loaded PhotoListItem objects
+    rows:           [],   // packed row objects from packRows()
+    loading:        false,
+    hasMore:        true,
+    offset:         0,
+    limit:          40,
+    containerWidth: 0,
+
+    async init() {
+      // Auth setup — same flow as photoApp.init.
+      try {
+        const [cfg, me] = await Promise.all([
+          fetch('/auth/config').then(r => r.json()),
+          fetch('/auth/me').then(r => r.json()),
+        ]);
+        this.authConfig = cfg;
+        if (me.loggedIn) {
+          this.loggedInUser       = me;
+          window._testUserID      = me.userid;
+          window._loggedIn        = true;
+          window._currentUser     = me;
+          document.dispatchEvent(new CustomEvent('photoapp:auth-ready', { detail: me }));
+        }
+      } catch { /* non-fatal */ }
+
+      document.addEventListener('photoapp:toast',        e => this.showToast(e.detail));
+      document.addEventListener('photoapp:auth-success', e => {
+        this.loggedInUser       = e.detail;
+        window._testUserID      = e.detail.userid;
+        window._loggedIn        = true;
+        window._currentUser     = e.detail;
+      });
+      document.addEventListener('photoapp:profile-image', e => {
+        if (this.loggedInUser) this.loggedInUser = { ...this.loggedInUser, profileImage: e.detail };
+      });
+
+      // Wait one tick so Alpine has populated $refs, then measure container.
+      await new Promise(resolve => this.$nextTick(resolve));
+
+      const wall = this.$refs.wall;
+      if (wall) {
+        this.containerWidth = wall.clientWidth;
+        new ResizeObserver(() => {
+          const w = wall.clientWidth;
+          if (w !== this.containerWidth) {
+            this.containerWidth = w;
+            this.rows = packRows(this.photos, this.containerWidth);
+          }
+        }).observe(wall);
+      }
+
+      // Infinite-scroll sentinel.
+      const sentinel = this.$refs.sentinel;
+      if (sentinel) {
+        new IntersectionObserver(([entry]) => {
+          if (entry.isIntersecting && this.hasMore && !this.loading) {
+            this.loadMore();
+          }
+        }, { rootMargin: '600px' }).observe(sentinel);
+      }
+
+      await this.loadMore();
+    },
+
+    async loadMore() {
+      if (this.loading || !this.hasMore) return;
+      this.loading = true;
+      try {
+        const resp = await fetch(
+          `/api/v1/photos?limit=${this.limit}&offset=${this.offset}`,
+          { headers: this.authHeaders() }
+        );
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const batch = data.photos || [];
+        this.photos.push(...batch);
+        this.offset  += batch.length;
+        this.hasMore  = this.offset < data.total;
+        this.rows     = packRows(this.photos, this.containerWidth);
+      } catch(e) {
+        this.showToast(`Failed to load photos: ${e.message}`);
+      }
+      this.loading = false;
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Alpine init — store + component registration.
 // Must run before Alpine initializes (alpine:init fires before Alpine walks DOM).
 // app.js is loaded with defer, same as alpinejs.min.js, so order matters:
@@ -1082,6 +1319,7 @@ document.addEventListener('alpine:init', () => {
   });
 
   Alpine.data('photoApp',      photoApp);
+  Alpine.data('wallApp',       wallApp);
   Alpine.data('userSwitcher',  userSwitcher);
   Alpine.data('titleEditor',   titleEditor);
   Alpine.data('commentsPanel', commentsPanel);
