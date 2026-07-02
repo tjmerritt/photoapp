@@ -1236,10 +1236,6 @@ function wallApp() {
     limit:          40,
     containerWidth: 0,
 
-    // When more photos are coming, hide the last row so it doesn't reflow
-    // when the next batch lands and fills it out.
-    // Updated explicitly via _syncVisible() wherever rows or hasMore changes.
-    visibleRows: [],
 
     async init() {
       // Auth setup — same flow as photoApp.init.
@@ -1280,7 +1276,6 @@ function wallApp() {
           if (w !== this.containerWidth) {
             this.containerWidth = w;
             this.rows = packRows(this.photos, this.containerWidth);
-            this.visibleRows = (this.hasMore && this.rows.length > 1) ? this.rows.slice(0, -1) : this.rows;
           }
         }).observe(wall);
       }
@@ -1313,7 +1308,6 @@ function wallApp() {
         this.offset  += batch.length;
         this.hasMore  = this.offset < data.total;
         this.rows     = packRows(this.photos, this.containerWidth);
-        this.visibleRows = (this.hasMore && this.rows.length > 1) ? this.rows.slice(0, -1) : this.rows;
       } catch(e) {
         this.showToast(`Failed to load photos: ${e.message}`);
       }

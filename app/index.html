@@ -327,9 +327,12 @@
       <p class="text-muted">No photos yet.</p>
     </div>
 
-    <!-- Photo wall rows -->
-    <template x-for="row in visibleRows" :key="row.startIndex">
-      <div class="wall-row" :style="`height:${row.height}px`">
+    <!-- Photo wall rows.
+         While more photos are coming (hasMore), hide the last row so it
+         doesn't jump when the next batch arrives and fills it out. -->
+    <template x-for="(row, idx) in rows" :key="row.startIndex">
+      <div class="wall-row" :style="`height:${row.height}px`"
+           x-show="!hasMore || idx < rows.length - 1">
         <template x-for="p in row.photos" :key="p.photoid">
           <a :href="`/photo.html?photoid=${p.photoid}`"
              class="wall-photo"
