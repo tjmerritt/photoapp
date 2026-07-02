@@ -1169,8 +1169,9 @@ function packRows(photos, containerWidth) {
         const scaledW = (p.width || 1) * photoScales[idx];
         return {
           ...p,
-          flexGrow:     scaledW,                                   // CSS flex-grow
-          displayWidth: Math.max(80, Math.round(scaledW * finalScale)), // thumbUrl hint
+          flexGrow:      scaledW,                                   // CSS flex-grow
+          displayHeight: rowHeight,
+          displayWidth:  Math.max(80, Math.round(scaledW * finalScale)), // thumbUrl hint
         };
       }),
     });

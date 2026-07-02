@@ -56,6 +56,7 @@
       overflow: hidden;
       border-radius: 3px;
       position: relative;
+      cursor: pointer;
     }
     .wall-photo img {
       width: 100%;
@@ -334,10 +335,13 @@
       <div class="wall-row" :style="`height:${row.height}px`"
            x-show="!hasMore || idx < rows.length - 1">
         <template x-for="p in row.photos" :key="p.photoid">
-          <a :href="`/photo.html?photoid=${p.photoid}`"
+          <a :href="'/photo.html?photoid=' + p.photoid"
+             target="_blank"
              class="wall-photo"
              :style="`flex:${p.flexGrow} 1 0px`">
             <img :src="thumbUrl(p.imageurl, p.displayWidth)"
+                 :width="p.displayWidth"
+                 :height="p.displayHeight"
                  :alt="p.photoid"
                  loading="lazy" />
           </a>
