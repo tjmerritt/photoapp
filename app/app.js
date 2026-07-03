@@ -1558,7 +1558,8 @@ function displayApp() {
 // galleryAdminApp — gallery administration page.
 // Requires auth + GalleryCreate/Modify/Delete permissions.
 // Features: create gallery, rename/delete gallery, expand to see displays,
-// add/remove/reorder displays within a gallery.
+// add/remove/reorder displays within a gallery, assign/change/clear each
+// display's template.
 // ─────────────────────────────────────────────────────────────────────────────
 function galleryAdminApp() {
   return {
@@ -1584,6 +1585,10 @@ function galleryAdminApp() {
     expandedGalleryId: null,
     expandedDisplays:  [],
     loadingDisplays:   false,
+
+    // Display templates (for the "new display" and per-row template pickers)
+    templates:            [],
+    newDisplayTemplateId: '',
 
     avatarSrc(user) { return avatarSrc(user); },
 
@@ -1618,7 +1623,16 @@ function galleryAdminApp() {
       });
       document.addEventListener('photoapp:toast', e => this.showToast(e.detail));
 
-      await this.loadGalleries();
+      await Promise.all([this.loadGalleries(), this.loadTemplates()]);
+    },
+
+    async loadTemplates() {
+      try {
+        const resp = await fetch('/api/v1/display-templates');
+        if (!resp.ok) return; // non-fatal — template pickers just show empty
+        const data = await resp.json();
+        this.templates = data.templates || [];
+      } catch { /* non-fatal */ }
     },
 
     async loadGalleries() {
@@ -1718,9 +1732,10 @@ function galleryAdminApp() {
         this.expandedDisplays  = [];
         return;
       }
-      this.expandedGalleryId = galleryid;
-      this.loadingDisplays   = true;
-      this.expandedDisplays  = [];
+      this.expandedGalleryId    = galleryid;
+      this.loadingDisplays      = true;
+      this.expandedDisplays     = [];
+      this.newDisplayTemplateId = '';
       try {
         const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(galleryid));
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
@@ -1737,27 +1752,55 @@ function galleryAdminApp() {
         const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(galleryid) + '/displays', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-          body:    JSON.stringify({ sort_order: this.expandedDisplays.length }),
+          body:    JSON.stringify({
+            sort_order: this.expandedDisplays.length,
+            templateid: this.newDisplayTemplateId || undefined,
+          }),
         });
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const d = await resp.json();
         // Build a DisplaySummary-shaped object from the DisplayDetail response
         this.expandedDisplays.push({
-          displayid:   d.displayid,
-          sort_order:  d.sort_order,
-          template:    d.template || null,
-          slot_count:  0,
-          filled_slots: 0,
-          created_at:  d.created_at,
-          updated_at:  d.updated_at,
+          displayid:    d.displayid,
+          sort_order:   d.sort_order,
+          template:     d.template || null,
+          slot_count:   d.slots ? d.slots.length : 0,
+          filled_slots: d.slots ? d.slots.filter(s => s.photo).length : 0,
+          created_at:   d.created_at,
+          updated_at:   d.updated_at,
         });
         const idx = this.galleries.findIndex(g => g.galleryid === galleryid);
         if (idx !== -1) {
           this.galleries[idx] = { ...this.galleries[idx], display_count: this.galleries[idx].display_count + 1 };
         }
+        this.newDisplayTemplateId = '';
         this.showToast('Display added.');
       } catch(e) {
         this.showToast('Failed to add display: ' + e.message);
+      }
+    },
+
+    // Assign, change, or clear (templateid === '') the template on an existing display.
+    async setDisplayTemplate(displayid, templateid) {
+      const idx = this.expandedDisplays.findIndex(d => d.displayid === displayid);
+      if (idx === -1) return;
+      try {
+        const resp = await fetch('/api/v1/displays/' + encodeURIComponent(displayid), {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({ templateid: templateid }),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const d = await resp.json();
+        this.expandedDisplays[idx] = {
+          ...this.expandedDisplays[idx],
+          template:     d.template || null,
+          slot_count:   d.slots ? d.slots.length : 0,
+          filled_slots: d.slots ? d.slots.filter(s => s.photo).length : 0,
+        };
+        this.showToast(templateid ? 'Template assigned.' : 'Template cleared.');
+      } catch(e) {
+        this.showToast('Failed to update template: ' + e.message);
       }
     },
 

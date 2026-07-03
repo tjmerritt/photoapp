@@ -297,13 +297,19 @@
                 </div>
 
                 <!-- Display info -->
-                <span class="flex-1 text-[var(--muted)]">
-                  Display <span x-text="idx + 1"></span>
-                  <span x-show="d.template" class="text-xs ml-1">
-                    — <span x-text="d.template && d.template.name"></span>
+                <span class="flex-1 text-[var(--muted)] flex items-center gap-2 flex-wrap">
+                  <span class="shrink-0">Display <span x-text="idx + 1"></span></span>
+                  <span x-show="d.template" class="text-xs shrink-0">
                     (<span x-text="d.filled_slots"></span>/<span x-text="d.slot_count"></span> filled)
                   </span>
-                  <span x-show="!d.template" class="text-xs ml-1 opacity-50">— no template</span>
+                  <select class="input text-xs py-1 pr-6"
+                          :value="d.template ? d.template.templateid : ''"
+                          @change="setDisplayTemplate(d.displayid, $event.target.value)">
+                    <option value="">No template</option>
+                    <template x-for="t in templates" :key="t.templateid">
+                      <option :value="t.templateid" x-text="t.name + ' (' + t.photo_count + ')'"></option>
+                    </template>
+                  </select>
                 </span>
 
                 <!-- View display -->
@@ -332,11 +338,17 @@
             </div>
 
             <!-- Add display button -->
-            <div class="px-5 py-3 border-t border-[var(--border)] bg-[var(--surface)]">
+            <div class="px-5 py-3 border-t border-[var(--border)] bg-[var(--surface)] flex items-center gap-2 flex-wrap">
               <button class="text-sm text-[var(--accent)] hover:underline font-medium"
                       @click="addDisplay(g.galleryid)">
                 + Add Display
               </button>
+              <select class="input text-xs py-1 pr-6" x-model="newDisplayTemplateId">
+                <option value="">No template</option>
+                <template x-for="t in templates" :key="t.templateid">
+                  <option :value="t.templateid" x-text="t.name + ' (' + t.photo_count + ')'"></option>
+                </template>
+              </select>
             </div>
           </div>
 
