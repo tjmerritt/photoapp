@@ -1641,7 +1641,7 @@ function galleryAdminApp() {
     },
 
     async createGallery() {
-      if (!this.newTitle.trim()) return;
+      if (this.creating || !this.newTitle.trim()) return;
       this.creating    = true;
       this.createError = '';
       try {
@@ -1817,6 +1817,227 @@ function galleryAdminApp() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// templateAdminApp — display template administration page.
+// Requires auth + PermAdmin (enforced server-side; 403 surfaces as an error).
+// Templates describe layout geometry (slot_positions) and styling rules
+// (presentation) for displays. Both are free-form JSON — the frontend owns
+// the schema. This editor auto-generates an even grid layout from photo_count
+// and lets that JSON be hand-edited for finer control, with a live preview.
+// ─────────────────────────────────────────────────────────────────────────────
+function templateAdminApp() {
+  return {
+    loggedInUser: null,
+    authConfig:   { googleEnabled: false, appleEnabled: false },
+    toast:        { visible: false, message: '', timer: null },
+
+    templates: [],
+    loading:   true,
+    error:     null,
+
+    // Create form
+    newName:       '',
+    newPhotoCount: 4,
+    creating:      false,
+    createError:   '',
+
+    // Expanded editor (one at a time)
+    expandedId:        null,
+    editName:          '',
+    editPhotoCount:    1,
+    editSlotPositions: '',
+    editPresentation:  '',
+    editError:         '',
+    saving:            false,
+
+    showToast(message) {
+      clearTimeout(this.toast.timer);
+      this.toast.message = message;
+      this.toast.visible = true;
+      this.toast.timer   = setTimeout(() => { this.toast.visible = false; }, 3500);
+    },
+
+    async init() {
+      try {
+        const [cfg, me] = await Promise.all([
+          fetch('/auth/config').then(r => r.json()),
+          fetch('/auth/me').then(r => r.json()),
+        ]);
+        this.authConfig = cfg;
+        if (me.loggedIn) {
+          this.loggedInUser       = me;
+          window._testUserID      = me.userid;
+          window._loggedIn        = true;
+          window._currentUser     = me;
+          document.dispatchEvent(new CustomEvent('photoapp:auth-ready', { detail: me }));
+        }
+      } catch { /* non-fatal */ }
+
+      document.addEventListener('photoapp:auth-success', e => {
+        this.loggedInUser   = e.detail;
+        window._testUserID  = e.detail.userid;
+        window._loggedIn    = true;
+        window._currentUser = e.detail;
+      });
+      document.addEventListener('photoapp:toast', e => this.showToast(e.detail));
+
+      await this.loadTemplates();
+    },
+
+    async loadTemplates() {
+      this.loading = true;
+      this.error   = null;
+      try {
+        const resp = await fetch('/api/v1/display-templates');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        this.templates = data.templates || [];
+      } catch(e) {
+        this.error = e.message;
+      }
+      this.loading = false;
+    },
+
+    // Even grid layout, matching the column breakpoints displayApp uses when
+    // a display has no template-driven geometry of its own.
+    defaultSlotPositions(n) {
+      n = Math.max(1, n | 0);
+      const cols  = n <= 1 ? 1 : n <= 2 ? 2 : n <= 3 ? 3 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
+      const rows  = Math.ceil(n / cols);
+      const gap   = 2; // percent
+      const cellW = (100 - gap * (cols - 1)) / cols;
+      const cellH = (100 - gap * (rows - 1)) / rows;
+      const positions = [];
+      for (let i = 0; i < n; i++) {
+        const col = i % cols, row = Math.floor(i / cols);
+        positions.push({
+          x: +(col * (cellW + gap)).toFixed(2),
+          y: +(row * (cellH + gap)).toFixed(2),
+          w: +cellW.toFixed(2),
+          h: +cellH.toFixed(2),
+        });
+      }
+      return positions;
+    },
+
+    async createTemplate() {
+      if (this.creating || !this.newName.trim() || this.newPhotoCount < 1) return;
+      this.creating    = true;
+      this.createError = '';
+      try {
+        const resp = await fetch('/api/v1/display-templates', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({
+            name:           this.newName.trim(),
+            photo_count:    this.newPhotoCount,
+            slot_positions: this.defaultSlotPositions(this.newPhotoCount),
+            presentation:   {},
+          }),
+        });
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.error || 'HTTP ' + resp.status);
+        }
+        const t = await resp.json();
+        this.templates.push(t);
+        this.newName       = '';
+        this.newPhotoCount = 4;
+        this.showToast('Template created.');
+      } catch(e) {
+        this.createError = e.message;
+      }
+      this.creating = false;
+    },
+
+    startEdit(t) {
+      this.expandedId        = t.templateid;
+      this.editName          = t.name;
+      this.editPhotoCount    = t.photo_count;
+      this.editSlotPositions = JSON.stringify(t.slot_positions || [], null, 2);
+      this.editPresentation  = JSON.stringify(t.presentation  || {}, null, 2);
+      this.editError         = '';
+    },
+
+    cancelEdit() {
+      this.expandedId = null;
+      this.editError   = '';
+    },
+
+    regenerateLayout() {
+      this.editSlotPositions = JSON.stringify(this.defaultSlotPositions(this.editPhotoCount), null, 2);
+    },
+
+    // Used by the live preview while editing — never throws.
+    previewSlots() {
+      try {
+        const parsed = JSON.parse(this.editSlotPositions || '[]');
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    },
+
+    async saveTemplate(templateid) {
+      if (!this.editName.trim() || this.editPhotoCount < 1) return;
+      let slotPositions, presentation;
+      try {
+        slotPositions = JSON.parse(this.editSlotPositions || '[]');
+      } catch {
+        this.editError = 'Slot positions must be valid JSON.';
+        return;
+      }
+      try {
+        presentation = JSON.parse(this.editPresentation || '{}');
+      } catch {
+        this.editError = 'Presentation must be valid JSON.';
+        return;
+      }
+      this.editError = '';
+      this.saving    = true;
+      try {
+        const resp = await fetch('/api/v1/display-templates/' + encodeURIComponent(templateid), {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({
+            name:           this.editName.trim(),
+            photo_count:    this.editPhotoCount,
+            slot_positions: slotPositions,
+            presentation:   presentation,
+          }),
+        });
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.error || 'HTTP ' + resp.status);
+        }
+        const t   = await resp.json();
+        const idx = this.templates.findIndex(x => x.templateid === templateid);
+        if (idx !== -1) this.templates[idx] = t;
+        this.expandedId = null;
+        this.showToast('Template saved.');
+      } catch(e) {
+        this.editError = e.message;
+      }
+      this.saving = false;
+    },
+
+    async deleteTemplate(templateid) {
+      if (!confirm('Delete this template? Displays using it will lose their layout.')) return;
+      try {
+        const resp = await fetch('/api/v1/display-templates/' + encodeURIComponent(templateid), {
+          method: 'DELETE', headers: getAuthHeaders(),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        this.templates = this.templates.filter(t => t.templateid !== templateid);
+        if (this.expandedId === templateid) this.expandedId = null;
+        this.showToast('Template deleted.');
+      } catch(e) {
+        this.showToast('Delete failed: ' + e.message);
+      }
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Alpine init — store + component registration.
 // Must run before Alpine initializes (alpine:init fires before Alpine walks DOM).
 // app.js is loaded with defer, same as alpinejs.min.js, so order matters:
@@ -1835,6 +2056,7 @@ document.addEventListener('alpine:init', () => {
   Alpine.data('galleriesApp',    galleriesApp);
   Alpine.data('displayApp',      displayApp);
   Alpine.data('galleryAdminApp', galleryAdminApp);
+  Alpine.data('templateAdminApp', templateAdminApp);
   Alpine.data('userSwitcher',    userSwitcher);
   Alpine.data('titleEditor',     titleEditor);
   Alpine.data('commentsPanel',   commentsPanel);
