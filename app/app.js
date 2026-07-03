@@ -1318,6 +1318,505 @@ function wallApp() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// galleriesNav — loads gallery list for the hamburger menu.
+// Registered as a nested x-data component inside the hamburger dropdown.
+// galleriesHref is a plain data property (not a getter) so Alpine tracks it.
+// ─────────────────────────────────────────────────────────────────────────────
+function galleriesNav() {
+  return {
+    galleries:     [],
+    loaded:        false,
+    galleriesHref: '#',
+
+    async init() {
+      try {
+        const resp = await fetch('/api/v1/galleries?limit=100');
+        if (resp.ok) {
+          const data = await resp.json();
+          this.galleries = data.galleries || [];
+          if (this.galleries.length === 1) {
+            this.galleriesHref = '/galleries.html?galleryid=' + this.galleries[0].galleryid;
+          } else if (this.galleries.length > 1) {
+            this.galleriesHref = '/galleries.html';
+          }
+        }
+      } catch { /* non-fatal — menu degrades gracefully */ }
+      this.loaded = true;
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// galleriesApp — gallery list page + galleryid-based redirect.
+// If ?galleryid= is in the URL, fetches that gallery and redirects to its first
+// display.  If there is only one gallery total, also auto-redirects.
+// ─────────────────────────────────────────────────────────────────────────────
+function galleriesApp() {
+  return {
+    loggedInUser: null,
+    authConfig:   { googleEnabled: false, appleEnabled: false },
+    toast:        { visible: false, message: '', timer: null },
+
+    galleries: [],
+    loading:   true,
+    error:     null,
+
+    avatarSrc(user)  { return avatarSrc(user); },
+
+    showToast(message) {
+      clearTimeout(this.toast.timer);
+      this.toast.message = message;
+      this.toast.visible = true;
+      this.toast.timer   = setTimeout(() => { this.toast.visible = false; }, 3500);
+    },
+
+    async _redirectToFirstDisplay(galleryid) {
+      const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(galleryid));
+      if (!resp.ok) return false;
+      const g = await resp.json();
+      if (g.displays && g.displays.length > 0) {
+        window.location.href = '/display.html?displayid=' + g.displays[0].displayid;
+        return true;
+      }
+      return false;
+    },
+
+    async init() {
+      try {
+        const [cfg, me] = await Promise.all([
+          fetch('/auth/config').then(r => r.json()),
+          fetch('/auth/me').then(r => r.json()),
+        ]);
+        this.authConfig = cfg;
+        if (me.loggedIn) {
+          this.loggedInUser       = me;
+          window._testUserID      = me.userid;
+          window._loggedIn        = true;
+          window._currentUser     = me;
+          document.dispatchEvent(new CustomEvent('photoapp:auth-ready', { detail: me }));
+        }
+      } catch { /* non-fatal */ }
+
+      document.addEventListener('photoapp:auth-success', e => {
+        this.loggedInUser   = e.detail;
+        window._testUserID  = e.detail.userid;
+        window._loggedIn    = true;
+        window._currentUser = e.detail;
+      });
+      document.addEventListener('photoapp:toast', e => this.showToast(e.detail));
+
+      const params    = new URLSearchParams(window.location.search);
+      const galleryid = params.get('galleryid');
+
+      // ?galleryid= → redirect to first display
+      if (galleryid) {
+        try {
+          const redirected = await this._redirectToFirstDisplay(galleryid);
+          if (!redirected) {
+            this.error   = 'This gallery has no displays yet.';
+            this.loading = false;
+          }
+        } catch(e) {
+          this.error   = 'Could not load gallery.';
+          this.loading = false;
+        }
+        return;
+      }
+
+      // Load full gallery list
+      try {
+        const resp = await fetch('/api/v1/galleries?limit=100');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        this.galleries = data.galleries || [];
+
+        // Single gallery → redirect straight to its first display
+        if (this.galleries.length === 1) {
+          const redirected = await this._redirectToFirstDisplay(this.galleries[0].galleryid);
+          if (redirected) return;
+        }
+      } catch(e) {
+        this.error = e.message;
+      }
+      this.loading = false;
+    },
+
+    async navigateToGallery(galleryid) {
+      try {
+        const redirected = await this._redirectToFirstDisplay(galleryid);
+        if (!redirected) this.showToast('This gallery has no displays yet.');
+      } catch(e) {
+        this.showToast('Could not load gallery.');
+      }
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// displayApp — museum exhibit board viewer.
+// URL: /display.html?displayid=<uuid>
+// Fetches display detail (→ galleryid), then gallery detail (→ ordered display
+// list for prev/next nav).  prevDisplayId/nextDisplayId are plain data props
+// so Alpine can track them without getters.
+// ─────────────────────────────────────────────────────────────────────────────
+function displayApp() {
+  return {
+    loggedInUser: null,
+    authConfig:   { googleEnabled: false, appleEnabled: false },
+    toast:        { visible: false, message: '', timer: null },
+
+    display:         null,
+    gallery:         null,
+    galleryDisplays: [],
+    currentIndex:    -1,
+    loading:         true,
+    error:           null,
+
+    // Plain data properties for prev/next (updated after load)
+    prevDisplayId: null,
+    nextDisplayId: null,
+    gridStyle:     'grid-template-columns: repeat(1, 1fr)',
+
+    thumbUrl(url, w) { return thumbUrl(url, w); },
+    avatarSrc(user)  { return avatarSrc(user);  },
+
+    showToast(message) {
+      clearTimeout(this.toast.timer);
+      this.toast.message = message;
+      this.toast.visible = true;
+      this.toast.timer   = setTimeout(() => { this.toast.visible = false; }, 3500);
+    },
+
+    goToPrev() { if (this.prevDisplayId) window.location.href = '/display.html?displayid=' + this.prevDisplayId; },
+    goToNext() { if (this.nextDisplayId) window.location.href = '/display.html?displayid=' + this.nextDisplayId; },
+
+    async init() {
+      try {
+        const [cfg, me] = await Promise.all([
+          fetch('/auth/config').then(r => r.json()),
+          fetch('/auth/me').then(r => r.json()),
+        ]);
+        this.authConfig = cfg;
+        if (me.loggedIn) {
+          this.loggedInUser       = me;
+          window._testUserID      = me.userid;
+          window._loggedIn        = true;
+          window._currentUser     = me;
+          document.dispatchEvent(new CustomEvent('photoapp:auth-ready', { detail: me }));
+        }
+      } catch { /* non-fatal */ }
+
+      document.addEventListener('photoapp:auth-success', e => {
+        this.loggedInUser   = e.detail;
+        window._testUserID  = e.detail.userid;
+        window._loggedIn    = true;
+        window._currentUser = e.detail;
+      });
+      document.addEventListener('photoapp:toast', e => this.showToast(e.detail));
+
+      const params    = new URLSearchParams(window.location.search);
+      const displayid = params.get('displayid');
+      if (!displayid) {
+        this.error   = 'No display specified.';
+        this.loading = false;
+        return;
+      }
+
+      try {
+        // Fetch display (returns galleryid)
+        const dResp = await fetch('/api/v1/displays/' + encodeURIComponent(displayid));
+        if (!dResp.ok) throw new Error('Display not found (' + dResp.status + ')');
+        this.display = await dResp.json();
+
+        // Fetch gallery to get title and ordered display list
+        const gResp = await fetch('/api/v1/galleries/' + encodeURIComponent(this.display.galleryid));
+        if (gResp.ok) {
+          this.gallery        = await gResp.json();
+          this.galleryDisplays = this.gallery.displays || [];
+          this.currentIndex    = this.galleryDisplays.findIndex(d => d.displayid === displayid);
+          if (this.currentIndex > 0) {
+            this.prevDisplayId = this.galleryDisplays[this.currentIndex - 1].displayid;
+          }
+          if (this.currentIndex >= 0 && this.currentIndex < this.galleryDisplays.length - 1) {
+            this.nextDisplayId = this.galleryDisplays[this.currentIndex + 1].displayid;
+          }
+        }
+
+        // Compute grid layout from slot count
+        const n = this.display.slots ? this.display.slots.length : 0;
+        const cols = n <= 1 ? 1 : n <= 2 ? 2 : n <= 3 ? 3 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
+        this.gridStyle = 'grid-template-columns: repeat(' + cols + ', 1fr)';
+      } catch(e) {
+        this.error = e.message;
+      }
+      this.loading = false;
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// galleryAdminApp — gallery administration page.
+// Requires auth + GalleryCreate/Modify/Delete permissions.
+// Features: create gallery, rename/delete gallery, expand to see displays,
+// add/remove/reorder displays within a gallery.
+// ─────────────────────────────────────────────────────────────────────────────
+function galleryAdminApp() {
+  return {
+    loggedInUser: null,
+    authConfig:   { googleEnabled: false, appleEnabled: false },
+    toast:        { visible: false, message: '', timer: null },
+
+    galleries:    [],
+    loading:      true,
+    error:        null,
+
+    // Create form
+    newTitle:    '',
+    creating:    false,
+    createError: '',
+
+    // Rename
+    editingGalleryId: null,
+    editTitle:        '',
+    savingTitle:      false,
+
+    // Expanded gallery displays
+    expandedGalleryId: null,
+    expandedDisplays:  [],
+    loadingDisplays:   false,
+
+    avatarSrc(user) { return avatarSrc(user); },
+
+    showToast(message) {
+      clearTimeout(this.toast.timer);
+      this.toast.message = message;
+      this.toast.visible = true;
+      this.toast.timer   = setTimeout(() => { this.toast.visible = false; }, 3500);
+    },
+
+    async init() {
+      try {
+        const [cfg, me] = await Promise.all([
+          fetch('/auth/config').then(r => r.json()),
+          fetch('/auth/me').then(r => r.json()),
+        ]);
+        this.authConfig = cfg;
+        if (me.loggedIn) {
+          this.loggedInUser       = me;
+          window._testUserID      = me.userid;
+          window._loggedIn        = true;
+          window._currentUser     = me;
+          document.dispatchEvent(new CustomEvent('photoapp:auth-ready', { detail: me }));
+        }
+      } catch { /* non-fatal */ }
+
+      document.addEventListener('photoapp:auth-success', e => {
+        this.loggedInUser   = e.detail;
+        window._testUserID  = e.detail.userid;
+        window._loggedIn    = true;
+        window._currentUser = e.detail;
+      });
+      document.addEventListener('photoapp:toast', e => this.showToast(e.detail));
+
+      await this.loadGalleries();
+    },
+
+    async loadGalleries() {
+      this.loading = true;
+      this.error   = null;
+      try {
+        const resp = await fetch('/api/v1/galleries?limit=100', { headers: getAuthHeaders() });
+        if (resp.status === 403) {
+          this.error = 'You do not have permission to manage galleries. Please log in as an admin.';
+          this.loading = false;
+          return;
+        }
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        this.galleries = data.galleries || [];
+      } catch(e) {
+        this.error = e.message;
+      }
+      this.loading = false;
+    },
+
+    async createGallery() {
+      if (!this.newTitle.trim()) return;
+      this.creating    = true;
+      this.createError = '';
+      try {
+        const resp = await fetch('/api/v1/galleries', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({ title: this.newTitle.trim() }),
+        });
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.error || 'HTTP ' + resp.status);
+        }
+        const g = await resp.json();
+        this.galleries.push({ ...g, display_count: 0 });
+        this.newTitle = '';
+        this.showToast('Gallery created.');
+      } catch(e) {
+        this.createError = e.message;
+      }
+      this.creating = false;
+    },
+
+    startEdit(g) {
+      this.editingGalleryId = g.galleryid;
+      this.editTitle        = g.title;
+    },
+
+    cancelEdit() {
+      this.editingGalleryId = null;
+      this.editTitle        = '';
+    },
+
+    async saveTitle(galleryid) {
+      if (!this.editTitle.trim()) return;
+      this.savingTitle = true;
+      try {
+        const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(galleryid), {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({ title: this.editTitle.trim() }),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const idx = this.galleries.findIndex(g => g.galleryid === galleryid);
+        if (idx !== -1) this.galleries[idx] = { ...this.galleries[idx], title: this.editTitle.trim() };
+        this.cancelEdit();
+        this.showToast('Gallery renamed.');
+      } catch(e) {
+        this.showToast('Save failed: ' + e.message);
+      }
+      this.savingTitle = false;
+    },
+
+    async deleteGallery(galleryid) {
+      if (!confirm('Delete this gallery and all its displays?')) return;
+      try {
+        const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(galleryid), {
+          method: 'DELETE', headers: getAuthHeaders(),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        this.galleries = this.galleries.filter(g => g.galleryid !== galleryid);
+        if (this.expandedGalleryId === galleryid) {
+          this.expandedGalleryId = null;
+          this.expandedDisplays  = [];
+        }
+        this.showToast('Gallery deleted.');
+      } catch(e) {
+        this.showToast('Delete failed: ' + e.message);
+      }
+    },
+
+    async toggleDisplays(galleryid) {
+      if (this.expandedGalleryId === galleryid) {
+        this.expandedGalleryId = null;
+        this.expandedDisplays  = [];
+        return;
+      }
+      this.expandedGalleryId = galleryid;
+      this.loadingDisplays   = true;
+      this.expandedDisplays  = [];
+      try {
+        const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(galleryid));
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const g = await resp.json();
+        this.expandedDisplays = g.displays || [];
+      } catch(e) {
+        this.showToast('Failed to load displays: ' + e.message);
+      }
+      this.loadingDisplays = false;
+    },
+
+    async addDisplay(galleryid) {
+      try {
+        const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(galleryid) + '/displays', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({ sort_order: this.expandedDisplays.length }),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const d = await resp.json();
+        // Build a DisplaySummary-shaped object from the DisplayDetail response
+        this.expandedDisplays.push({
+          displayid:   d.displayid,
+          sort_order:  d.sort_order,
+          template:    d.template || null,
+          slot_count:  0,
+          filled_slots: 0,
+          created_at:  d.created_at,
+          updated_at:  d.updated_at,
+        });
+        const idx = this.galleries.findIndex(g => g.galleryid === galleryid);
+        if (idx !== -1) {
+          this.galleries[idx] = { ...this.galleries[idx], display_count: this.galleries[idx].display_count + 1 };
+        }
+        this.showToast('Display added.');
+      } catch(e) {
+        this.showToast('Failed to add display: ' + e.message);
+      }
+    },
+
+    async deleteDisplay(displayid, galleryid) {
+      if (!confirm('Remove this display?')) return;
+      try {
+        const resp = await fetch('/api/v1/displays/' + encodeURIComponent(displayid), {
+          method: 'DELETE', headers: getAuthHeaders(),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        this.expandedDisplays = this.expandedDisplays.filter(d => d.displayid !== displayid);
+        const idx = this.galleries.findIndex(g => g.galleryid === galleryid);
+        if (idx !== -1) {
+          this.galleries[idx] = { ...this.galleries[idx], display_count: Math.max(0, this.galleries[idx].display_count - 1) };
+        }
+        this.showToast('Display removed.');
+      } catch(e) {
+        this.showToast('Delete failed: ' + e.message);
+      }
+    },
+
+    async moveDisplay(displayid, direction) {
+      const idx    = this.expandedDisplays.findIndex(d => d.displayid === displayid);
+      if (idx === -1) return;
+      const newIdx = direction === 'up' ? idx - 1 : idx + 1;
+      if (newIdx < 0 || newIdx >= this.expandedDisplays.length) return;
+
+      // Swap locally for immediate feedback
+      const arr        = [...this.expandedDisplays];
+      const tmp        = arr[idx];
+      arr[idx]         = arr[newIdx];
+      arr[newIdx]      = tmp;
+      this.expandedDisplays = arr;
+
+      // Persist new order
+      try {
+        const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(this.expandedGalleryId), {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({ display_order: arr.map(d => d.displayid) }),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      } catch(e) {
+        this.showToast('Reorder failed: ' + e.message);
+        // Reload displays to get true server state
+        try {
+          const r = await fetch('/api/v1/galleries/' + encodeURIComponent(this.expandedGalleryId));
+          if (r.ok) { const g = await r.json(); this.expandedDisplays = g.displays || []; }
+        } catch { /* leave current state */ }
+      }
+    },
+
+    displayViewHref(displayid) {
+      return '/display.html?displayid=' + displayid;
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Alpine init — store + component registration.
 // Must run before Alpine initializes (alpine:init fires before Alpine walks DOM).
 // app.js is loaded with defer, same as alpinejs.min.js, so order matters:
@@ -1330,14 +1829,18 @@ document.addEventListener('alpine:init', () => {
     settingsOpen: false,
   });
 
-  Alpine.data('photoApp',      photoApp);
-  Alpine.data('wallApp',       wallApp);
-  Alpine.data('userSwitcher',  userSwitcher);
-  Alpine.data('titleEditor',   titleEditor);
-  Alpine.data('commentsPanel', commentsPanel);
-  Alpine.data('commentItem',   commentItem);
-  Alpine.data('labelEditor',   labelEditor);
-  Alpine.data('emojiPicker',   emojiPicker);
+  Alpine.data('photoApp',        photoApp);
+  Alpine.data('wallApp',         wallApp);
+  Alpine.data('galleriesNav',    galleriesNav);
+  Alpine.data('galleriesApp',    galleriesApp);
+  Alpine.data('displayApp',      displayApp);
+  Alpine.data('galleryAdminApp', galleryAdminApp);
+  Alpine.data('userSwitcher',    userSwitcher);
+  Alpine.data('titleEditor',     titleEditor);
+  Alpine.data('commentsPanel',   commentsPanel);
+  Alpine.data('commentItem',     commentItem);
+  Alpine.data('labelEditor',     labelEditor);
+  Alpine.data('emojiPicker',     emojiPicker);
   Alpine.data('emojiHover',      emojiHover);
   Alpine.data('avatarSettings',  avatarSettings);
   Alpine.data('authModal',       authModal);

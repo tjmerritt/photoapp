@@ -109,7 +109,7 @@ All handlers (`PhotoHandler`, `PatchPhotoHandler`, `SearchHandler`, `AdminHandle
 | DELETE | `/api/v1/display-templates/:templateid` | `templates.Delete` | ✓ |
 
 ### Open items
-- Phase 2e–2g: frontend gallery pages, display editor, gallery permissions UI
+- Phase 2e–2g: ✅ complete (see Session 5)
 - Phase 3: photo wall ✅ (see Session 3)
 - Phase 4: Microsoft sign-in
 - Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
@@ -159,6 +159,119 @@ All handlers (`PhotoHandler`, `PatchPhotoHandler`, `SearchHandler`, `AdminHandle
 
 ### Open items
 - Phase 2e–2g: frontend gallery pages, display editor, gallery permissions UI
+- Phase 4: Microsoft sign-in
+- Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
+- Phase 6: admin pages
+- Phase 7: photo uploads
+
+---
+
+## Session 4 — Photo Wall Bug Fixes
+
+### What was done
+
+**Fix: row overflow (horizontal scroll)**
+
+`packRows` was rewritten to output `flexGrow` + row `height` instead of explicit `displayWidth`/`displayHeight` per photo:
+- Each row div gets `height:${row.height}px` via inline style
+- Each photo gets `flex:${p.flexGrow} 1 0px` — CSS distributes widths proportionally, always summing to container width regardless of measurement timing
+- `.wall-row` gains `width:100%; overflow:hidden`; `.wall-photo` loses `flex-shrink:0`, gains `min-width:0`
+- `containerWidth` now only affects row height, not horizontal correctness
+- Added `MIN_ROW_H=80px` floor, `|| 1` guards for zero-dimension photos, and `TARGET_ROW_H` fallback when `containerWidth=0`
+
+**Fix: last-row reflow on infinite scroll**
+
+When `hasMore` is true, the last (partial) row is hidden so it doesn't jump as the next batch fills it out:
+- `x-for="(row, idx) in rows"` with `x-show="!hasMore || idx < rows.length - 1"` on the row div
+- `x-show` sets `display:none` → zero height → no gap; on next batch the row becomes interior and appears instantly
+
+**Fix: photo click navigation**
+
+Several Alpine CSP build constraints were discovered and worked around:
+
+| Approach | Result |
+|---|---|
+| `:href="\`/photo.html?photoid=${p.photoid}\`"` | No `href` set — CSP build blocks template literals in `:href` |
+| `:href="photoUrl(p.photoid)"` (component method) | No `href` set — CSP build blocks method calls in `:href` |
+| `:href="p.url"` (pre-computed string on photo object) | No `href` set — CSP build blocks all dynamic `:href` in nested `x-for` |
+| `x-init="$el.href = ..."` | CSP evaluator doesn't support assignment expressions |
+| `@click="window.location.href = p.url"` | CSP evaluator blocks `window` access in event expressions |
+| `@click="navigate(p.url)"` (component method calling `window.location.href`) | Works but user found a better fix |
+| `:href="'/photo.html?photoid=' + p.photoid"` + `target="_blank"` | **Works** — string concatenation IS supported in `:href`; `target="_blank"` opens in new tab |
+
+**Final solution** in `app/index.html`:
+```html
+<a :href="'/photo.html?photoid=' + p.photoid"
+   target="_blank"
+   class="wall-photo"
+   :style="`flex:${p.flexGrow} 1 0px`">
+```
+
+**Alpine CSP build rules learned:**
+- Template literals in `:href` → blocked
+- Method calls in `:href` → blocked
+- String concatenation in `:href` → works
+- `window.*` access in `@click` expressions → blocked (must wrap in a component method)
+- `x-init` expressions → read-only; assignment statements silently fail
+- `target="_blank"` must be a static attribute (not bound)
+
+### Open items
+- Phase 2e–2g: frontend gallery pages, display editor, gallery permissions UI
+- Phase 4: Microsoft sign-in
+- Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
+- Phase 6: admin pages
+- Phase 7: photo uploads
+
+---
+
+## Session 5 — Phase 2e–2g: Gallery Frontend
+
+### What was done
+
+**`app/app.js`** — four new Alpine components added and registered:
+
+- **`galleriesNav()`** — nested component for the hamburger menu. Loads `GET /api/v1/galleries?limit=100` on init; sets `galleriesHref` as a plain data property (not getter, so Alpine tracks it). 0 galleries → grayed-out; 1 gallery → `galleries.html?galleryid=xxx`; N → `galleries.html` with sub-items per gallery.
+- **`galleriesApp()`** — root for `galleries.html`. Detects `?galleryid=` in URL and redirects to first display of that gallery. Single-gallery auto-redirect. Otherwise renders gallery card grid.
+- **`displayApp()`** — root for `display.html`. Fetches display → galleryid, then gallery → ordered display list. `prevDisplayId`/`nextDisplayId` are plain data properties updated after load. `gridStyle` precomputed from slot count (1→1col, 2→2col, 3→3col, 4→2col, 5-6→3col, 7+→4col). Navigation via `goToPrev()`/`goToNext()` methods setting `window.location.href` (safe from CSP inside methods).
+- **`galleryAdminApp()`** — root for `gallery-admin.html`. CRUD: create gallery, rename (in-place edit), delete, expand displays panel per gallery, add/remove/reorder displays. `display_order` array sent in PATCH body. Immediate local swap for reorder with server-side reload on failure.
+
+**Navbar updates** (`app/index.html`, `app/photo.html`):
+- Dropdown width `w-44` → `w-52`
+- Nested `x-data="galleriesNav"` block: loading state, grayed state, active link, per-gallery sub-items
+- Gallery Admin link added
+- All `:href` use string concatenation — no template literals, no method calls
+
+**`app/galleries.html`** (new):
+- Responsive card grid (1/2/3 cols)
+- `@click="navigateToGallery(g.galleryid)"` fetches first display and navigates
+- Handles `?galleryid=` redirect mode for nav sub-items
+- Empty state with link to Gallery Admin
+
+**`app/display.html`** (new) — museum exhibit board:
+- Board: `background:#f0ead6`, drop shadow, border-radius
+- Slots in CSS grid with `gridStyle` `:style` binding
+- Each slot: `photo-frame` (4:3 aspect-ratio box, `object-fit:contain`) + `slot-placard` (cream card, serif font for captions)
+- `x-if` (not `x-show`) guards `slot.photo` to avoid null dereference on image bindings
+- Breadcrumb: Galleries > Gallery Name > Display N of M
+- Prev/Next buttons (disabled at ends) at top and bottom
+- Empty display message when no slots exist
+
+**`app/gallery-admin.html`** (new):
+- Create gallery form; toasts for all async feedback
+- Expand/collapse per-gallery display list
+- In-place rename (input + Save/Cancel)
+- Up/Down arrows for reorder; delete with confirm()
+- Add Display creates blank display; View button links to display.html?displayid=xxx
+
+### Alpine CSP constraints respected
+- `:href` uses only string concatenation (`'/path/' + property`)
+- No template literals in any binding attribute
+- `window.location.href` only accessed inside component methods
+- `x-if` used for conditional rendering that dereferences optional properties
+
+### Open items
+- Display slot editing (assign photos to slots, add placard text) — Phase 2 followup
+- Display template selection in admin UI
 - Phase 4: Microsoft sign-in
 - Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
 - Phase 6: admin pages

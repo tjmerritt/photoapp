@@ -68,8 +68,33 @@
         </svg>
       </button>
       <div x-show="open" @click.outside="open=false" x-transition
-           class="absolute left-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-44 py-1 animate-scalein">
+           class="absolute left-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-52 py-1 animate-scalein">
         <a href="/" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Photos</a>
+
+        <!-- Galleries menu item (with sub-items) -->
+        <div x-data="galleriesNav">
+          <!-- Loading placeholder -->
+          <span x-show="!loaded" class="block px-4 py-2.5 text-sm text-gray-300 cursor-default">Galleries</span>
+          <!-- Grayed out when no galleries -->
+          <span x-show="loaded && galleries.length === 0"
+                class="block px-4 py-2.5 text-sm text-gray-300 cursor-default">Galleries</span>
+          <!-- Single gallery or "All Galleries" link -->
+          <a x-show="loaded && galleries.length > 0"
+             :href="galleriesHref"
+             class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Galleries</a>
+          <!-- Sub-items when there are multiple galleries -->
+          <div x-show="loaded && galleries.length > 1">
+            <template x-for="g in galleries" :key="g.galleryid">
+              <a :href="'/galleries.html?galleryid=' + g.galleryid"
+                 class="block pl-7 pr-4 py-1.5 text-xs text-[var(--muted)] hover:text-[var(--brand)] hover:bg-gray-50 truncate">
+                <span x-text="g.title"></span>
+              </a>
+            </template>
+          </div>
+        </div>
+
+        <a href="/gallery-admin.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Gallery Admin</a>
+
         <button @click="loggedInUser && ($store.ui.settingsOpen = !$store.ui.settingsOpen)"
                 :class="loggedInUser ? '' : 'opacity-40 cursor-default'"
                 class="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-center gap-3">
