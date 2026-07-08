@@ -1453,6 +1453,47 @@ function galleriesApp() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Matte + frame presentation helpers — shared by displayApp and displayEditApp.
+// A display template's `presentation` JSON (set in Template Admin) controls
+// how each photo slot is bordered:
+//   {
+//     "matte": { "enabled": true,  "color": "#e8e3d5", "width": 16 },
+//     "frame": { "enabled": false, "color": "#3d3424", "width": 8 }
+//   }
+// matte.width may be a single number (applied to all four sides) or an
+// object like { "top": 8, "right": 24, "bottom": 24, "left": 24 } for an
+// asymmetric mat. Missing sides default to 0. Either matte or frame can be
+// turned off independently via "enabled". Absent/invalid presentation falls
+// back to a plain matte in the theme's frame color and no outer frame.
+// ─────────────────────────────────────────────────────────────────────────────
+function normalizeSideWidths(width) {
+  if (typeof width === 'number') {
+    return { top: width, right: width, bottom: width, left: width };
+  }
+  var w = width || {};
+  return {
+    top:    typeof w.top    === 'number' ? w.top    : 0,
+    right:  typeof w.right  === 'number' ? w.right  : 0,
+    bottom: typeof w.bottom === 'number' ? w.bottom : 0,
+    left:   typeof w.left   === 'number' ? w.left   : 0,
+  };
+}
+
+function frameOuterStyle(presentation) {
+  var p     = presentation || {};
+  var frame = Object.assign({ enabled: false, color: 'var(--board-border)', width: 8 }, p.frame || {});
+  return frame.enabled ? ('border: ' + frame.width + 'px solid ' + frame.color + ';') : 'border: none;';
+}
+
+function matteInnerStyle(presentation) {
+  var p     = presentation || {};
+  var matte = Object.assign({ enabled: true, color: 'var(--frame-bg)', width: 16 }, p.matte || {});
+  if (!matte.enabled) return 'background: none; padding: 0;';
+  var w = normalizeSideWidths(matte.width);
+  return 'background: ' + matte.color + '; padding: ' + w.top + 'px ' + w.right + 'px ' + w.bottom + 'px ' + w.left + 'px;';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // displayApp — museum exhibit board viewer. Read-only, public-facing.
 // URL: /display.html?displayid=<uuid>
 // Fetches display detail (→ galleryid), then gallery detail (→ ordered display
@@ -1476,6 +1517,8 @@ function displayApp() {
     gridStyle:     'grid-template-columns: repeat(1, 1fr)',
 
     thumbUrl(url, w) { return thumbUrl(url, w); },
+    frameOuterStyle() { return frameOuterStyle(this.display && this.display.template && this.display.template.presentation); },
+    matteInnerStyle() { return matteInnerStyle(this.display && this.display.template && this.display.template.presentation); },
 
     goToPrev() { if (this.prevDisplayId) window.location.href = '/display.html?displayid=' + this.prevDisplayId; },
     goToNext() { if (this.nextDisplayId) window.location.href = '/display.html?displayid=' + this.nextDisplayId; },
@@ -1559,6 +1602,8 @@ function displayEditApp() {
     pickerDebounce:   null,
 
     thumbUrl(url, w) { return thumbUrl(url, w); },
+    frameOuterStyle() { return frameOuterStyle(this.display && this.display.template && this.display.template.presentation); },
+    matteInnerStyle() { return matteInnerStyle(this.display && this.display.template && this.display.template.presentation); },
     avatarSrc(user)  { return avatarSrc(user);  },
 
     showToast(message) {
@@ -2148,6 +2193,16 @@ function templateAdminApp() {
       return positions;
     },
 
+    // Starter presentation for new templates — a plain matte in the theme's
+    // frame color, no outer frame. See app.js's matte/frame helper comment
+    // (above displayApp) for the full schema; editable per-template below.
+    defaultPresentation() {
+      return {
+        matte: { enabled: true,  color: '#e8e3d5', width: 16 },
+        frame: { enabled: false, color: '#3d3424', width: 8 },
+      };
+    },
+
     async createTemplate() {
       if (this.creating || !this.newName.trim() || this.newPhotoCount < 1) return;
       this.creating    = true;
@@ -2160,7 +2215,7 @@ function templateAdminApp() {
             name:           this.newName.trim(),
             photo_count:    this.newPhotoCount,
             slot_positions: this.defaultSlotPositions(this.newPhotoCount),
-            presentation:   {},
+            presentation:   this.defaultPresentation(),
           }),
         });
         if (!resp.ok) {

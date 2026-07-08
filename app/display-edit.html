@@ -52,24 +52,29 @@
       flex-direction: column;
       gap: 0;
     }
+    /* .photo-frame is the outer frame border (style set inline from the
+       template's presentation.frame); .photo-matte is the mat board inside
+       it (padding + color set inline from presentation.matte). Both are
+       independently optional — see frameOuterStyle()/matteInnerStyle(). */
     .photo-frame {
       position: relative;
-      background: var(--frame-bg);
-      border: 1px solid var(--board-border);
       border-radius: 4px 4px 0 0;
       overflow: hidden;
-      aspect-ratio: 4 / 3;
+      box-sizing: border-box;
+    }
+    .photo-matte {
       display: flex;
       align-items: center;
       justify-content: center;
+      box-sizing: border-box;
     }
-    .photo-frame img {
+    .photo-matte img {
       width: 100%;
-      height: 100%;
-      object-fit: contain;
+      height: auto;
       display: block;
     }
-    .photo-frame.empty-frame {
+    .photo-matte.empty-matte {
+      aspect-ratio: 4 / 3;
       color: #c5bfad;
       font-size: 0.75rem;
     }
@@ -318,26 +323,24 @@
            :style="gridStyle">
         <template x-for="slot in (display && display.slots || [])" :key="slot.slotid">
           <div class="slot-card">
-            <!-- Photo -->
-            <template x-if="slot.photo">
-              <div class="photo-frame">
-                <img :src="thumbUrl(slot.photo.imageurl, 600)"
-                     :alt="'Slot ' + slot.slot_index"
-                     loading="lazy" />
-                <button x-show="loggedInUser" class="slot-edit-btn" @click="openPicker(slot.slot_index)">
-                  Change photo
-                </button>
-              </div>
-            </template>
-            <!-- Empty slot placeholder -->
-            <template x-if="!slot.photo">
-              <div class="photo-frame empty-frame">
-                <span>Empty</span>
-                <button x-show="loggedInUser" class="slot-edit-btn" @click="openPicker(slot.slot_index)">
-                  Add photo
-                </button>
-              </div>
-            </template>
+            <!-- Photo, with an optional frame + matte around it -->
+            <div class="photo-frame" :style="frameOuterStyle()">
+              <template x-if="slot.photo">
+                <div class="photo-matte" :style="matteInnerStyle()">
+                  <img :src="thumbUrl(slot.photo.imageurl, 600)"
+                       :alt="'Slot ' + slot.slot_index"
+                       loading="lazy" />
+                </div>
+              </template>
+              <!-- Empty slot placeholder -->
+              <template x-if="!slot.photo">
+                <div class="photo-matte empty-matte" :style="matteInnerStyle()">
+                  <span>Empty</span>
+                </div>
+              </template>
+              <button x-show="loggedInUser" class="slot-edit-btn" @click="openPicker(slot.slot_index)"
+                      x-text="slot.photo ? 'Change photo' : 'Add photo'"></button>
+            </div>
             <!-- Placard -->
             <div class="slot-placard">
               <span x-show="slot.rich_text" x-text="slot.rich_text"></span>

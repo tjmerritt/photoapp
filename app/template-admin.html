@@ -304,9 +304,15 @@
                   <textarea class="input w-full mt-1" rows="8" x-model="editSlotPositions" spellcheck="false"></textarea>
                 </label>
                 <label class="text-xs font-medium text-[var(--muted)]">
-                  Presentation (JSON — styling rules, optional)
-                  <textarea class="input w-full mt-1" rows="4" x-model="editPresentation" spellcheck="false"></textarea>
+                  Presentation (JSON) — matte + frame around each photo
+                  <textarea class="input w-full mt-1" rows="7" x-model="editPresentation" spellcheck="false"></textarea>
                 </label>
+                <p class="text-xs text-[var(--muted)] -mt-2">
+                  matte/frame each take <code>enabled</code>, <code>color</code>, and <code>width</code>
+                  (px). Matte's <code>width</code> may instead be
+                  <code>{top,right,bottom,left}</code> for an uneven mat. Set either
+                  <code>enabled: false</code> to omit it.
+                </p>
 
                 <p x-show="editError" class="text-red-500 text-xs" x-text="editError"></p>
 

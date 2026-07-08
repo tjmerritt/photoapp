@@ -45,11 +45,11 @@ func (h *DisplaysHandler) Get(w http.ResponseWriter, r *http.Request, ps httprou
 	}
 
 	var d models.DisplayDetail
-	var tmplID, tmplName *string
+	var tmplID, tmplName, tmplPresentation *string
 	var tmplCount *int
 	err = h.DB.QueryRow(ctx, `
 		SELECT d.displayid::text, d.galleryid::text, d.sort_order,
-		       t.templateid::text, t.name, t.photo_count,
+		       t.templateid::text, t.name, t.photo_count, t.presentation::text,
 		       d.created_at, d.updated_at
 		FROM   displays d
 		JOIN   galleries g ON g.galleryid = d.galleryid
@@ -57,7 +57,7 @@ func (h *DisplaysHandler) Get(w http.ResponseWriter, r *http.Request, ps httprou
 		WHERE  d.displayid = $1 AND d.deleted_at IS NULL AND g.exhibitionid = $2
 	`, displayID, exhibitionID).Scan(
 		&d.DisplayID, &d.GalleryID, &d.SortOrder,
-		&tmplID, &tmplName, &tmplCount,
+		&tmplID, &tmplName, &tmplCount, &tmplPresentation,
 		&d.CreatedAt, &d.UpdatedAt,
 	)
 	if err == pgx.ErrNoRows {
@@ -74,6 +74,9 @@ func (h *DisplaysHandler) Get(w http.ResponseWriter, r *http.Request, ps httprou
 			TemplateID: *tmplID,
 			Name:       *tmplName,
 			PhotoCount: *tmplCount,
+		}
+		if tmplPresentation != nil {
+			d.Template.Presentation = json.RawMessage(*tmplPresentation)
 		}
 	}
 

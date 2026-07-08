@@ -223,10 +223,13 @@ type GalleriesResponse struct {
 // ── Displays ─────────────────────────────────────────────────────────────────
 
 // TemplateSummary is the compact template shape embedded in display responses.
+// Presentation is only populated on GET /api/v1/displays/:displayid (the
+// viewer/editor need it to render matte + frame; list views don't).
 type TemplateSummary struct {
-	TemplateID string `json:"templateid"`
-	Name       string `json:"name"`
-	PhotoCount int    `json:"photo_count"`
+	TemplateID   string          `json:"templateid"`
+	Name         string          `json:"name"`
+	PhotoCount   int             `json:"photo_count"`
+	Presentation json.RawMessage `json:"presentation,omitempty"`
 }
 
 // DisplaySummary is a brief display entry embedded in GalleryDetail.
