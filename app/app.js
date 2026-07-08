@@ -1458,6 +1458,8 @@ function galleriesApp() {
 // Fetches display detail (→ galleryid), then gallery detail (→ ordered display
 // list for prev/next nav).  prevDisplayId/nextDisplayId are plain data props
 // so Alpine can track them without getters.
+// Also owns the photo picker: a search-driven modal (opened per-slot, shown
+// to logged-in users) that assigns a photo to a display slot via PATCH.
 // ─────────────────────────────────────────────────────────────────────────────
 function displayApp() {
   return {
@@ -1476,6 +1478,16 @@ function displayApp() {
     prevDisplayId: null,
     nextDisplayId: null,
     gridStyle:     'grid-template-columns: repeat(1, 1fr)',
+
+    // Photo picker (search + assign a photo to a slot)
+    pickerOpen:       false,
+    pickerSlotIndex:  null,
+    pickerQuery:      '',
+    pickerResults:    [],
+    pickerLoading:    false,
+    pickerError:      '',
+    pickerSaving:     false,
+    pickerDebounce:   null,
 
     thumbUrl(url, w) { return thumbUrl(url, w); },
     avatarSrc(user)  { return avatarSrc(user);  },
@@ -1550,6 +1562,96 @@ function displayApp() {
         this.error = e.message;
       }
       this.loading = false;
+    },
+
+    // ── Photo picker ──────────────────────────────────────────────────────────
+
+    openPicker(slotIndex) {
+      this.pickerSlotIndex = slotIndex;
+      this.pickerQuery     = '';
+      this.pickerResults   = [];
+      this.pickerError     = '';
+      this.pickerOpen      = true;
+    },
+
+    closePicker() {
+      clearTimeout(this.pickerDebounce);
+      this.pickerOpen      = false;
+      this.pickerSlotIndex = null;
+    },
+
+    onPickerInput() {
+      clearTimeout(this.pickerDebounce);
+      const q = this.pickerQuery.trim();
+      if (!q) {
+        this.pickerResults = [];
+        this.pickerLoading = false;
+        return;
+      }
+      this.pickerLoading = true;
+      this.pickerDebounce = setTimeout(() => this.runPickerSearch(q), 300);
+    },
+
+    async runPickerSearch(q) {
+      this.pickerError = '';
+      try {
+        const resp = await fetch('/api/v1/search?q=' + encodeURIComponent(q));
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        // Ignore stale responses if the query has since changed.
+        if (this.pickerQuery.trim() === q) {
+          this.pickerResults = data.results || [];
+        }
+      } catch(e) {
+        if (this.pickerQuery.trim() === q) this.pickerError = e.message;
+      }
+      if (this.pickerQuery.trim() === q) this.pickerLoading = false;
+    },
+
+    // The slot currently open in the picker, straight from the loaded display.
+    currentPickerSlot() {
+      if (!this.display || !this.display.slots || this.pickerSlotIndex === null) return null;
+      return this.display.slots.find(s => s.slot_index === this.pickerSlotIndex) || null;
+    },
+
+    selectPickerPhoto(photo) {
+      this.saveSlotPhoto(photo.photoid);
+    },
+
+    clearPickerPhoto() {
+      this.saveSlotPhoto('');
+    },
+
+    // Persists a slot's photo. The API upserts rich_text/placard from whatever
+    // is in the request, so both must be resent as-is or they'll be wiped.
+    async saveSlotPhoto(photoid) {
+      const slot = this.currentPickerSlot();
+      if (!slot || this.pickerSaving) return;
+      this.pickerSaving = true;
+      try {
+        const resp = await fetch('/api/v1/displays/' + encodeURIComponent(this.display.displayid), {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({
+            slots: [{
+              slot_index: slot.slot_index,
+              photoid:    photoid,
+              rich_text:  slot.rich_text || '',
+              placard:    slot.placard !== undefined ? slot.placard : null,
+            }],
+          }),
+        });
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.error || 'HTTP ' + resp.status);
+        }
+        this.display = await resp.json();
+        this.showToast(photoid ? 'Photo updated.' : 'Photo removed.');
+        this.closePicker();
+      } catch(e) {
+        this.showToast('Failed to update photo: ' + e.message);
+      }
+      this.pickerSaving = false;
     },
   };
 }

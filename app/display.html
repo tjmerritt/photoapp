@@ -35,6 +35,7 @@
     .animate-fadein  { animation: fadeIn  .3s ease both; }
     .animate-scalein { animation: scaleIn .2s  ease both; }
     [x-cloak] { display: none !important; }
+    .backdrop { background: rgba(26,26,46,.55); backdrop-filter: blur(3px); }
 
     /* Museum board */
     .board {
@@ -52,6 +53,7 @@
       gap: 0;
     }
     .photo-frame {
+      position: relative;
       background: var(--frame-bg);
       border: 1px solid var(--board-border);
       border-radius: 4px 4px 0 0;
@@ -71,6 +73,60 @@
       color: #c5bfad;
       font-size: 0.75rem;
     }
+    .slot-edit-btn {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      background: rgba(26,26,46,.75);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 0.3rem 0.55rem;
+      font-size: 0.7rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .slot-edit-btn:hover { background: rgba(26,26,46,.92); }
+
+    /* Photo picker modal */
+    .picker-card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 20px 50px rgba(0,0,0,.25);
+      width: 100%;
+      max-width: 30rem;
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      padding: 1.25rem;
+    }
+    .picker-results {
+      overflow-y: auto;
+      flex: 1;
+    }
+    .picker-result {
+      text-align: left;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0;
+    }
+    .picker-thumb {
+      aspect-ratio: 1 / 1;
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--surface);
+      border: 1px solid var(--border);
+    }
+    .picker-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      transition: opacity .15s;
+    }
+    .picker-result:hover .picker-thumb img { opacity: .8; }
     .slot-placard {
       background: var(--placard-bg);
       border: 1px solid var(--placard-border);
@@ -238,12 +294,18 @@
                 <img :src="thumbUrl(slot.photo.imageurl, 600)"
                      :alt="'Slot ' + slot.slot_index"
                      loading="lazy" />
+                <button x-show="loggedInUser" class="slot-edit-btn" @click="openPicker(slot.slot_index)">
+                  Change photo
+                </button>
               </div>
             </template>
             <!-- Empty slot placeholder -->
             <template x-if="!slot.photo">
               <div class="photo-frame empty-frame">
                 <span>Empty</span>
+                <button x-show="loggedInUser" class="slot-edit-btn" @click="openPicker(slot.slot_index)">
+                  Add photo
+                </button>
               </div>
             </template>
             <!-- Placard -->
@@ -277,6 +339,60 @@
 
   </div>
 </main>
+
+<!-- ══ PHOTO PICKER ════════════════════════════════════════════════════════ -->
+<div x-show="pickerOpen" x-cloak x-transition
+     class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
+     @click.self="closePicker()"
+     @keydown.escape.window="closePicker()">
+  <div class="picker-card animate-scalein">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="font-serif text-lg">Choose a photo</h3>
+      <button class="text-[var(--muted)] hover:text-[var(--brand)] text-xl leading-none px-1" @click="closePicker()">&times;</button>
+    </div>
+
+    <input class="input w-full mb-3"
+           style="border:1px solid var(--border); border-radius:7px; padding:0.5rem 0.75rem; font-size:0.875rem;"
+           type="text"
+           placeholder="Search photos by title, label, @user…"
+           x-model="pickerQuery"
+           @input="onPickerInput()" />
+
+    <div class="picker-results">
+      <div x-show="pickerLoading" class="text-sm text-[var(--muted)] text-center py-8">Searching…</div>
+
+      <div x-show="!pickerLoading && pickerError" class="text-sm text-red-500 text-center py-8" x-text="pickerError"></div>
+
+      <div x-show="!pickerLoading && !pickerError && pickerQuery.trim() && pickerResults.length === 0"
+           class="text-sm text-[var(--muted)] text-center py-8">
+        No photos found.
+      </div>
+
+      <div x-show="!pickerLoading && !pickerQuery.trim()" class="text-sm text-[var(--muted)] text-center py-8">
+        Type to search photos.
+      </div>
+
+      <div x-show="!pickerLoading && pickerResults.length > 0" class="grid grid-cols-3 gap-2">
+        <template x-for="p in pickerResults" :key="p.photoid">
+          <button class="picker-result" @click="selectPickerPhoto(p)" :disabled="pickerSaving">
+            <div class="picker-thumb">
+              <img :src="thumbUrl(p.imageurl, 200)" :alt="p.title || 'Untitled photo'" loading="lazy" />
+            </div>
+            <p class="text-xs mt-1 truncate" x-text="p.title || '(untitled)'"></p>
+          </button>
+        </template>
+      </div>
+    </div>
+
+    <button x-show="currentPickerSlot() && currentPickerSlot().photo"
+            class="btn-secondary text-sm mt-3 self-start"
+            style="border:1px solid var(--border); border-radius:7px; padding:0.5rem 1rem; background:none; cursor:pointer;"
+            :disabled="pickerSaving"
+            @click="clearPickerPhoto()">
+      Remove photo from this slot
+    </button>
+  </div>
+</div>
 
 <!-- ══ TOAST ═══════════════════════════════════════════════════════════════ -->
 <div x-show="toast.visible" x-transition

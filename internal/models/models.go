@@ -179,6 +179,7 @@ type SearchResult struct {
 	ImageURL string `json:"imageurl"`
 	Width    int    `json:"width"`
 	Height   int    `json:"height"`
+	Title    string `json:"title"`
 }
 
 // SearchResponse is returned by GET /api/v1/search.
