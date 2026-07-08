@@ -1453,15 +1453,84 @@ function galleriesApp() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// displayApp — museum exhibit board viewer.
+// displayApp — museum exhibit board viewer. Read-only, public-facing.
 // URL: /display.html?displayid=<uuid>
 // Fetches display detail (→ galleryid), then gallery detail (→ ordered display
 // list for prev/next nav).  prevDisplayId/nextDisplayId are plain data props
 // so Alpine can track them without getters.
-// Also owns the photo picker: a search-driven modal (opened per-slot, shown
-// to logged-in users) that assigns a photo to a display slot via PATCH.
+// No auth/editing here by design — that lives in displayEditApp (below),
+// which display-edit.html uses instead.
 // ─────────────────────────────────────────────────────────────────────────────
 function displayApp() {
+  return {
+    display:         null,
+    gallery:         null,
+    galleryDisplays: [],
+    currentIndex:    -1,
+    loading:         true,
+    error:           null,
+
+    // Plain data properties for prev/next (updated after load)
+    prevDisplayId: null,
+    nextDisplayId: null,
+    gridStyle:     'grid-template-columns: repeat(1, 1fr)',
+
+    thumbUrl(url, w) { return thumbUrl(url, w); },
+
+    goToPrev() { if (this.prevDisplayId) window.location.href = '/display.html?displayid=' + this.prevDisplayId; },
+    goToNext() { if (this.nextDisplayId) window.location.href = '/display.html?displayid=' + this.nextDisplayId; },
+
+    async init() {
+      const params    = new URLSearchParams(window.location.search);
+      const displayid = params.get('displayid');
+      if (!displayid) {
+        this.error   = 'No display specified.';
+        this.loading = false;
+        return;
+      }
+
+      try {
+        // Fetch display (returns galleryid)
+        const dResp = await fetch('/api/v1/displays/' + encodeURIComponent(displayid));
+        if (!dResp.ok) throw new Error('Display not found (' + dResp.status + ')');
+        this.display = await dResp.json();
+
+        // Fetch gallery to get title and ordered display list
+        const gResp = await fetch('/api/v1/galleries/' + encodeURIComponent(this.display.galleryid));
+        if (gResp.ok) {
+          this.gallery        = await gResp.json();
+          this.galleryDisplays = this.gallery.displays || [];
+          this.currentIndex    = this.galleryDisplays.findIndex(d => d.displayid === displayid);
+          if (this.currentIndex > 0) {
+            this.prevDisplayId = this.galleryDisplays[this.currentIndex - 1].displayid;
+          }
+          if (this.currentIndex >= 0 && this.currentIndex < this.galleryDisplays.length - 1) {
+            this.nextDisplayId = this.galleryDisplays[this.currentIndex + 1].displayid;
+          }
+        }
+
+        // Compute grid layout from slot count
+        const n = this.display.slots ? this.display.slots.length : 0;
+        const cols = n <= 1 ? 1 : n <= 2 ? 2 : n <= 3 ? 3 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
+        this.gridStyle = 'grid-template-columns: repeat(' + cols + ', 1fr)';
+      } catch(e) {
+        this.error = e.message;
+      }
+      this.loading = false;
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// displayEditApp — museum exhibit board editor.
+// URL: /display-edit.html?displayid=<uuid>
+// Same load/nav logic as displayApp (viewer), plus auth state and the photo
+// picker: a search-driven modal (opened per-slot, shown to logged-in users)
+// that assigns a photo to a display slot via PATCH. Kept as a separate
+// component (rather than a mode flag on displayApp) so the public viewer
+// never carries editing code or auth calls it doesn't need.
+// ─────────────────────────────────────────────────────────────────────────────
+function displayEditApp() {
   return {
     loggedInUser: null,
     authConfig:   { googleEnabled: false, appleEnabled: false },
@@ -1499,8 +1568,8 @@ function displayApp() {
       this.toast.timer   = setTimeout(() => { this.toast.visible = false; }, 3500);
     },
 
-    goToPrev() { if (this.prevDisplayId) window.location.href = '/display.html?displayid=' + this.prevDisplayId; },
-    goToNext() { if (this.nextDisplayId) window.location.href = '/display.html?displayid=' + this.nextDisplayId; },
+    goToPrev() { if (this.prevDisplayId) window.location.href = '/display-edit.html?displayid=' + this.prevDisplayId; },
+    goToNext() { if (this.nextDisplayId) window.location.href = '/display-edit.html?displayid=' + this.nextDisplayId; },
 
     async init() {
       try {
@@ -2215,6 +2284,7 @@ document.addEventListener('alpine:init', () => {
   Alpine.data('galleriesNav',    galleriesNav);
   Alpine.data('galleriesApp',    galleriesApp);
   Alpine.data('displayApp',      displayApp);
+  Alpine.data('displayEditApp',  displayEditApp);
   Alpine.data('galleryAdminApp', galleryAdminApp);
   Alpine.data('templateAdminApp', templateAdminApp);
   Alpine.data('userSwitcher',    userSwitcher);
