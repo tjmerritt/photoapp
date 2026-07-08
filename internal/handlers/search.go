@@ -210,9 +210,9 @@ scores(photoid, total_score) AS (
 
 	// ── SELECT ────────────────────────────────────────────────────────────────
 	if len(pq.FreeTerms) > 0 {
-		b.WriteString("SELECT p.photoid::text, p.image_url, p.image_width, p.image_height, MAX(sc.total_score) AS sort_score\n")
+		b.WriteString("SELECT p.photoid::text, p.image_url, p.image_width, p.image_height, COALESCE(p.title_text, ''), MAX(sc.total_score) AS sort_score\n")
 	} else {
-		b.WriteString("SELECT p.photoid::text, p.image_url, p.image_width, p.image_height, 0 AS sort_score\n")
+		b.WriteString("SELECT p.photoid::text, p.image_url, p.image_width, p.image_height, COALESCE(p.title_text, ''), 0 AS sort_score\n")
 	}
 	b.WriteString("FROM photos p\n")
 
@@ -313,7 +313,7 @@ scores(photoid, total_score) AS (
 	// ── GROUP BY + ORDER ───────────────────────────────────────────────────────
 	// GROUP BY collapses duplicate rows from multi-row JOINs (e.g. multiple labels).
 	// created_at is included so it can be used as a tiebreaker without a subquery.
-	b.WriteString("GROUP BY p.photoid, p.image_url, p.image_width, p.image_height, p.created_at\n")
+	b.WriteString("GROUP BY p.photoid, p.image_url, p.image_width, p.image_height, p.title_text, p.created_at\n")
 	b.WriteString("ORDER BY sort_score DESC, p.created_at DESC, p.photoid\n")
 	b.WriteString("LIMIT 13\n")
 
@@ -362,7 +362,7 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var sr models.SearchResult
 		var sortScore int64 // consumed for ordering, not returned to client
-		if err := rows.Scan(&sr.PhotoID, &sr.ImageURL, &sr.Width, &sr.Height, &sortScore); err != nil {
+		if err := rows.Scan(&sr.PhotoID, &sr.ImageURL, &sr.Width, &sr.Height, &sr.Title, &sortScore); err != nil {
 			slog.Error("ServeHTTP", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
