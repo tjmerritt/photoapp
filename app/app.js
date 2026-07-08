@@ -1740,7 +1740,14 @@ function galleryAdminApp() {
         const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(galleryid));
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const g = await resp.json();
-        this.expandedDisplays = g.displays || [];
+        // selectedTemplateId backs the x-model on each row's template <select> —
+        // kept as a plain field (rather than deriving :value from d.template) so
+        // the dropdown updates instantly on selection instead of waiting on a
+        // reactive re-render tied to the PATCH response.
+        this.expandedDisplays = (g.displays || []).map(d => ({
+          ...d,
+          selectedTemplateId: d.template ? d.template.templateid : '',
+        }));
       } catch(e) {
         this.showToast('Failed to load displays: ' + e.message);
       }
@@ -1761,13 +1768,14 @@ function galleryAdminApp() {
         const d = await resp.json();
         // Build a DisplaySummary-shaped object from the DisplayDetail response
         this.expandedDisplays.push({
-          displayid:    d.displayid,
-          sort_order:   d.sort_order,
-          template:     d.template || null,
-          slot_count:   d.slots ? d.slots.length : 0,
-          filled_slots: d.slots ? d.slots.filter(s => s.photo).length : 0,
-          created_at:   d.created_at,
-          updated_at:   d.updated_at,
+          displayid:          d.displayid,
+          sort_order:         d.sort_order,
+          template:           d.template || null,
+          selectedTemplateId: d.template ? d.template.templateid : '',
+          slot_count:         d.slots ? d.slots.length : 0,
+          filled_slots:       d.slots ? d.slots.filter(s => s.photo).length : 0,
+          created_at:         d.created_at,
+          updated_at:         d.updated_at,
         });
         const idx = this.galleries.findIndex(g => g.galleryid === galleryid);
         if (idx !== -1) {
@@ -1781,9 +1789,13 @@ function galleryAdminApp() {
     },
 
     // Assign, change, or clear (templateid === '') the template on an existing display.
+    // The <select> is x-model-bound to d.selectedTemplateId, so it already shows the
+    // pick instantly; here we just persist it and revert on failure.
     async setDisplayTemplate(displayid, templateid) {
       const idx = this.expandedDisplays.findIndex(d => d.displayid === displayid);
       if (idx === -1) return;
+      const previousTemplateId = this.expandedDisplays[idx].template
+        ? this.expandedDisplays[idx].template.templateid : '';
       try {
         const resp = await fetch('/api/v1/displays/' + encodeURIComponent(displayid), {
           method:  'PATCH',
@@ -1794,12 +1806,15 @@ function galleryAdminApp() {
         const d = await resp.json();
         this.expandedDisplays[idx] = {
           ...this.expandedDisplays[idx],
-          template:     d.template || null,
-          slot_count:   d.slots ? d.slots.length : 0,
-          filled_slots: d.slots ? d.slots.filter(s => s.photo).length : 0,
+          template:           d.template || null,
+          selectedTemplateId: d.template ? d.template.templateid : '',
+          slot_count:         d.slots ? d.slots.length : 0,
+          filled_slots:       d.slots ? d.slots.filter(s => s.photo).length : 0,
         };
         this.showToast(templateid ? 'Template assigned.' : 'Template cleared.');
       } catch(e) {
+        // Revert the dropdown to whatever was actually saved before this attempt.
+        this.expandedDisplays[idx] = { ...this.expandedDisplays[idx], selectedTemplateId: previousTemplateId };
         this.showToast('Failed to update template: ' + e.message);
       }
     },

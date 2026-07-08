@@ -303,8 +303,8 @@
                     (<span x-text="d.filled_slots"></span>/<span x-text="d.slot_count"></span> filled)
                   </span>
                   <select class="input text-xs py-1 pr-6"
-                          :value="d.template ? d.template.templateid : ''"
-                          @change="setDisplayTemplate(d.displayid, $event.target.value)">
+                          x-model="d.selectedTemplateId"
+                          @change="setDisplayTemplate(d.displayid, d.selectedTemplateId)">
                     <option value="">No template</option>
                     <template x-for="t in templates" :key="t.templateid">
                       <option :value="t.templateid" x-text="t.name + ' (' + t.photo_count + ')'"></option>
