@@ -103,13 +103,17 @@
       font-size: 0.75rem;
     }
     /* Base placard styling is a fallback for fields with no typography of
-       their own; presentation.placard.fields[].typography overrides per line. */
+       their own; presentation.placard.fields[].typography overrides per line.
+       No min-height: the placard is always non-empty (it falls back to a
+       "No caption" label), so it can size purely from its own content. A
+       fixed minimum here would eat a large share of short slots' height —
+       badly skewing the remaining photo-area's aspect ratio and shrinking
+       the contained photo far more than the slot's own size would suggest. */
     .slot-placard {
       background: var(--placard-bg);
       border: 1px solid var(--placard-border);
       border-radius: 4px;
       padding: 0.5rem 0.625rem;
-      min-height: 2.5rem;
       flex: 0 0 auto;
       display: flex;
       flex-direction: column;

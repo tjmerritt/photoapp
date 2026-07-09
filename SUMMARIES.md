@@ -446,3 +446,28 @@ Several Alpine CSP build constraints were discovered and worked around:
 - Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
 - Phase 6: admin pages
 - Phase 7: photo uploads
+
+---
+
+## Session 11 — Photos in Short Slots Rendered Much Smaller Than the Slot Itself
+
+### What was done
+
+**Bug report**: a template with three short, staggered slots (`h: 30, w: 22`, staggered `x`/`y`) looked correctly sized in the Template Admin preview, but the actual photos on the display view/edit pages rendered much smaller than their slot boxes.
+
+**Root cause**: the slot's own position/size was correct (identical percentage math to the preview pane) — this wasn't a positioning bug. The actual cause was `.slot-placard`'s forced `min-height: 2.5rem` (~56px including padding). For a slot only ~184px tall (30% of a typical 16:9 canvas height), the placard's fixed floor consumes over 30% of that height regardless of how little text it holds, leaving a `.photo-area` whose aspect ratio is badly skewed (measured ~2.0:1 — very wide and short) compared to a typical photo's shape (~1.33:1). Since Session 8/9 correctly preserve the photo's true aspect ratio rather than distorting it to fit, `computeFrameBoxSize()`'s contain-fit then shrinks the photo dramatically to fit that skewed area — down to roughly 40% of the slot's total area in the reported case, which reads as "very small" even though the slot box itself is exactly where and how big it was configured.
+
+**Fix** (`app/display.html`, `app/display-edit.html`): removed the `min-height: 2.5rem` floor from `.slot-placard`. The placard is always non-empty (it falls back to a "No caption" label when there's no real caption), so it can safely size purely from its own content instead of enforcing an arbitrary minimum — giving short slots meaningfully more room for the photo. Verified via hand-calculation with the reported template's exact numbers that this improves the rendered photo from ~40% to ~57% of the slot's area for a typical 4:3 photo.
+
+### Testing notes
+- Quantified the bug numerically before fixing: extracted `computeFrameBoxSize`/`normalizeSideWidths` and ran them against a realistic canvas size (1088×612, matching the display pages' `max-w-6xl` content width) with the reported template's exact `slot_positions`, confirming the photo-area's skewed 2.0:1 aspect ratio and the resulting ~40%-of-slot-area frame size before the fix, and the improved ~57% after
+- Re-ran the Session 8/9 regression suites (matte/frame/placard config, alignment, backward-compatible default rendering) — no regressions, since removing a CSS minimum doesn't touch any of the inline-style-generating logic those tests check
+- Noted but did not change: a *side* placard (`placard.position: "left"/"right"`) has a fixed `width: 200px` that could similarly dominate a narrow slot — not part of this report (which uses the default bottom position) but worth knowing if the same symptom shows up with a side-positioned placard on a narrow slot
+
+### Open items
+- Non-JSON config UI for `presentation` (matte/frame/placard/align) in Template Admin — explicitly deferred by user
+- Side placard's fixed 200px width could dominate narrow slots the same way the bottom placard's old min-height did — not yet reported as an issue, flagged for awareness
+- Phase 4: Microsoft sign-in
+- Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
+- Phase 6: admin pages
+- Phase 7: photo uploads
