@@ -244,11 +244,14 @@ type DisplaySummary struct {
 }
 
 // SlotPhoto is the photo shape embedded inside a display slot.
+// Title is the photo's own title (distinct from the slot's rich_text
+// caption) — available as a placard field source.
 type SlotPhoto struct {
 	PhotoID  string `json:"photoid"`
 	ImageURL string `json:"imageurl"`
 	Width    int    `json:"width"`
 	Height   int    `json:"height"`
+	Title    string `json:"title"`
 }
 
 // DisplaySlot is one slot in a DisplayDetail.

@@ -1494,6 +1494,83 @@ function matteInnerStyle(presentation) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Placard configuration — also part of a template's `presentation` JSON:
+//   {
+//     "placard": {
+//       "position": "bottom",   // "bottom" | "top" | "left" | "right"
+//       "fields": [
+//         { "source": "title",     "typography": { "fontFamily": "'DM Serif Display', serif", "fontSize": 14, "fontWeight": 700, "color": "#3d3424" } },
+//         { "source": "rich_text", "typography": { "fontFamily": "'DM Sans', sans-serif", "fontSize": 12, "fontStyle": "italic", "color": "#6b7280" } }
+//       ]
+//     }
+//   }
+// "source" picks what data fills that line: "rich_text" is the slot's own
+// caption; "title" is the assigned photo's title. Fields with no value for
+// a given slot are skipped. No placard.fields configured = fall back to a
+// single rich_text field styled like the original static placard, so
+// existing templates render unchanged.
+// typography keys (all optional): fontFamily, fontSize (px), fontWeight,
+// fontStyle, color, textAlign, textTransform, letterSpacing (px), lineHeight.
+// ─────────────────────────────────────────────────────────────────────────────
+function normalizePlacardConfig(presentation) {
+  var p        = presentation || {};
+  var placard  = p.placard || {};
+  var position = ['top', 'bottom', 'left', 'right'].indexOf(placard.position) !== -1 ? placard.position : 'bottom';
+  var fields   = Array.isArray(placard.fields) && placard.fields.length > 0
+    ? placard.fields
+    : [{ source: 'rich_text', typography: {
+        fontFamily: "'DM Serif Display', serif", fontSize: 12.8, fontWeight: 400,
+        fontStyle: 'normal', color: '#3d3424',
+      } }];
+  return { position: position, fields: fields };
+}
+
+function typographyStyle(typo) {
+  var t = typo || {};
+  var css = '';
+  if (t.fontFamily)             css += 'font-family: ' + t.fontFamily + ';';
+  if (t.fontSize != null)       css += 'font-size: ' + t.fontSize + 'px;';
+  if (t.fontWeight)             css += 'font-weight: ' + t.fontWeight + ';';
+  if (t.fontStyle)              css += 'font-style: ' + t.fontStyle + ';';
+  if (t.color)                  css += 'color: ' + t.color + ';';
+  if (t.textAlign)              css += 'text-align: ' + t.textAlign + ';';
+  if (t.textTransform)          css += 'text-transform: ' + t.textTransform + ';';
+  if (t.letterSpacing != null)  css += 'letter-spacing: ' + t.letterSpacing + 'px;';
+  if (t.lineHeight != null)     css += 'line-height: ' + t.lineHeight + ';';
+  return css;
+}
+
+function placardFieldSourceValue(source, slot) {
+  if (source === 'rich_text') return (slot && slot.rich_text) || '';
+  if (source === 'title')     return (slot && slot.photo && slot.photo.title) || '';
+  return '';
+}
+
+// Resolved { text, style } list for one slot, skipping fields with no value.
+function placardFieldsFor(slot, presentation) {
+  var cfg = normalizePlacardConfig(presentation);
+  var out = [];
+  cfg.fields.forEach(function(f) {
+    var text = placardFieldSourceValue(f.source, slot);
+    if (text) out.push({ text: text, style: typographyStyle(f.typography) });
+  });
+  return out;
+}
+
+function slotCardDirectionStyle(presentation) {
+  var cfg    = normalizePlacardConfig(presentation);
+  var dirMap = { bottom: 'column', top: 'column-reverse', right: 'row', left: 'row-reverse' };
+  return 'flex-direction: ' + dirMap[cfg.position] + ';';
+}
+
+// Side-by-side placard positions need a fixed width instead of stretching
+// to match the photo's height.
+function placardBoxStyle(presentation) {
+  var cfg = normalizePlacardConfig(presentation);
+  return (cfg.position === 'left' || cfg.position === 'right') ? 'width: 200px; flex-shrink: 0;' : '';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // displayApp — museum exhibit board viewer. Read-only, public-facing.
 // URL: /display.html?displayid=<uuid>
 // Fetches display detail (→ galleryid), then gallery detail (→ ordered display
@@ -1519,6 +1596,9 @@ function displayApp() {
     thumbUrl(url, w) { return thumbUrl(url, w); },
     frameOuterStyle() { return frameOuterStyle(this.display && this.display.template && this.display.template.presentation); },
     matteInnerStyle() { return matteInnerStyle(this.display && this.display.template && this.display.template.presentation); },
+    slotCardDirectionStyle() { return slotCardDirectionStyle(this.display && this.display.template && this.display.template.presentation); },
+    placardBoxStyle() { return placardBoxStyle(this.display && this.display.template && this.display.template.presentation); },
+    placardFieldsFor(slot) { return placardFieldsFor(slot, this.display && this.display.template && this.display.template.presentation); },
 
     goToPrev() { if (this.prevDisplayId) window.location.href = '/display.html?displayid=' + this.prevDisplayId; },
     goToNext() { if (this.nextDisplayId) window.location.href = '/display.html?displayid=' + this.nextDisplayId; },
@@ -1604,6 +1684,9 @@ function displayEditApp() {
     thumbUrl(url, w) { return thumbUrl(url, w); },
     frameOuterStyle() { return frameOuterStyle(this.display && this.display.template && this.display.template.presentation); },
     matteInnerStyle() { return matteInnerStyle(this.display && this.display.template && this.display.template.presentation); },
+    slotCardDirectionStyle() { return slotCardDirectionStyle(this.display && this.display.template && this.display.template.presentation); },
+    placardBoxStyle() { return placardBoxStyle(this.display && this.display.template && this.display.template.presentation); },
+    placardFieldsFor(slot) { return placardFieldsFor(slot, this.display && this.display.template && this.display.template.presentation); },
     avatarSrc(user)  { return avatarSrc(user);  },
 
     showToast(message) {
@@ -2198,8 +2281,15 @@ function templateAdminApp() {
     // (above displayApp) for the full schema; editable per-template below.
     defaultPresentation() {
       return {
-        matte: { enabled: true,  color: '#e8e3d5', width: 16 },
-        frame: { enabled: false, color: '#3d3424', width: 8 },
+        matte:   { enabled: true,  color: '#e8e3d5', width: 16 },
+        frame:   { enabled: false, color: '#3d3424', width: 8 },
+        placard: {
+          position: 'bottom',
+          fields: [
+            { source: 'title',     typography: { fontFamily: "'DM Serif Display', serif", fontSize: 13, fontWeight: 700, color: '#3d3424' } },
+            { source: 'rich_text', typography: { fontFamily: "'DM Sans', sans-serif", fontSize: 11.5, fontStyle: 'italic', color: '#6b7280' } },
+          ],
+        },
       };
     },
 

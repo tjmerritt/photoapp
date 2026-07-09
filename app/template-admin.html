@@ -304,14 +304,22 @@
                   <textarea class="input w-full mt-1" rows="8" x-model="editSlotPositions" spellcheck="false"></textarea>
                 </label>
                 <label class="text-xs font-medium text-[var(--muted)]">
-                  Presentation (JSON) — matte + frame around each photo
-                  <textarea class="input w-full mt-1" rows="7" x-model="editPresentation" spellcheck="false"></textarea>
+                  Presentation (JSON) — matte, frame, and placard for each photo
+                  <textarea class="input w-full mt-1" rows="14" x-model="editPresentation" spellcheck="false"></textarea>
                 </label>
                 <p class="text-xs text-[var(--muted)] -mt-2">
-                  matte/frame each take <code>enabled</code>, <code>color</code>, and <code>width</code>
-                  (px). Matte's <code>width</code> may instead be
+                  <code>matte</code>/<code>frame</code> each take <code>enabled</code>, <code>color</code>,
+                  and <code>width</code> (px). Matte's <code>width</code> may instead be
                   <code>{top,right,bottom,left}</code> for an uneven mat. Set either
-                  <code>enabled: false</code> to omit it.
+                  <code>enabled: false</code> to omit it.<br>
+                  <code>placard.position</code> is <code>top</code>/<code>bottom</code>/<code>left</code>/<code>right</code>
+                  relative to the photo. <code>placard.fields</code> is a list of
+                  <code>{ source, typography }</code> — <code>source</code> is
+                  <code>"title"</code> (the photo's title) or <code>"rich_text"</code> (the slot's
+                  caption); <code>typography</code> accepts <code>fontFamily</code>, <code>fontSize</code>
+                  (px), <code>fontWeight</code>, <code>fontStyle</code>, <code>color</code>,
+                  <code>textAlign</code>, <code>textTransform</code>, <code>letterSpacing</code> (px),
+                  <code>lineHeight</code> — all optional. Fields with no value for a slot are skipped.
                 </p>
 
                 <p x-show="editError" class="text-red-500 text-xs" x-text="editError"></p>

@@ -83,7 +83,7 @@ func (h *DisplaysHandler) Get(w http.ResponseWriter, r *http.Request, ps httprou
 	// Fetch slots with photo data (LEFT JOIN: unfilled slots have no photo).
 	rows, err := h.DB.Query(ctx, `
 		SELECT s.slotid::text, s.slot_index,
-		       p.photoid::text, p.image_url, p.image_width, p.image_height,
+		       p.photoid::text, p.image_url, p.image_width, p.image_height, p.title_text,
 		       s.rich_text,
 		       s.placard::text
 		FROM   display_slots s
@@ -101,12 +101,12 @@ func (h *DisplaysHandler) Get(w http.ResponseWriter, r *http.Request, ps httprou
 	d.Slots = []models.DisplaySlot{}
 	for rows.Next() {
 		var s models.DisplaySlot
-		var photoID, imageURL *string
+		var photoID, imageURL, photoTitle *string
 		var width, height *int
 		var placardText *string
 		if err := rows.Scan(
 			&s.SlotID, &s.SlotIndex,
-			&photoID, &imageURL, &width, &height,
+			&photoID, &imageURL, &width, &height, &photoTitle,
 			&s.RichText,
 			&placardText,
 		); err != nil {
@@ -120,6 +120,9 @@ func (h *DisplaysHandler) Get(w http.ResponseWriter, r *http.Request, ps httprou
 				ImageURL: *imageURL,
 				Width:    *width,
 				Height:   *height,
+			}
+			if photoTitle != nil {
+				s.Photo.Title = *photoTitle
 			}
 		}
 		if placardText != nil {

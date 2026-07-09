@@ -37,20 +37,18 @@
     [x-cloak] { display: none !important; }
     .backdrop { background: rgba(26,26,46,.55); backdrop-filter: blur(3px); }
 
-    /* Museum board */
+    /* Board — plain layout wrapper. Framing now comes entirely from each
+       photo's own matte/frame (presentation.matte / presentation.frame),
+       so this no longer has its own decorative background or border. */
     .board {
-      background: var(--board-bg);
-      border: 1px solid var(--board-border);
-      border-radius: 8px;
-      padding: 2rem;
-      box-shadow: inset 0 1px 3px rgba(0,0,0,.06), 0 2px 8px rgba(0,0,0,.08);
+      padding: 0;
     }
 
     /* Photo slot */
     .slot-card {
       display: flex;
       flex-direction: column;
-      gap: 0;
+      gap: 0.5rem;
     }
     /* .photo-frame is the outer frame border (style set inline from the
        template's presentation.frame); .photo-matte is the mat board inside
@@ -58,9 +56,10 @@
        independently optional — see frameOuterStyle()/matteInnerStyle(). */
     .photo-frame {
       position: relative;
-      border-radius: 4px 4px 0 0;
+      border-radius: 4px;
       overflow: hidden;
       box-sizing: border-box;
+      min-width: 0;
     }
     .photo-matte {
       display: flex;
@@ -132,13 +131,18 @@
       transition: opacity .15s;
     }
     .picker-result:hover .picker-thumb img { opacity: .8; }
+    /* Base placard styling is a fallback for fields with no typography of
+       their own; presentation.placard.fields[].typography overrides per line. */
     .slot-placard {
       background: var(--placard-bg);
       border: 1px solid var(--placard-border);
-      border-top: none;
-      border-radius: 0 0 4px 4px;
+      border-radius: 4px;
       padding: 0.5rem 0.625rem;
       min-height: 2.5rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 0.2rem;
       font-family: 'DM Serif Display', serif;
       font-size: 0.8rem;
       line-height: 1.4;
@@ -322,7 +326,7 @@
            class="display-grid"
            :style="gridStyle">
         <template x-for="slot in (display && display.slots || [])" :key="slot.slotid">
-          <div class="slot-card">
+          <div class="slot-card" :style="slotCardDirectionStyle()">
             <!-- Photo, with an optional frame + matte around it -->
             <div class="photo-frame" :style="frameOuterStyle()">
               <template x-if="slot.photo">
@@ -341,10 +345,12 @@
               <button x-show="loggedInUser" class="slot-edit-btn" @click="openPicker(slot.slot_index)"
                       x-text="slot.photo ? 'Change photo' : 'Add photo'"></button>
             </div>
-            <!-- Placard -->
-            <div class="slot-placard">
-              <span x-show="slot.rich_text" x-text="slot.rich_text"></span>
-              <span x-show="!slot.rich_text" class="opacity-40 text-xs italic">No caption</span>
+            <!-- Placard — fields + typography come from presentation.placard -->
+            <div class="slot-placard" :style="placardBoxStyle()">
+              <template x-for="(f, i) in placardFieldsFor(slot)" :key="i">
+                <div :style="f.style" x-text="f.text"></div>
+              </template>
+              <span x-show="placardFieldsFor(slot).length === 0" class="opacity-40 text-xs italic">No caption</span>
             </div>
           </div>
         </template>
