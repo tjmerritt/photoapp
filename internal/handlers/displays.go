@@ -45,11 +45,11 @@ func (h *DisplaysHandler) Get(w http.ResponseWriter, r *http.Request, ps httprou
 	}
 
 	var d models.DisplayDetail
-	var tmplID, tmplName, tmplPresentation *string
+	var tmplID, tmplName, tmplSlotPositions, tmplPresentation *string
 	var tmplCount *int
 	err = h.DB.QueryRow(ctx, `
 		SELECT d.displayid::text, d.galleryid::text, d.sort_order,
-		       t.templateid::text, t.name, t.photo_count, t.presentation::text,
+		       t.templateid::text, t.name, t.photo_count, t.slot_positions::text, t.presentation::text,
 		       d.created_at, d.updated_at
 		FROM   displays d
 		JOIN   galleries g ON g.galleryid = d.galleryid
@@ -57,7 +57,7 @@ func (h *DisplaysHandler) Get(w http.ResponseWriter, r *http.Request, ps httprou
 		WHERE  d.displayid = $1 AND d.deleted_at IS NULL AND g.exhibitionid = $2
 	`, displayID, exhibitionID).Scan(
 		&d.DisplayID, &d.GalleryID, &d.SortOrder,
-		&tmplID, &tmplName, &tmplCount, &tmplPresentation,
+		&tmplID, &tmplName, &tmplCount, &tmplSlotPositions, &tmplPresentation,
 		&d.CreatedAt, &d.UpdatedAt,
 	)
 	if err == pgx.ErrNoRows {
@@ -74,6 +74,9 @@ func (h *DisplaysHandler) Get(w http.ResponseWriter, r *http.Request, ps httprou
 			TemplateID: *tmplID,
 			Name:       *tmplName,
 			PhotoCount: *tmplCount,
+		}
+		if tmplSlotPositions != nil {
+			d.Template.SlotPositions = json.RawMessage(*tmplSlotPositions)
 		}
 		if tmplPresentation != nil {
 			d.Template.Presentation = json.RawMessage(*tmplPresentation)
@@ -210,11 +213,21 @@ func (h *DisplaysHandler) Create(w http.ResponseWriter, r *http.Request, ps http
 			}
 		}
 
-		// Fetch template summary for the response.
+		// Fetch template summary for the response (including layout + styling,
+		// same as Get, so a freshly-created display renders correctly without
+		// a follow-up fetch).
 		var t models.TemplateSummary
+		var slotPositions, presentation *string
 		if err := h.DB.QueryRow(ctx, `
-			SELECT templateid::text, name, photo_count FROM display_templates WHERE templateid=$1
-		`, *templateID).Scan(&t.TemplateID, &t.Name, &t.PhotoCount); err == nil {
+			SELECT templateid::text, name, photo_count, slot_positions::text, presentation::text
+			FROM   display_templates WHERE templateid=$1
+		`, *templateID).Scan(&t.TemplateID, &t.Name, &t.PhotoCount, &slotPositions, &presentation); err == nil {
+			if slotPositions != nil {
+				t.SlotPositions = json.RawMessage(*slotPositions)
+			}
+			if presentation != nil {
+				t.Presentation = json.RawMessage(*presentation)
+			}
 			d.Template = &t
 		}
 	}

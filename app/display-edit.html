@@ -44,36 +44,51 @@
       padding: 0;
     }
 
-    /* Photo slot */
+    /* Photo slot — positioned absolutely within .display-grid per the
+       template's slot_positions (left/top/width/height set inline via
+       slotBoxStyle(), in percent — same geometry the Template Admin preview
+       pane renders). */
     .slot-card {
       display: flex;
       flex-direction: column;
       gap: 0.5rem;
+      box-sizing: border-box;
     }
     /* .photo-frame is the outer frame border (style set inline from the
        template's presentation.frame); .photo-matte is the mat board inside
        it (padding + color set inline from presentation.matte). Both are
-       independently optional — see frameOuterStyle()/matteInnerStyle(). */
+       independently optional — see frameOuterStyle()/matteInnerStyle().
+       Both flex to fill whatever space is left in the slot after the
+       placard, since the slot's overall box size now comes from the
+       template's geometry rather than the image's natural size. */
     .photo-frame {
       position: relative;
       border-radius: 4px;
       overflow: hidden;
       box-sizing: border-box;
       min-width: 0;
+      min-height: 0;
+      flex: 1 1 auto;
+      display: flex;
     }
     .photo-matte {
       display: flex;
       align-items: center;
       justify-content: center;
       box-sizing: border-box;
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
     }
     .photo-matte img {
-      width: 100%;
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
       height: auto;
+      object-fit: contain;
       display: block;
     }
     .photo-matte.empty-matte {
-      aspect-ratio: 4 / 3;
       color: #c5bfad;
       font-size: 0.75rem;
     }
@@ -139,6 +154,7 @@
       border-radius: 4px;
       padding: 0.5rem 0.625rem;
       min-height: 2.5rem;
+      flex: 0 0 auto;
       display: flex;
       flex-direction: column;
       justify-content: center;
@@ -149,10 +165,13 @@
       color: #3d3424;
     }
 
-    /* Display grid */
+    /* Display grid — a fixed-aspect canvas that each slot is positioned
+       within by percentage (see .slot-card / slotBoxStyle()), matching the
+       Template Admin preview pane exactly. */
     .display-grid {
-      display: grid;
-      gap: 1.25rem;
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
     }
 
     /* Nav arrow buttons */
@@ -321,12 +340,13 @@
         This display has no photo slots yet. Add a template in Gallery Admin.
       </div>
 
-      <!-- Photo slots grid -->
+      <!-- Photo slots grid — each slot absolutely positioned per the
+           template's slot_positions (slotBoxStyle), matching the Template
+           Admin preview pane. -->
       <div x-show="display && display.slots && display.slots.length > 0"
-           class="display-grid"
-           :style="gridStyle">
-        <template x-for="slot in (display && display.slots || [])" :key="slot.slotid">
-          <div class="slot-card" :style="slotCardDirectionStyle()">
+           class="display-grid">
+        <template x-for="(slot, i) in (display && display.slots || [])" :key="slot.slotid">
+          <div class="slot-card" :style="slotBoxStyle(i) + slotCardDirectionStyle()">
             <!-- Photo, with an optional frame + matte around it -->
             <div class="photo-frame" :style="frameOuterStyle()">
               <template x-if="slot.photo">

@@ -330,3 +330,41 @@ Several Alpine CSP build constraints were discovered and worked around:
 - Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
 - Phase 6: admin pages
 - Phase 7: photo uploads
+
+---
+
+## Session 7 — Display View Wasn't Following Template Layout
+
+### What was done
+
+**Bug**: the Template Admin preview pane correctly rendered a template's `slot_positions` (per-slot `x/y/w/h` percentages), but the actual view/edit pages (`display.html`, `display-edit.html`) ignored it — they computed a generic N-column CSS grid purely from slot count, so any custom layout designed in Template Admin never showed up on the real display.
+
+**Root cause**: `TemplateSummary` (the compact template shape embedded in `DisplayDetail.Template`) never included `slot_positions` — only `presentation` was exposed on `GET /api/v1/displays/:id`. `displayApp()`/`displayEditApp()` had no way to know the template's geometry even if they'd tried to use it.
+
+**Backend** (`internal/models/models.go`, `internal/handlers/displays.go`):
+- Added `SlotPositions json.RawMessage` to `TemplateSummary`
+- `DisplaysHandler.Get()`: query now selects `t.slot_positions::text` and populates `d.Template.SlotPositions`
+- `DisplaysHandler.Create()`: template-summary fetch for a freshly-created display now also includes `slot_positions`/`presentation` for consistency (previously only `templateid/name/photo_count`)
+
+**Frontend** (`app/app.js`):
+- Extracted `defaultSlotPositions(n)` (even-grid generator) out of `templateAdminApp()` into a shared top-level function, so the same fallback layout is used both by new templates and by displays with no usable geometry; `templateAdminApp()`'s method now just delegates to it
+- Added `normalizeSlotPositions(raw, count)` — uses the template's own `slot_positions` if it's a valid array matching the slot count, else falls back to `defaultSlotPositions(count)` (guards against a template edited after a display was built with a different slot count)
+- Added `slotBoxStyle(positions, index)` — returns `position:absolute; left:%; top:%; width:%; height:%;` for one slot, identical geometry model to the Template Admin preview pane
+- `displayApp()`/`displayEditApp()`: replaced the old count-based `gridStyle` with a `slotPositions` array computed in `init()` from `display.template.slot_positions`, plus a `slotBoxStyle(i)` delegating method
+
+**Frontend** (`app/display.html`, `app/display-edit.html`):
+- `.display-grid` changed from a `display:grid` column layout to `position:relative; aspect-ratio:16/9` — a fixed-shape canvas matching the Template Admin preview exactly
+- `.slot-card` is now absolutely positioned per-slot via inline `slotBoxStyle(i) + slotCardDirectionStyle()`
+- `.photo-frame`/`.photo-matte` changed from natural-image-size sizing to `flex:1 1 auto` filling whatever space is left after the placard, with the `<img>` switched from `width:100%; height:auto` to `max-width/max-height:100%; object-fit:contain` so photos scale to fit their slot's fixed box instead of dictating it
+- `.slot-placard` given `flex:0 0 auto` so it keeps its natural size within the flex column/row
+- Removed the empty-slot placeholder's fixed `aspect-ratio:4/3` (it now just fills the flex space like a real photo would)
+
+### Testing notes
+- Verified via the same JSDOM headless-DOM harness as prior sessions: custom asymmetric `slot_positions` render with exact matching inline styles; a template with no `slot_positions` falls back to the even grid; a `slot_positions` array whose length doesn't match the display's slot count also falls back (rather than rendering a broken partial layout); `display-edit.html` renders identical geometry with the edit button intact; Template Admin's mini/full preview panes and template creation (which now share `defaultSlotPositions` with the display pages) still work correctly
+
+### Open items
+- Non-JSON config UI for `presentation` (matte/frame/placard) in Template Admin — explicitly deferred by user
+- Phase 4: Microsoft sign-in
+- Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
+- Phase 6: admin pages
+- Phase 7: photo uploads

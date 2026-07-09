@@ -1463,6 +1463,60 @@ function galleriesApp() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Slot layout geometry — shared by templateAdminApp (preview pane) and
+// displayApp/displayEditApp (actual viewer/editor). A template's
+// `slot_positions` is an array of { x, y, w, h } in percent, one entry per
+// slot, positioned absolutely within a 16:9 canvas — this is exactly what
+// the Template Admin preview renders, and the display pages must render the
+// same geometry or the "preview" is misleading.
+// defaultSlotPositions(n) generates an even grid (used both as the starting
+// layout for new templates and as a fallback if a template's slot_positions
+// is missing or doesn't match the display's slot count).
+// ─────────────────────────────────────────────────────────────────────────────
+function defaultSlotPositions(n) {
+  n = Math.max(1, n | 0);
+  var cols  = n <= 1 ? 1 : n <= 2 ? 2 : n <= 3 ? 3 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
+  var rows  = Math.ceil(n / cols);
+  var gap   = 2; // percent
+  var cellW = (100 - gap * (cols - 1)) / cols;
+  var cellH = (100 - gap * (rows - 1)) / rows;
+  var positions = [];
+  for (var i = 0; i < n; i++) {
+    var col = i % cols, row = Math.floor(i / cols);
+    positions.push({
+      x: +(col * (cellW + gap)).toFixed(2),
+      y: +(row * (cellH + gap)).toFixed(2),
+      w: +cellW.toFixed(2),
+      h: +cellH.toFixed(2),
+    });
+  }
+  return positions;
+}
+
+// normalizeSlotPositions(raw, count) — use the template's own slot_positions
+// if it's a valid array matching the slot count, else fall back to an even
+// grid. A mismatch (e.g. a display with more/fewer slots than the template
+// currently defines) falls back rather than rendering a broken partial layout.
+function normalizeSlotPositions(raw, count) {
+  var arr = Array.isArray(raw) ? raw : [];
+  if (count <= 0) return [];
+  if (arr.length !== count) return defaultSlotPositions(count);
+  return arr.map(function (p) {
+    return {
+      x: Number(p && p.x) || 0,
+      y: Number(p && p.y) || 0,
+      w: Number(p && p.w) || 0,
+      h: Number(p && p.h) || 0,
+    };
+  });
+}
+
+function slotBoxStyle(positions, index) {
+  var p = (positions && positions[index]) || { x: 0, y: 0, w: 100, h: 100 };
+  return 'position: absolute; left: ' + p.x + '%; top: ' + p.y + '%; width: ' + p.w + '%; height: ' + p.h + '%;';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Matte + frame presentation helpers — shared by displayApp and displayEditApp.
 // A display template's `presentation` JSON (set in Template Admin) controls
 // how each photo slot is bordered:
@@ -1601,7 +1655,10 @@ function displayApp() {
     // Plain data properties for prev/next (updated after load)
     prevDisplayId: null,
     nextDisplayId: null,
-    gridStyle:     'grid-template-columns: repeat(1, 1fr)',
+    // Resolved slot geometry (one { x, y, w, h } per slot, percent-based —
+    // see slotBoxStyle() near the top of this file). Computed in init() from
+    // the template's slot_positions, falling back to an even grid.
+    slotPositions: [],
 
     thumbUrl(url, w) { return thumbUrl(url, w); },
     frameOuterStyle() { return frameOuterStyle(this.display && this.display.template && this.display.template.presentation); },
@@ -1609,6 +1666,7 @@ function displayApp() {
     slotCardDirectionStyle() { return slotCardDirectionStyle(this.display && this.display.template && this.display.template.presentation); },
     placardBoxStyle() { return placardBoxStyle(this.display && this.display.template && this.display.template.presentation); },
     placardFieldsFor(slot) { return placardFieldsFor(slot, this.display && this.display.template && this.display.template.presentation); },
+    slotBoxStyle(i) { return slotBoxStyle(this.slotPositions, i); },
 
     goToPrev() { if (this.prevDisplayId) window.location.href = '/display.html?displayid=' + this.prevDisplayId; },
     goToNext() { if (this.nextDisplayId) window.location.href = '/display.html?displayid=' + this.nextDisplayId; },
@@ -1642,10 +1700,11 @@ function displayApp() {
           }
         }
 
-        // Compute grid layout from slot count
+        // Resolve slot geometry from the template's slot_positions (falls
+        // back to an even grid if missing or mismatched with slot count).
         const n = this.display.slots ? this.display.slots.length : 0;
-        const cols = n <= 1 ? 1 : n <= 2 ? 2 : n <= 3 ? 3 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
-        this.gridStyle = 'grid-template-columns: repeat(' + cols + ', 1fr)';
+        const rawPositions = this.display.template && this.display.template.slot_positions;
+        this.slotPositions = normalizeSlotPositions(rawPositions, n);
       } catch(e) {
         this.error = e.message;
       }
@@ -1679,7 +1738,10 @@ function displayEditApp() {
     // Plain data properties for prev/next (updated after load)
     prevDisplayId: null,
     nextDisplayId: null,
-    gridStyle:     'grid-template-columns: repeat(1, 1fr)',
+    // Resolved slot geometry (one { x, y, w, h } per slot, percent-based —
+    // see slotBoxStyle() near the top of this file). Computed in init() from
+    // the template's slot_positions, falling back to an even grid.
+    slotPositions: [],
 
     // Photo picker (search + assign a photo to a slot)
     pickerOpen:       false,
@@ -1697,6 +1759,7 @@ function displayEditApp() {
     slotCardDirectionStyle() { return slotCardDirectionStyle(this.display && this.display.template && this.display.template.presentation); },
     placardBoxStyle() { return placardBoxStyle(this.display && this.display.template && this.display.template.presentation); },
     placardFieldsFor(slot) { return placardFieldsFor(slot, this.display && this.display.template && this.display.template.presentation); },
+    slotBoxStyle(i) { return slotBoxStyle(this.slotPositions, i); },
     avatarSrc(user)  { return avatarSrc(user);  },
 
     showToast(message) {
@@ -1761,10 +1824,11 @@ function displayEditApp() {
           }
         }
 
-        // Compute grid layout from slot count
+        // Resolve slot geometry from the template's slot_positions (falls
+        // back to an even grid if missing or mismatched with slot count).
         const n = this.display.slots ? this.display.slots.length : 0;
-        const cols = n <= 1 ? 1 : n <= 2 ? 2 : n <= 3 ? 3 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
-        this.gridStyle = 'grid-template-columns: repeat(' + cols + ', 1fr)';
+        const rawPositions = this.display.template && this.display.template.slot_positions;
+        this.slotPositions = normalizeSlotPositions(rawPositions, n);
       } catch(e) {
         this.error = e.message;
       }
@@ -2264,27 +2328,11 @@ function templateAdminApp() {
       this.loading = false;
     },
 
-    // Even grid layout, matching the column breakpoints displayApp uses when
-    // a display has no template-driven geometry of its own.
-    defaultSlotPositions(n) {
-      n = Math.max(1, n | 0);
-      const cols  = n <= 1 ? 1 : n <= 2 ? 2 : n <= 3 ? 3 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
-      const rows  = Math.ceil(n / cols);
-      const gap   = 2; // percent
-      const cellW = (100 - gap * (cols - 1)) / cols;
-      const cellH = (100 - gap * (rows - 1)) / rows;
-      const positions = [];
-      for (let i = 0; i < n; i++) {
-        const col = i % cols, row = Math.floor(i / cols);
-        positions.push({
-          x: +(col * (cellW + gap)).toFixed(2),
-          y: +(row * (cellH + gap)).toFixed(2),
-          w: +cellW.toFixed(2),
-          h: +cellH.toFixed(2),
-        });
-      }
-      return positions;
-    },
+    // Even grid layout, shared with displayApp/displayEditApp (see
+    // defaultSlotPositions() near the top of this file) so a template's
+    // fallback layout is identical to what a display without custom
+    // slot_positions actually renders.
+    defaultSlotPositions(n) { return defaultSlotPositions(n); },
 
     // Starter presentation for new templates — a plain matte in the theme's
     // frame color, no outer frame. See app.js's matte/frame helper comment
