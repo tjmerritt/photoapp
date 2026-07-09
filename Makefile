@@ -1,7 +1,7 @@
 .PHONY: build run tidy migrate-up migrate-down test lint
 
 # ── Build & run ───────────────────────────────────────────────────────────────
-build:
+build:	tailwind.css
 	go build -o bin/photoapp ./cmd/server
 	go build -o bin/import-photos ./cmd/import-photos
 	go build -o bin/import-emojis ./cmd/import-emojis
@@ -17,6 +17,10 @@ run:
 
 tidy:
 	go mod tidy
+
+# ── Tailwind ──────────────────────────────────────────────────────────────────
+tailwind.css:
+	sh scripts/build-tailwind.sh
 
 # ── Database ──────────────────────────────────────────────────────────────────
 # Requires psql on PATH and DATABASE_URL set in environment.
