@@ -423,3 +423,26 @@ Several Alpine CSP build constraints were discovered and worked around:
 - Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
 - Phase 6: admin pages
 - Phase 7: photo uploads
+
+---
+
+## Session 10 — Gallery Admin Template Dropdown Defaulted to "No template"
+
+### What was done
+
+**Bug**: expanding a gallery in Gallery Admin, the per-display template `<select>` always showed "No template" even when the display had a template assigned — despite `d.template`/`d.selectedTemplateId` being correctly populated by the backend and by `toggleDisplays()`.
+
+**Root cause**: another manifestation of the Alpine `<select>` + `x-for`-generated `<option>`s fragility documented earlier this project (Session 5's "selector doesn't reflect selection immediately" bug). This time it's the *initial* render, not a later update: Alpine processes a `<select>` element's own directives (`x-model`) before walking into its children, so when a display row is freshly created, `x-model`'s initial effect sets `select.value = d.selectedTemplateId` *before* the nested `<template x-for="t in templates">` has created the matching `<option>`. The browser silently falls back to the first option ("No template") for a value it doesn't yet recognize, and nothing ever re-triggers the `x-model` effect afterward to fix it.
+
+**Fix** (`app/gallery-admin.html`, `app/app.js`): added `x-init="syncTemplateSelect($el, d)"` on the select. `syncTemplateSelect(el, d)` (new `galleryAdminApp()` method) does `this.$nextTick(() => { el.value = d.selectedTemplateId; })`, re-applying the value one tick later once the options actually exist. Had to be a real component method rather than an inline `x-init="$nextTick(() => ...)"` — the CSP build's expression parser rejects arrow-function bodies inside directive attributes (confirmed via a `CSP Parser Error: Unexpected token` when tried inline), consistent with the CSP constraints already documented in this project (Session 4).
+
+### Testing notes
+- Reproduced first via the JSDOM harness: `toggleDisplays('g1')` on a display with `template.templateid: 't2'` showed `expandedDisplays[0].selectedTemplateId === 't2'` (Alpine data correct) but the actual `<select>` DOM `.value` was `""` (bug confirmed) — then confirmed the fix makes `.value` read `"t2"`
+- Verified the no-template case still shows `""`/"No template" correctly, and that changing the selection with a failing PATCH still reverts `selectedTemplateId` to the prior value (Session 5's original fix), so this change doesn't regress the earlier bug fix
+
+### Open items
+- Non-JSON config UI for `presentation` (matte/frame/placard/align) in Template Admin — explicitly deferred by user
+- Phase 4: Microsoft sign-in
+- Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
+- Phase 6: admin pages
+- Phase 7: photo uploads

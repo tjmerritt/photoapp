@@ -302,8 +302,19 @@
                   <span x-show="d.template" class="text-xs shrink-0">
                     (<span x-text="d.filled_slots"></span>/<span x-text="d.slot_count"></span> filled)
                   </span>
+                  <!-- x-init re-syncs the DOM value after the nested x-for below has
+                       actually created its <option> elements. Without this, x-model's
+                       initial binding runs before those options exist (Alpine processes
+                       a select's own directives before walking into its children), so
+                       the browser silently falls back to the first <option> ("No
+                       template") and never corrects itself since nothing re-triggers
+                       the x-model effect afterward. syncTemplateSelect() is a plain
+                       component method (not an inline arrow function) because the CSP
+                       build's expression parser doesn't support arrow-function bodies
+                       inside directive attributes. -->
                   <select class="input text-xs py-1 pr-6"
                           x-model="d.selectedTemplateId"
+                          x-init="syncTemplateSelect($el, d)"
                           @change="setDisplayTemplate(d.displayid, d.selectedTemplateId)">
                     <option value="">No template</option>
                     <template x-for="t in templates" :key="t.templateid">

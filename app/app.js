@@ -2328,6 +2328,16 @@ function galleryAdminApp() {
       }
     },
 
+    // Re-syncs a per-display template <select>'s DOM value on initial render.
+    // x-model's own initial binding runs before the nested x-for="t in templates"
+    // has created its <option> elements (a select's own directives are processed
+    // before Alpine walks into its children), so the browser silently falls back
+    // to the first <option> ("No template") and never corrects itself on its own.
+    // Called via x-init="syncTemplateSelect($el, d)" on the select.
+    syncTemplateSelect(el, d) {
+      this.$nextTick(() => { el.value = d.selectedTemplateId; });
+    },
+
     // Assign, change, or clear (templateid === '') the template on an existing display.
     // The <select> is x-model-bound to d.selectedTemplateId, so it already shows the
     // pick instantly; here we just persist it and revert on failure.
