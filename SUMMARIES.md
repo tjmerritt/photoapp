@@ -368,3 +368,29 @@ Several Alpine CSP build constraints were discovered and worked around:
 - Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
 - Phase 6: admin pages
 - Phase 7: photo uploads
+
+---
+
+## Session 8 — Framed Photo Must Keep Its Own Aspect Ratio Within the Slot
+
+### What was done
+
+**Bug**: Session 7 made `.photo-frame` a `flex:1 1 auto` child that stretched to fill its slot's box completely — which honored the slot's *position*, but distorted the frame/matte's own shape to match whatever aspect ratio the slot happened to be. The photo inside used `object-fit:contain`, so the image itself wasn't stretched, but the frame/matte around it was, which looked wrong.
+
+**Fix** (`app/app.js`, `app/display.html`, `app/display-edit.html`): the framed photo (frame + matte + image) now always keeps its own aspect ratio — derived from the photo's raw pixel width/height — and is fit ("contain"-style) within the slot's available space rather than stretched to fill it. Any leftover space in the slot renders as the plain page background, never a fill of its own.
+
+- Added `presentation.align: { horizontal: "left"|"center"|"right", vertical: "top"|"center"|"bottom" }` (default center/center) — controls which side the leftover space collects on. New helpers in `app.js`: `normalizeAlign()`, `photoAreaStyle()` (maps align to `justify-content`/`align-items` on a new wrapper), `photoFrameSizeStyle(slot)` (sets `aspect-ratio: photoW / photoH; max-width:100%; max-height:100%` on the frame, falling back to 4:3 for empty slots)
+- Markup: added a `.photo-area` wrapper around `.photo-frame` in both display pages — `.photo-area` is the flexible region (`flex:1 1 auto`, background `var(--surface)`) that gives the framed photo somewhere to be aligned within; `.photo-frame` no longer stretches (dropped `flex:1 1 auto`), instead sized via the new aspect-ratio + max-width/height "contain" technique
+- `.slot-card` and `.photo-area` both explicitly set `background: var(--surface)` so unfilled space is guaranteed to be the page background regardless of what's stacked underneath
+- Template Admin: `defaultPresentation()` now seeds `align: { horizontal: 'center', vertical: 'center' }`; documentation paragraph updated to explain the aspect-ratio-preserving behavior and the new `align` field
+- Matte/frame padding (a few px) is ignored when computing the frame's aspect ratio — negligible at real photo sizes; `object-fit:contain` on the `<img>` absorbs any tiny remaining mismatch
+
+### Testing notes
+- Verified via the JSDOM harness: a portrait photo (1:2) centers within a wide slot without being stretched; `align: {left, top}` on a wide photo (4:1) correctly maps to `justify-content:flex-start; align-items:flex-start`; an empty slot with no photo falls back to a 4:3 frame aspect ratio; `slot-card` background resolves to `var(--surface)`; `display-edit.html` renders identical geometry with the edit button still anchored correctly to the photo's own corner
+
+### Open items
+- Non-JSON config UI for `presentation` (matte/frame/placard/align) in Template Admin — explicitly deferred by user
+- Phase 4: Microsoft sign-in
+- Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
+- Phase 6: admin pages
+- Phase 7: photo uploads

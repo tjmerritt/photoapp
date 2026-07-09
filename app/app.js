@@ -1558,6 +1558,47 @@ function matteInnerStyle(presentation) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Photo alignment within its slot — also part of a template's `presentation`:
+//   { "align": { "horizontal": "center", "vertical": "center" } }
+// horizontal: "left" | "center" | "right"; vertical: "top" | "center" | "bottom".
+// The framed photo (frame + matte + image) always keeps its own aspect
+// ratio — it is never stretched to match the slot's shape — so whenever a
+// slot's aspect ratio doesn't match the photo's, there's unfilled space on
+// two opposite sides of the slot. `align` controls which edge that space
+// collects against; the unfilled space itself always renders as the page
+// background (no fill color of its own).
+// ─────────────────────────────────────────────────────────────────────────────
+function normalizeAlign(presentation) {
+  var p = presentation || {};
+  var a = p.align || {};
+  var h = ['left', 'center', 'right'].indexOf(a.horizontal) !== -1 ? a.horizontal : 'center';
+  var v = ['top', 'center', 'bottom'].indexOf(a.vertical)   !== -1 ? a.vertical   : 'center';
+  return { horizontal: h, vertical: v };
+}
+
+var ALIGN_JUSTIFY = { left: 'flex-start', center: 'center', right: 'flex-end' };
+var ALIGN_ITEMS    = { top:  'flex-start', center: 'center', bottom: 'flex-end' };
+
+function photoAreaStyle(presentation) {
+  var a = normalizeAlign(presentation);
+  return 'display: flex; justify-content: ' + ALIGN_JUSTIFY[a.horizontal] + '; align-items: ' + ALIGN_ITEMS[a.vertical] + ';';
+}
+
+// The framed photo's own size within its (flexible) photo-area is driven by
+// the photo's raw pixel aspect ratio, combined with max-width/max-height:100%
+// so it shrinks to fit — the standard CSS "contain" pattern for non-replaced
+// elements. Matte/frame padding is a handful of px and doesn't meaningfully
+// change this ratio at real photo sizes, so it's ignored for simplicity;
+// object-fit:contain on the <img> itself (see .photo-matte img) absorbs any
+// tiny remaining mismatch. Falls back to 4:3 for empty slots / unknown dims.
+function photoFrameSizeStyle(slot) {
+  var photo = slot && slot.photo;
+  var w = (photo && photo.width  > 0) ? photo.width  : 4;
+  var h = (photo && photo.height > 0) ? photo.height : 3;
+  return 'aspect-ratio: ' + w + ' / ' + h + '; max-width: 100%; max-height: 100%;';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Placard configuration — also part of a template's `presentation` JSON:
 //   {
 //     "placard": {
@@ -1667,6 +1708,8 @@ function displayApp() {
     placardBoxStyle() { return placardBoxStyle(this.display && this.display.template && this.display.template.presentation); },
     placardFieldsFor(slot) { return placardFieldsFor(slot, this.display && this.display.template && this.display.template.presentation); },
     slotBoxStyle(i) { return slotBoxStyle(this.slotPositions, i); },
+    photoAreaStyle() { return photoAreaStyle(this.display && this.display.template && this.display.template.presentation); },
+    photoFrameSizeStyle(slot) { return photoFrameSizeStyle(slot); },
 
     goToPrev() { if (this.prevDisplayId) window.location.href = '/display.html?displayid=' + this.prevDisplayId; },
     goToNext() { if (this.nextDisplayId) window.location.href = '/display.html?displayid=' + this.nextDisplayId; },
@@ -1760,6 +1803,8 @@ function displayEditApp() {
     placardBoxStyle() { return placardBoxStyle(this.display && this.display.template && this.display.template.presentation); },
     placardFieldsFor(slot) { return placardFieldsFor(slot, this.display && this.display.template && this.display.template.presentation); },
     slotBoxStyle(i) { return slotBoxStyle(this.slotPositions, i); },
+    photoAreaStyle() { return photoAreaStyle(this.display && this.display.template && this.display.template.presentation); },
+    photoFrameSizeStyle(slot) { return photoFrameSizeStyle(slot); },
     avatarSrc(user)  { return avatarSrc(user);  },
 
     showToast(message) {
@@ -2341,6 +2386,7 @@ function templateAdminApp() {
       return {
         matte:   { enabled: true,  color: '#e8e3d5', width: 16 },
         frame:   { enabled: false, color: '#3d3424', width: 8 },
+        align:   { horizontal: 'center', vertical: 'center' },
         placard: {
           position: 'bottom',
           fields: [

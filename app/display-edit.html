@@ -53,22 +53,33 @@
       flex-direction: column;
       gap: 0.5rem;
       box-sizing: border-box;
+      background: var(--surface);
+    }
+    /* .photo-area is the flexible region the slot gives to the photo
+       (everything except the placard). The framed photo NEVER stretches to
+       fill it — it keeps its own aspect ratio (see .photo-frame) and is
+       aligned within .photo-area per presentation.align (photoAreaStyle()).
+       Any leftover space is just .photo-area's own background showing
+       through — the page background, not a fill of its own. */
+    .photo-area {
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      background: var(--surface);
     }
     /* .photo-frame is the outer frame border (style set inline from the
        template's presentation.frame); .photo-matte is the mat board inside
        it (padding + color set inline from presentation.matte). Both are
        independently optional — see frameOuterStyle()/matteInnerStyle().
-       Both flex to fill whatever space is left in the slot after the
-       placard, since the slot's overall box size now comes from the
-       template's geometry rather than the image's natural size. */
+       The frame's own size comes from the photo's aspect ratio
+       (photoFrameSizeStyle()), capped to fit inside .photo-area — it is
+       never stretched to the slot's shape. position:relative anchors the
+       edit button to the photo's own corner. */
     .photo-frame {
       position: relative;
       border-radius: 4px;
       overflow: hidden;
       box-sizing: border-box;
-      min-width: 0;
-      min-height: 0;
-      flex: 1 1 auto;
       display: flex;
     }
     .photo-matte {
@@ -347,23 +358,28 @@
            class="display-grid">
         <template x-for="(slot, i) in (display && display.slots || [])" :key="slot.slotid">
           <div class="slot-card" :style="slotBoxStyle(i) + slotCardDirectionStyle()">
-            <!-- Photo, with an optional frame + matte around it -->
-            <div class="photo-frame" :style="frameOuterStyle()">
-              <template x-if="slot.photo">
-                <div class="photo-matte" :style="matteInnerStyle()">
-                  <img :src="thumbUrl(slot.photo.imageurl, 600)"
-                       :alt="'Slot ' + slot.slot_index"
-                       loading="lazy" />
-                </div>
-              </template>
-              <!-- Empty slot placeholder -->
-              <template x-if="!slot.photo">
-                <div class="photo-matte empty-matte" :style="matteInnerStyle()">
-                  <span>Empty</span>
-                </div>
-              </template>
-              <button x-show="loggedInUser" class="slot-edit-btn" @click="openPicker(slot.slot_index)"
-                      x-text="slot.photo ? 'Change photo' : 'Add photo'"></button>
+            <!-- Photo area — the framed photo keeps its own aspect ratio and
+                 is aligned within any leftover space per presentation.align;
+                 that leftover space is always just background, never a frame
+                 that's been stretched out of shape. -->
+            <div class="photo-area" :style="photoAreaStyle()">
+              <div class="photo-frame" :style="frameOuterStyle() + photoFrameSizeStyle(slot)">
+                <template x-if="slot.photo">
+                  <div class="photo-matte" :style="matteInnerStyle()">
+                    <img :src="thumbUrl(slot.photo.imageurl, 600)"
+                         :alt="'Slot ' + slot.slot_index"
+                         loading="lazy" />
+                  </div>
+                </template>
+                <!-- Empty slot placeholder -->
+                <template x-if="!slot.photo">
+                  <div class="photo-matte empty-matte" :style="matteInnerStyle()">
+                    <span>Empty</span>
+                  </div>
+                </template>
+                <button x-show="loggedInUser" class="slot-edit-btn" @click="openPicker(slot.slot_index)"
+                        x-text="slot.photo ? 'Change photo' : 'Add photo'"></button>
+              </div>
             </div>
             <!-- Placard — fields + typography come from presentation.placard -->
             <div class="slot-placard" :style="placardBoxStyle()">
