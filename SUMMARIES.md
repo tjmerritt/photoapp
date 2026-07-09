@@ -497,3 +497,40 @@ Several Alpine CSP build constraints were discovered and worked around:
 - Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
 - Phase 6: admin pages
 - Phase 7: photo uploads
+
+---
+
+## Session 13 — Percentage-Based Matte/Frame Widths
+
+### What was done
+
+**Request**: matte/frame widths were px-only; add the option to specify them as a percentage of the photo's width instead, so they scale proportionally rather than staying a fixed pixel amount.
+
+**Design**: a `width` value (matte or frame, and per-side for matte) can now be either a plain number (px, unchanged) or a string like `"5%"` — a percentage of the photo's own *rendered* width (`contentW`, the fitted image width Session 9 already computes), not its raw pixel dimensions or the slot's size. Percentages are always relative to width specifically (per the request), even for a matte's top/bottom sides. px and percent can be freely mixed per side.
+
+**The hard part**: this makes the overhead in `computeFrameBoxSize()` (Session 9) depend on the very thing it's solving for — a photo that's bigger has a bigger percentage-based matte, which shrinks the space left for the photo, etc. Fixed with real math rather than iteration: since percentage overhead is *linear* in the photo's fitted width (`overhead = fixed + coef × contentW`), both the width-fit and height-fit constraints reduce to simple linear inequalities in `contentW`, solved directly:
+- `contentW ≤ (availW − overheadWFixed) / (1 + overheadWCoef)`
+- `contentW ≤ (availH − overheadHFixed) / (1/ratio + overheadHCoef)`
+- `contentW = max(0, min(of the above))`
+
+When nothing is percentage-based (`coef = 0` everywhere), this reduces to exactly the old fixed-overhead arithmetic — verified bit-for-bit against Session 9's numbers.
+
+**Frontend** (`app/app.js`):
+- `computeFrameBoxSize()` rewritten around the linear solver above; now also returns `contentW` on its result (the photo's resolved fitted width) so percentage sides can be turned into exact final px values elsewhere
+- New `splitWidthValue(v)` (splits a width entry into `{fixed, coef}`) and `resolveWidthPx(v, contentW)` (resolves one entry to a final px number)
+- `frameOuterStyle(presentation, contentW)` and `matteInnerStyle(presentation, contentW)` now take an optional `contentW` and use it to resolve any percentage sides; pure-px configs ignore it entirely (zero behavior change)
+- `displayApp()`/`displayEditApp()`: `frameOuterStyle(i)`/`matteInnerStyle(i)` now take the slot index and pull `contentW` from `this.frameSizes[i]` (computed by `layoutFrames()`, same JS-measurement pass as Session 9). Before the first layout pass measures anything, percentage sides resolve to `0` (matching Session 9's existing brief fallback window for frame sizing) rather than showing a wrong/stale value
+- Template Admin's presentation-JSON documentation updated to describe percentage widths and mixed px/percent per-side mattes
+
+### Testing notes
+- Extracted the pure functions and hand-verified: backward compatibility (px-only configs produce numerically identical results to Session 9, including the exact `600×460`/`600×465` cases from that session's own tests); a `"5%"` matte's resolved px scales up correctly as the available space grows (verified 4× larger area → 4× larger matte px); mixed px+percent per side computes correctly; `frameOuterStyle`/`matteInnerStyle` resolve percentages exactly against the solver's own `contentW` output; pure-px configs are provably unaffected by whatever `contentW` is passed (including `undefined`)
+- Verified the full pipeline end-to-end through real DOM rendering (JSDOM, measured `.photo-area` monkey-patched to 600×600): a template with `matte.width: "5%"` and `frame.width: "2%"` renders `padding: 26.32px` / `border: 10.53px` after `layoutFrames()` runs, matching the solver's `contentW` (526.32px) times 5%/2% exactly; before measurement, percentages correctly show as `0px` rather than a wrong guess
+- Re-ran all prior display/template regression suites (matte/frame/placard, slot_positions layout, alignment, matte uniformity, guide overlay) — no regressions
+
+### Open items
+- Non-JSON config UI for `presentation` (matte/frame/placard/align) in Template Admin — explicitly deferred by user
+- Side placard's fixed 200px width could dominate narrow slots the same way the bottom placard's old min-height did — not yet reported as an issue, flagged for awareness
+- Phase 4: Microsoft sign-in
+- Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
+- Phase 6: admin pages
+- Phase 7: photo uploads

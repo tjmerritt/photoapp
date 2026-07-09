@@ -1522,39 +1522,75 @@ function slotBoxStyle(positions, index) {
 // how each photo slot is bordered:
 //   {
 //     "matte": { "enabled": true,  "color": "#e8e3d5", "width": 16 },
-//     "frame": { "enabled": false, "color": "#3d3424", "width": 8 }
+//     "frame": { "enabled": false, "color": "#3d3424", "width": "5%" }
 //   }
-// matte.width may be a single number (applied to all four sides) or an
-// object like { "top": 8, "right": 24, "bottom": 24, "left": 24 } for an
-// asymmetric mat. Missing sides default to 0. Either matte or frame can be
-// turned off independently via "enabled". Absent/invalid presentation falls
-// back to a plain matte in the theme's frame color and no outer frame.
+// A width may be a plain number (px) or a string like "5%" — a percentage
+// of the photo's own rendered (fitted) width, so the matte/frame scales
+// with however large the photo actually appears rather than staying a
+// fixed pixel amount. matte.width may also be a per-side object like
+// { "top": 8, "right": "4%", "bottom": "4%", "left": 8 } — px and percent
+// can be mixed freely, per side. Missing sides default to 0. Either matte
+// or frame can be turned off independently via "enabled". Absent/invalid
+// presentation falls back to a plain matte in the theme's frame color and
+// no outer frame.
+//
+// Percentages can't be resolved by CSS alone (a photo's rendered size isn't
+// known until layout), so they're resolved in two places that must agree:
+//   - computeFrameBoxSize() solves for the photo's fitted width analytically
+//     (the overhead is now a linear function of that width, see below) and
+//     exposes it as `contentW` on its result.
+//   - frameOuterStyle()/matteInnerStyle() take that same `contentW` and use
+//     it to turn any percentage sides into their final px value for the
+//     actual CSS border/padding.
+// Before the first JS layout pass measures anything, `contentW` is
+// undefined and percentage sides resolve to 0 (invisible) for one tick,
+// then snap to the correct size — the same brief fallback window
+// photoFrameFallbackStyle() already has for the frame's own size.
 // ─────────────────────────────────────────────────────────────────────────────
 function normalizeSideWidths(width) {
-  if (typeof width === 'number') {
+  if (typeof width === 'number' || typeof width === 'string') {
     return { top: width, right: width, bottom: width, left: width };
   }
   var w = width || {};
-  return {
-    top:    typeof w.top    === 'number' ? w.top    : 0,
-    right:  typeof w.right  === 'number' ? w.right  : 0,
-    bottom: typeof w.bottom === 'number' ? w.bottom : 0,
-    left:   typeof w.left   === 'number' ? w.left   : 0,
-  };
+  function pick(v) { return (typeof v === 'number' || typeof v === 'string') ? v : 0; }
+  return { top: pick(w.top), right: pick(w.right), bottom: pick(w.bottom), left: pick(w.left) };
 }
 
-function frameOuterStyle(presentation) {
+// Splits one width entry into a fixed px amount and a coefficient (fraction
+// of contentW) — e.g. "5%" -> { fixed: 0, coef: 0.05 }, 16 -> { fixed: 16, coef: 0 }.
+function splitWidthValue(v) {
+  if (typeof v === 'string') {
+    var m = v.trim().match(/^(-?[\d.]+)\s*%$/);
+    if (m) return { fixed: 0, coef: parseFloat(m[1]) / 100 };
+  }
+  return { fixed: typeof v === 'number' ? v : 0, coef: 0 };
+}
+
+// Resolves one width entry to an actual px value given the photo's known
+// rendered width (contentW). Plain numbers ignore contentW entirely.
+function resolveWidthPx(v, contentW) {
+  var s = splitWidthValue(v);
+  return s.fixed + s.coef * (contentW || 0);
+}
+
+function frameOuterStyle(presentation, contentW) {
   var p     = presentation || {};
   var frame = Object.assign({ enabled: false, color: 'var(--board-border)', width: 8 }, p.frame || {});
-  return frame.enabled ? ('border: ' + frame.width + 'px solid ' + frame.color + ';') : 'border: none;';
+  if (!frame.enabled) return 'border: none;';
+  var px = resolveWidthPx(frame.width, contentW);
+  return 'border: ' + px + 'px solid ' + frame.color + ';';
 }
 
-function matteInnerStyle(presentation) {
+function matteInnerStyle(presentation, contentW) {
   var p     = presentation || {};
   var matte = Object.assign({ enabled: true, color: 'var(--frame-bg)', width: 16 }, p.matte || {});
   if (!matte.enabled) return 'background: none; padding: 0;';
-  var w = normalizeSideWidths(matte.width);
-  return 'background: ' + matte.color + '; padding: ' + w.top + 'px ' + w.right + 'px ' + w.bottom + 'px ' + w.left + 'px;';
+  var w      = normalizeSideWidths(matte.width);
+  var top    = resolveWidthPx(w.top,    contentW);
+  var right  = resolveWidthPx(w.right,  contentW);
+  var bottom = resolveWidthPx(w.bottom, contentW);
+  var left   = resolveWidthPx(w.left,   contentW);
+  return 'background: ' + matte.color + '; padding: ' + top + 'px ' + right + 'px ' + bottom + 'px ' + left + 'px;';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1598,39 +1634,66 @@ function photoAreaStyle(presentation) {
 // top/bottom but ~27px left/right, purely from that rounding.)
 //
 // computeFrameBoxSize fixes this by working backwards from the *measured*
-// available space: it subtracts the matte/frame's exact pixel overhead
-// first, fits the photo's true aspect ratio into what's left, then adds the
+// available space: it subtracts the matte/frame's exact overhead first,
+// fits the photo's true aspect ratio into what's left, then adds the
 // overhead back on — so the returned box, once padded/bordered by matte and
 // frame via normal CSS, has the image filling its content area exactly with
 // no internal letterboxing, and the matte is the same width on all sides.
+//
+// Percentage-based widths (see the comment above matteInnerStyle()) make
+// the overhead itself depend on the photo's fitted width — matte/frame
+// overhead is no longer a constant, it's `fixed + coef * contentW`. Both
+// the width and height fit constraints are still linear in contentW though,
+// so this solves them directly rather than iterating:
+//   contentW + (overheadWFixed + overheadWCoef*contentW) <= availW
+//   contentW/ratio + (overheadHFixed + overheadHCoef*contentW) <= availH
+// (When nothing is percentage-based, overheadWCoef/overheadHCoef are 0 and
+// this reduces to exactly the old fixed-overhead arithmetic.)
 function computeFrameBoxSize(availW, availH, slot, presentation) {
   if (!(availW > 0) || !(availH > 0)) return null;
 
   var photo  = slot && slot.photo;
   var photoW = (photo && photo.width  > 0) ? photo.width  : 4;
   var photoH = (photo && photo.height > 0) ? photo.height : 3;
+  var ratio  = photoW / photoH;
 
   var p     = presentation || {};
   var matte = Object.assign({ enabled: true,  width: 16 }, p.matte || {});
   var frame = Object.assign({ enabled: false, width: 8  }, p.frame || {});
   var mw    = matte.enabled ? normalizeSideWidths(matte.width) : { top: 0, right: 0, bottom: 0, left: 0 };
-  var fw    = frame.enabled ? frame.width : 0;
 
-  var overheadW = mw.left + mw.right + 2 * fw;
-  var overheadH = mw.top  + mw.bottom + 2 * fw;
+  var top    = splitWidthValue(mw.top);
+  var right  = splitWidthValue(mw.right);
+  var bottom = splitWidthValue(mw.bottom);
+  var left   = splitWidthValue(mw.left);
+  var side   = splitWidthValue(frame.enabled ? frame.width : 0);
 
-  var maxContentW = Math.max(0, availW - overheadW);
-  var maxContentH = Math.max(0, availH - overheadH);
-  if (maxContentW <= 0 || maxContentH <= 0) {
-    // Overhead alone doesn't fit — clamp rather than go negative.
-    return { w: Math.min(overheadW, availW), h: Math.min(overheadH, availH) };
-  }
+  var overheadWFixed = left.fixed + right.fixed + 2 * side.fixed;
+  var overheadWCoef  = left.coef  + right.coef  + 2 * side.coef;
+  // Percentages are always relative to the photo's WIDTH (per spec), even
+  // for top/bottom matte — so the height overhead uses the same
+  // width-based coefficients, not separate height-relative ones.
+  var overheadHFixed = top.fixed + bottom.fixed + 2 * side.fixed;
+  var overheadHCoef  = top.coef  + bottom.coef  + 2 * side.coef;
 
-  var scale    = Math.min(maxContentW / photoW, maxContentH / photoH);
-  var contentW = photoW * scale;
-  var contentH = photoH * scale;
+  var maxW1 = (availW - overheadWFixed) / (1 + overheadWCoef);
+  var maxW2 = (availH - overheadHFixed) / (1 / ratio + overheadHCoef);
+  var contentW = Math.max(0, Math.min(maxW1, maxW2));
+  if (!isFinite(contentW)) contentW = 0;
+  var contentH = contentW / ratio;
 
-  return { w: contentW + overheadW, h: contentH + overheadH };
+  var overheadW = overheadWFixed + overheadWCoef * contentW;
+  var overheadH = overheadHFixed + overheadHCoef * contentW;
+
+  return {
+    // Never exceed the measured available space even in extreme cases
+    // (e.g. overhead alone already larger than the slot).
+    w: Math.min(availW, contentW + overheadW),
+    h: Math.min(availH, contentH + overheadH),
+    // Exposed so frameOuterStyle()/matteInnerStyle() can resolve any
+    // percentage-based sides to their exact final px value.
+    contentW: contentW,
+  };
 }
 
 // Before the JS layout pass has measured anything (first paint), fall back
@@ -1759,8 +1822,19 @@ function displayApp() {
     frameSizes: [],
 
     thumbUrl(url, w) { return thumbUrl(url, w); },
-    frameOuterStyle() { return frameOuterStyle(this.display && this.display.template && this.display.template.presentation); },
-    matteInnerStyle() { return matteInnerStyle(this.display && this.display.template && this.display.template.presentation); },
+    // i is needed (not just the presentation) so percentage-based matte/frame
+    // widths can resolve against this specific slot's measured contentW —
+    // see the comment above matteInnerStyle() in the shared helpers above.
+    frameOuterStyle(i) {
+      const presentation = this.display && this.display.template && this.display.template.presentation;
+      const size = this.frameSizes[i];
+      return frameOuterStyle(presentation, size && size.contentW);
+    },
+    matteInnerStyle(i) {
+      const presentation = this.display && this.display.template && this.display.template.presentation;
+      const size = this.frameSizes[i];
+      return matteInnerStyle(presentation, size && size.contentW);
+    },
     slotCardDirectionStyle() { return slotCardDirectionStyle(this.display && this.display.template && this.display.template.presentation); },
     placardBoxStyle() { return placardBoxStyle(this.display && this.display.template && this.display.template.presentation); },
     placardFieldsFor(slot) { return placardFieldsFor(slot, this.display && this.display.template && this.display.template.presentation); },
@@ -1892,8 +1966,19 @@ function displayEditApp() {
     pickerDebounce:   null,
 
     thumbUrl(url, w) { return thumbUrl(url, w); },
-    frameOuterStyle() { return frameOuterStyle(this.display && this.display.template && this.display.template.presentation); },
-    matteInnerStyle() { return matteInnerStyle(this.display && this.display.template && this.display.template.presentation); },
+    // i is needed (not just the presentation) so percentage-based matte/frame
+    // widths can resolve against this specific slot's measured contentW —
+    // see the comment above matteInnerStyle() in the shared helpers above.
+    frameOuterStyle(i) {
+      const presentation = this.display && this.display.template && this.display.template.presentation;
+      const size = this.frameSizes[i];
+      return frameOuterStyle(presentation, size && size.contentW);
+    },
+    matteInnerStyle(i) {
+      const presentation = this.display && this.display.template && this.display.template.presentation;
+      const size = this.frameSizes[i];
+      return matteInnerStyle(presentation, size && size.contentW);
+    },
     slotCardDirectionStyle() { return slotCardDirectionStyle(this.display && this.display.template && this.display.template.presentation); },
     placardBoxStyle() { return placardBoxStyle(this.display && this.display.template && this.display.template.presentation); },
     placardFieldsFor(slot) { return placardFieldsFor(slot, this.display && this.display.template && this.display.template.presentation); },

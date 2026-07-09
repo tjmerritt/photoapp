@@ -309,12 +309,15 @@
                 </label>
                 <p class="text-xs text-[var(--muted)] -mt-2">
                   <code>matte</code>/<code>frame</code> each take <code>enabled</code>, <code>color</code>,
-                  and <code>width</code> (px). Matte's <code>width</code> may instead be
-                  <code>{top,right,bottom,left}</code> for an uneven mat. Set either
-                  <code>enabled: false</code> to omit it. The framed photo always keeps its own
-                  aspect ratio — it's never stretched to fit the slot — so a slot shaped
-                  differently than the photo will have empty space on two sides; that space
-                  is always the page background, never a fill.<br>
+                  and <code>width</code> — a number in px, or a string like <code>"5%"</code> for a
+                  percentage of the photo's own rendered width (so the matte/frame scales with
+                  however large the photo actually appears, rather than staying a fixed pixel
+                  amount). Matte's <code>width</code> may instead be
+                  <code>{top,right,bottom,left}</code> for an uneven mat — px and percent can be
+                  mixed per side. Set either <code>enabled: false</code> to omit it. The framed
+                  photo always keeps its own aspect ratio — it's never stretched to fit the slot —
+                  so a slot shaped differently than the photo will have empty space on two sides;
+                  that space is always the page background, never a fill.<br>
                   <code>align</code> controls where that space goes:
                   <code>{ horizontal: "left"|"center"|"right", vertical: "top"|"center"|"bottom" }</code>.<br>
                   <code>placard.position</code> is <code>top</code>/<code>bottom</code>/<code>left</code>/<code>right</code>
