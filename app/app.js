@@ -1584,18 +1584,69 @@ function photoAreaStyle(presentation) {
   return 'display: flex; justify-content: ' + ALIGN_JUSTIFY[a.horizontal] + '; align-items: ' + ALIGN_ITEMS[a.vertical] + ';';
 }
 
-// The framed photo's own size within its (flexible) photo-area is driven by
-// the photo's raw pixel aspect ratio, combined with max-width/max-height:100%
-// so it shrinks to fit — the standard CSS "contain" pattern for non-replaced
-// elements. Matte/frame padding is a handful of px and doesn't meaningfully
-// change this ratio at real photo sizes, so it's ignored for simplicity;
-// object-fit:contain on the <img> itself (see .photo-matte img) absorbs any
-// tiny remaining mismatch. Falls back to 4:3 for empty slots / unknown dims.
-function photoFrameSizeStyle(slot) {
+// The framed photo's box size — computed in actual pixels so the matte and
+// frame widths are exactly what's configured on *every* side.
+//
+// A pure CSS approach (aspect-ratio: photoW/photoH on .photo-frame, with
+// matte/frame as padding/border inside it) looks right at first, but isn't:
+// setting the frame's aspect-ratio to the raw photo ratio, then subtracting
+// the matte's fixed-px padding from that box, leaves a content area whose
+// ratio no longer matches the photo — so object-fit:contain on the <img>
+// letterboxes inside the matte on one axis, making the visual matte gap on
+// that axis wider than the configured width even though the CSS padding
+// itself is uniform. (E.g. a 20px matte around a photo can render as ~20px
+// top/bottom but ~27px left/right, purely from that rounding.)
+//
+// computeFrameBoxSize fixes this by working backwards from the *measured*
+// available space: it subtracts the matte/frame's exact pixel overhead
+// first, fits the photo's true aspect ratio into what's left, then adds the
+// overhead back on — so the returned box, once padded/bordered by matte and
+// frame via normal CSS, has the image filling its content area exactly with
+// no internal letterboxing, and the matte is the same width on all sides.
+function computeFrameBoxSize(availW, availH, slot, presentation) {
+  if (!(availW > 0) || !(availH > 0)) return null;
+
+  var photo  = slot && slot.photo;
+  var photoW = (photo && photo.width  > 0) ? photo.width  : 4;
+  var photoH = (photo && photo.height > 0) ? photo.height : 3;
+
+  var p     = presentation || {};
+  var matte = Object.assign({ enabled: true,  width: 16 }, p.matte || {});
+  var frame = Object.assign({ enabled: false, width: 8  }, p.frame || {});
+  var mw    = matte.enabled ? normalizeSideWidths(matte.width) : { top: 0, right: 0, bottom: 0, left: 0 };
+  var fw    = frame.enabled ? frame.width : 0;
+
+  var overheadW = mw.left + mw.right + 2 * fw;
+  var overheadH = mw.top  + mw.bottom + 2 * fw;
+
+  var maxContentW = Math.max(0, availW - overheadW);
+  var maxContentH = Math.max(0, availH - overheadH);
+  if (maxContentW <= 0 || maxContentH <= 0) {
+    // Overhead alone doesn't fit — clamp rather than go negative.
+    return { w: Math.min(overheadW, availW), h: Math.min(overheadH, availH) };
+  }
+
+  var scale    = Math.min(maxContentW / photoW, maxContentH / photoH);
+  var contentW = photoW * scale;
+  var contentH = photoH * scale;
+
+  return { w: contentW + overheadW, h: contentH + overheadH };
+}
+
+// Before the JS layout pass has measured anything (first paint), fall back
+// to the CSS-only aspect-ratio approximation so there's no flash of a
+// collapsed/unsized box. This is corrected to the exact size on the very
+// next tick via _layoutFrames() — see displayApp/displayEditApp.
+function photoFrameFallbackStyle(slot) {
   var photo = slot && slot.photo;
   var w = (photo && photo.width  > 0) ? photo.width  : 4;
   var h = (photo && photo.height > 0) ? photo.height : 3;
   return 'aspect-ratio: ' + w + ' / ' + h + '; max-width: 100%; max-height: 100%;';
+}
+
+function photoFrameSizeStyle(size, slot) {
+  if (size) return 'width: ' + size.w.toFixed(2) + 'px; height: ' + size.h.toFixed(2) + 'px;';
+  return photoFrameFallbackStyle(slot);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1700,6 +1751,12 @@ function displayApp() {
     // see slotBoxStyle() near the top of this file). Computed in init() from
     // the template's slot_positions, falling back to an even grid.
     slotPositions: [],
+    // Exact pixel { w, h } for each slot's framed-photo box, measured from
+    // the actual rendered .photo-area size — see computeFrameBoxSize() near
+    // the top of this file for why this can't just be done with CSS
+    // aspect-ratio. null entries (before the first measurement pass) fall
+    // back to the CSS approximation via photoFrameSizeStyle().
+    frameSizes: [],
 
     thumbUrl(url, w) { return thumbUrl(url, w); },
     frameOuterStyle() { return frameOuterStyle(this.display && this.display.template && this.display.template.presentation); },
@@ -1709,7 +1766,23 @@ function displayApp() {
     placardFieldsFor(slot) { return placardFieldsFor(slot, this.display && this.display.template && this.display.template.presentation); },
     slotBoxStyle(i) { return slotBoxStyle(this.slotPositions, i); },
     photoAreaStyle() { return photoAreaStyle(this.display && this.display.template && this.display.template.presentation); },
-    photoFrameSizeStyle(slot) { return photoFrameSizeStyle(slot); },
+    photoFrameSizeStyle(i, slot) { return photoFrameSizeStyle(this.frameSizes[i], slot); },
+
+    // Measures each slot's rendered .photo-area and computes its exact
+    // frame box size (see computeFrameBoxSize()). Re-run whenever the grid
+    // resizes (ResizeObserver, set up in init()) or the display data changes.
+    layoutFrames() {
+      const grid = this.$refs.grid;
+      if (!grid) return;
+      const areas       = grid.querySelectorAll('.photo-area');
+      const slots        = (this.display && this.display.slots) || [];
+      const presentation = this.display && this.display.template && this.display.template.presentation;
+      const next = [];
+      for (let i = 0; i < areas.length; i++) {
+        next.push(computeFrameBoxSize(areas[i].clientWidth, areas[i].clientHeight, slots[i], presentation));
+      }
+      this.frameSizes = next;
+    },
 
     goToPrev() { if (this.prevDisplayId) window.location.href = '/display.html?displayid=' + this.prevDisplayId; },
     goToNext() { if (this.nextDisplayId) window.location.href = '/display.html?displayid=' + this.nextDisplayId; },
@@ -1752,6 +1825,16 @@ function displayApp() {
         this.error = e.message;
       }
       this.loading = false;
+
+      // Wait for the grid to actually render, then measure it and set up a
+      // ResizeObserver so frame sizes stay exact across viewport/layout
+      // changes (font loading reflowing a placard's height, window resize).
+      await new Promise(resolve => this.$nextTick(resolve));
+      const grid = this.$refs.grid;
+      if (grid) {
+        this.layoutFrames();
+        new ResizeObserver(() => this.layoutFrames()).observe(grid);
+      }
     },
   };
 }
@@ -1785,6 +1868,12 @@ function displayEditApp() {
     // see slotBoxStyle() near the top of this file). Computed in init() from
     // the template's slot_positions, falling back to an even grid.
     slotPositions: [],
+    // Exact pixel { w, h } for each slot's framed-photo box, measured from
+    // the actual rendered .photo-area size — see computeFrameBoxSize() near
+    // the top of this file for why this can't just be done with CSS
+    // aspect-ratio. null entries (before the first measurement pass) fall
+    // back to the CSS approximation via photoFrameSizeStyle().
+    frameSizes: [],
 
     // Photo picker (search + assign a photo to a slot)
     pickerOpen:       false,
@@ -1804,8 +1893,26 @@ function displayEditApp() {
     placardFieldsFor(slot) { return placardFieldsFor(slot, this.display && this.display.template && this.display.template.presentation); },
     slotBoxStyle(i) { return slotBoxStyle(this.slotPositions, i); },
     photoAreaStyle() { return photoAreaStyle(this.display && this.display.template && this.display.template.presentation); },
-    photoFrameSizeStyle(slot) { return photoFrameSizeStyle(slot); },
+    photoFrameSizeStyle(i, slot) { return photoFrameSizeStyle(this.frameSizes[i], slot); },
     avatarSrc(user)  { return avatarSrc(user);  },
+
+    // Measures each slot's rendered .photo-area and computes its exact
+    // frame box size (see computeFrameBoxSize()). Re-run whenever the grid
+    // resizes (ResizeObserver, set up in init()) or the display data changes
+    // (e.g. after saveSlotPhoto() assigns a photo with a different aspect
+    // ratio, which the grid's own size won't necessarily change to reflect).
+    layoutFrames() {
+      const grid = this.$refs.grid;
+      if (!grid) return;
+      const areas       = grid.querySelectorAll('.photo-area');
+      const slots        = (this.display && this.display.slots) || [];
+      const presentation = this.display && this.display.template && this.display.template.presentation;
+      const next = [];
+      for (let i = 0; i < areas.length; i++) {
+        next.push(computeFrameBoxSize(areas[i].clientWidth, areas[i].clientHeight, slots[i], presentation));
+      }
+      this.frameSizes = next;
+    },
 
     showToast(message) {
       clearTimeout(this.toast.timer);
@@ -1878,6 +1985,16 @@ function displayEditApp() {
         this.error = e.message;
       }
       this.loading = false;
+
+      // Wait for the grid to actually render, then measure it and set up a
+      // ResizeObserver so frame sizes stay exact across viewport/layout
+      // changes (font loading reflowing a placard's height, window resize).
+      await new Promise(resolve => this.$nextTick(resolve));
+      const grid = this.$refs.grid;
+      if (grid) {
+        this.layoutFrames();
+        new ResizeObserver(() => this.layoutFrames()).observe(grid);
+      }
     },
 
     // ── Photo picker ──────────────────────────────────────────────────────────
@@ -1964,6 +2081,11 @@ function displayEditApp() {
         this.display = await resp.json();
         this.showToast(photoid ? 'Photo updated.' : 'Photo removed.');
         this.closePicker();
+        // The new photo's aspect ratio may differ even if the slot's own
+        // box size on screen hasn't changed, so re-measure explicitly
+        // rather than relying solely on the ResizeObserver.
+        await new Promise(resolve => this.$nextTick(resolve));
+        this.layoutFrames();
       } catch(e) {
         this.showToast('Failed to update photo: ' + e.message);
       }

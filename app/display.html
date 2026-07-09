@@ -254,15 +254,18 @@
            template's slot_positions (slotBoxStyle), matching the Template
            Admin preview pane. -->
       <div x-show="display && display.slots && display.slots.length > 0"
-           class="display-grid">
+           class="display-grid" x-ref="grid">
         <template x-for="(slot, i) in (display && display.slots || [])" :key="slot.slotid">
           <div class="slot-card" :style="slotBoxStyle(i) + slotCardDirectionStyle()">
             <!-- Photo area — the framed photo keeps its own aspect ratio and
                  is aligned within any leftover space per presentation.align;
                  that leftover space is always just background, never a frame
-                 that's been stretched out of shape. -->
+                 that's been stretched out of shape. Frame size (width/height)
+                 is measured in JS (layoutFrames()) so the matte/frame widths
+                 stay exactly uniform on every side — see computeFrameBoxSize
+                 comment in app.js. -->
             <div class="photo-area" :style="photoAreaStyle()">
-              <div class="photo-frame" :style="frameOuterStyle() + photoFrameSizeStyle(slot)">
+              <div class="photo-frame" :style="frameOuterStyle() + photoFrameSizeStyle(i, slot)">
                 <template x-if="slot.photo">
                   <div class="photo-matte" :style="matteInnerStyle()">
                     <img :src="thumbUrl(slot.photo.imageurl, 600)"

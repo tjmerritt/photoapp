@@ -394,3 +394,32 @@ Several Alpine CSP build constraints were discovered and worked around:
 - Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
 - Phase 6: admin pages
 - Phase 7: photo uploads
+
+---
+
+## Session 9 — Matte Width Wasn't Actually Uniform on All Sides
+
+### What was done
+
+**Bug**: with matte width set to the same px value on every side (e.g. 20), the rendered gap around the photo was visibly wider left/right than top/bottom (or vice versa, depending on the photo's shape).
+
+**Root cause**: Session 8's `.photo-frame` was sized via `aspect-ratio: photoW / photoH` (the *raw* photo's pixel ratio), then the matte's fixed-px padding was subtracted from that box by ordinary CSS box-model layout. Since the padding is a fixed pixel amount and the frame's ratio didn't account for it, the *content area left for the image* (frame box minus padding) ended up with a slightly different ratio than the photo itself. `object-fit:contain` then letterboxed the image inside that content area on whichever axis had the mismatch — so the CSS padding was technically uniform (always 20px), but the *visible* gap (padding + that extra letterbox sliver) wasn't.
+
+**Fix** (`app/app.js`, `app/display.html`, `app/display-edit.html`): replaced the CSS-only aspect-ratio approximation with an exact, JS-measured pixel size for `.photo-frame`, following the same measure-then-layout pattern `wallApp` already uses (`ResizeObserver` + explicit pixel styles) rather than trying to force this through CSS alone.
+
+- New `computeFrameBoxSize(availW, availH, slot, presentation)` in `app.js`: given the actual measured size of a slot's `.photo-area`, subtracts the matte/frame's exact pixel overhead *first*, fits the photo's true aspect ratio into what's left, then adds the overhead back — so the resulting frame box, once padded/bordered normally, has the image filling its content area exactly with zero internal letterboxing, and the matte is the same width on every side by construction (asymmetric per-side matte widths are still fully respected — verified with a `{top:5,right:20,bottom:5,left:20}` case)
+- `photoFrameFallbackStyle(slot)` keeps the old CSS aspect-ratio approximation as a first-paint fallback (used only before the JS layout pass has measured anything, so there's no flash of a collapsed box)
+- `displayApp()`/`displayEditApp()`: added `frameSizes` (array of measured `{w,h}` per slot) and `layoutFrames()`, which queries all `.photo-area` elements under a new `x-ref="grid"` on `.display-grid`, measures each with `clientWidth`/`clientHeight`, and calls `computeFrameBoxSize()`. Wired up in `init()` (measure once after the grid renders, then a `ResizeObserver` keeps it correct across window resizes and placard-height reflows) and again after `saveSlotPhoto()` (a newly-assigned photo can have a different aspect ratio even when the slot's own box size on screen doesn't change)
+- `photoFrameSizeStyle(i, slot)` now takes the slot index and returns the exact `width:/height:` px from `frameSizes[i]` when available, else the fallback
+
+### Testing notes
+- Since JSDOM has no real layout engine (`clientWidth`/`clientHeight` are always 0), added a standalone unit test extracting just `computeFrameBoxSize`/`normalizeSideWidths` and running the actual overhead math against hand-checked numbers (uniform 20px matte, matte+frame combined, asymmetric matte, empty-slot fallback, unmeasured-yet null case) — all passed, including confirming the content box's aspect ratio matches the photo's exactly (no drift) so the matte gap is provably identical on all sides
+- Also verified the full pipeline end-to-end by monkey-patching a `.photo-area` element's `clientWidth`/`clientHeight` in the JSDOM harness and calling `layoutFrames()` directly, confirming the applied `.photo-frame` style matches the unit-test numbers exactly
+- Re-ran all prior display/template regression suites (matte/frame/placard config, slot_positions layout, alignment, Template Admin preview) — no regressions; JSDOM's lack of real layout means these still exercise the CSS fallback path, which is unchanged from Session 8
+
+### Open items
+- Non-JSON config UI for `presentation` (matte/frame/placard/align) in Template Admin — explicitly deferred by user
+- Phase 4: Microsoft sign-in
+- Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
+- Phase 6: admin pages
+- Phase 7: photo uploads
