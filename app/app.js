@@ -17,6 +17,16 @@ function thumbUrl(url, cssWidth) {
   return url + '&w=' + w;
 }
 
+// sortTemplates(list) — canonical display order for display templates:
+// smallest photo_count first, then alphabetical by name. The backend already
+// returns templates in this order; this is used client-side after a
+// create/save so the in-memory list doesn't need a full reload to re-sort.
+function sortTemplates(list) {
+  return (list || []).slice().sort(function (a, b) {
+    return (a.photo_count - b.photo_count) || a.name.localeCompare(b.name);
+  });
+}
+
 function getAuthHeaders() {
   if (window._loggedIn) return {};   // cookie handles auth for real sessions
   return window._testUserID ? { 'X-User-ID': window._testUserID } : {};
@@ -1930,7 +1940,7 @@ function galleryAdminApp() {
         const resp = await fetch('/api/v1/display-templates');
         if (!resp.ok) return; // non-fatal — template pickers just show empty
         const data = await resp.json();
-        this.templates = data.templates || [];
+        this.templates = sortTemplates(data.templates || []);
       } catch { /* non-fatal */ }
     },
 
@@ -2247,7 +2257,7 @@ function templateAdminApp() {
         const resp = await fetch('/api/v1/display-templates');
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const data = await resp.json();
-        this.templates = data.templates || [];
+        this.templates = sortTemplates(data.templates || []);
       } catch(e) {
         this.error = e.message;
       }
@@ -2313,7 +2323,7 @@ function templateAdminApp() {
           throw new Error(e.error || 'HTTP ' + resp.status);
         }
         const t = await resp.json();
-        this.templates.push(t);
+        this.templates = sortTemplates(this.templates.concat([t]));
         this.newName       = '';
         this.newPhotoCount = 4;
         this.showToast('Template created.');
@@ -2385,7 +2395,9 @@ function templateAdminApp() {
         }
         const t   = await resp.json();
         const idx = this.templates.findIndex(x => x.templateid === templateid);
-        if (idx !== -1) this.templates[idx] = t;
+        const next = this.templates.slice();
+        if (idx !== -1) next[idx] = t; else next.push(t);
+        this.templates = sortTemplates(next);
         this.expandedId = null;
         this.showToast('Template saved.');
       } catch(e) {

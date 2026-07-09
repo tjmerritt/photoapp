@@ -276,3 +276,57 @@ Several Alpine CSP build constraints were discovered and worked around:
 - Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
 - Phase 6: admin pages
 - Phase 7: photo uploads
+
+---
+
+## Session 6 — Template Editor, Photo Picker, Display View/Edit Split, Matte/Frame/Placard Styling
+
+### What was done
+
+**Template Admin page** (`app/template-admin.html`, new):
+- Simple CRUD editor for `display_templates`: create (name + photo_count), list, expand-to-edit, delete
+- Edit form: name, photo_count, "Regenerate layout" button (even grid via `defaultSlotPositions(n)`), raw JSON textareas for `slot_positions` and `presentation`, live grid preview
+- `templateAdminApp()` Alpine component added to `app/app.js`; nav link added across all pages
+
+**Display template selection in Gallery Admin** (`app/gallery-admin.html`, `app/app.js`):
+- `galleryAdminApp()` extended with `templates`/`loadTemplates()`, a template picker on "Add Display", and a per-row `<select>` (`setDisplayTemplate`) to change an existing display's template
+- Bug fix: the per-row `<select>` used `:value` bound to `x-for`-generated `<option>`s, which doesn't reliably re-sync in Alpine's CSP build after a selection; switched to `x-model="d.selectedTemplateId"` on a plain reactive field, with revert-on-PATCH-failure
+
+**Photo picker for display slots** (`app/app.js`, `app/display-edit.html`):
+- `SearchResult.Title` / `search.go` updated to return `p.title_text` so search results show photo titles
+- `displayApp()`'s picker logic (`pickerOpen`, `openPicker`, `onPickerInput`, `runPickerSearch`, `selectPickerPhoto`, `clearPickerPhoto`, `saveSlotPhoto`) added; modal shows a search box + thumbnail results
+- Backend gotcha documented: the slot upsert in `displays.go` (`PATCH /displays/:id`) does `ON CONFLICT DO UPDATE SET photoid=EXCLUDED.photoid, rich_text=EXCLUDED.rich_text, placard=EXCLUDED.placard` — omitting `rich_text`/`placard` from a slot PATCH wipes them to NULL, so every slot save must resend current values
+
+**View/edit page split**:
+- `app/display.html` rewritten as a minimal public viewer: navbar only, no breadcrumb/controls, just the photo grid + edge-hover prev/next arrows (tall narrow arrow zones on the far left/right that fade in on hover, `edge-nav`/`edge-arrow` CSS)
+- `app/display-edit.html` (new): full editing experience — breadcrumb, "Display X of Y", top/bottom Prev/Next, "View live" link, photo picker modal, "Add/Change photo" overlay button per slot
+- `app/gallery-admin.html` display rows now link to both (eye icon → view, pencil icon → edit)
+- `app/app.js` split into `displayApp()` (view-only) and `displayEditApp()` (editing), sharing helper methods
+
+**Matte / frame / placard presentation system** (`display_templates.presentation` JSONB, frontend-owned schema):
+- Removed the old fixed photo border; added configurable matte (`color`, `width`, per-side widths, `enabled`) and frame (`color`, `width`, `enabled`) around each photo, driven by shared helpers in `app.js` (`frameOuterStyle`, `matteInnerStyle`, `normalizeSideWidths`)
+- Removed the yellow `.board` background/border/shadow wrapper entirely — framing now comes only from each photo's own matte/frame
+- Made placard **position** configurable (`presentation.placard.position`: top/bottom/left/right) via `slotCardDirectionStyle()`, applied to `.slot-card`
+- Made placard **content** configurable: `presentation.placard.fields` is a list of `{source: "title"|"rich_text", typography: {...}}`; added `photo.title` to the API response (`SlotPhoto.Title`, `displays.go` slot query) so the `title` source works; `normalizePlacardConfig`, `typographyStyle`, `placardFieldSourceValue`, `placardFieldsFor`, `placardBoxStyle` helpers added; empty fields are skipped rather than shown blank
+- Templates with no `presentation` set (or an empty one) fall back to the original single-caption look — fully backward compatible
+- Template Admin's `defaultPresentation()` and its documentation text updated to reflect the fuller schema; new templates now start pre-filled with a title+caption example
+- User explicitly deferred building a non-JSON config UI for `presentation` ("annoying, but we can work on that later") — raw JSON textarea remains the only editor for now
+
+**Template ordering**:
+- `GET /api/v1/display-templates` (`templates.go`) now returns `ORDER BY photo_count, name` instead of just `name`, so every template picker (Template Admin list, Gallery Admin's "Add Display" and per-row selectors) is ordered smallest-photo-count-first, then alphabetically
+- Added `sortTemplates()` helper in `app.js`; applied after create/save in `templateAdminApp()` so the in-memory list stays correctly ordered without a full reload
+
+### Testing notes
+- No Go toolchain, Postgres, or sudo in the sandbox — Go changes (`models.go`, `search.go`, `displays.go`, `templates.go`) verified only by manual diff review, not compiled or run
+- Frontend verified via a JSDOM-based headless-DOM harness serving the real files over a local HTTP server with `window.fetch` mocked, proving actual Alpine reactivity against the literal files on disk
+
+### Deployment note (standing instruction from user)
+- Static assets (`app/*.html`, `app/app.js`) take effect immediately — the Go server reads them fresh from disk per request
+- Go source changes (`internal/**/*.go`) require `make build` + a server restart before they take effect; each Go-touching change in this session was flagged as such
+
+### Open items
+- Non-JSON config UI for `presentation` (matte/frame/placard) in Template Admin — explicitly deferred by user
+- Phase 4: Microsoft sign-in
+- Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
+- Phase 6: admin pages
+- Phase 7: photo uploads

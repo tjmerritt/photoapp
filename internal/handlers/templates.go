@@ -27,7 +27,7 @@ func (h *TemplatesHandler) List(w http.ResponseWriter, r *http.Request, _ httpro
 		       slot_positions::text, presentation::text
 		FROM   display_templates
 		WHERE  deleted_at IS NULL
-		ORDER  BY name
+		ORDER  BY photo_count, name
 	`)
 	if err != nil {
 		slog.Error("List templates", "error", err)
