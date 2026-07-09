@@ -201,10 +201,10 @@
 
   <div class="flex items-start justify-between gap-4 mb-8">
     <div>
-      <h1 class="text-3xl font-serif mb-1">Template Admin</h1>
-      <p class="text-sm text-[var(--muted)]">Manage display templates — slot count and layout.</p>
+      <h1 class="text-3xl font-serif mb-1">Template Manager</h1>
+      <p class="text-sm text-[var(--muted)]">Manage display templates — slot count and display layout.</p>
     </div>
-    <button class="btn-primary shrink-0" @click="openCreateModal()">+ Create Template</button>
+    <button class="btn-primary shrink-0" @click="openCreateModal()">Create Template</button>
   </div>
 
   <!-- Loading -->
@@ -229,7 +229,7 @@
       No templates yet. Create your first template above.
     </div>
 
-    <div class="flex flex-col gap-4">
+    <div class="flex flex-col gap-1">
       <template x-for="t in templates" :key="t.templateid">
         <div class="template-row">
 
