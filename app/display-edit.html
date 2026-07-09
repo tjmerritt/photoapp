@@ -189,6 +189,41 @@
       aspect-ratio: 16 / 9;
     }
 
+    /* Layout guides — a reference overlay (edit page only) showing the 16:9
+       canvas boundary and each slot's exact bounding box, i.e. exactly what
+       the public view page assumes. outline (not border) so it never
+       affects box sizing/layout math. Toggled via the "Guides" control. */
+    .display-grid.guides-on {
+      outline: 2px dashed rgba(233, 69, 96, .55);
+      outline-offset: -1px;
+    }
+    .slot-card.guides-on {
+      outline: 1px dashed rgba(26, 26, 46, .4);
+      outline-offset: -1px;
+    }
+    .slot-guide-label {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      background: rgba(26, 26, 46, .72);
+      color: #fff;
+      font-size: 0.625rem;
+      line-height: 1.3;
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      pointer-events: none;
+      z-index: 5;
+      white-space: nowrap;
+    }
+    .guides-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      cursor: pointer;
+      user-select: none;
+    }
+
     /* Nav arrow buttons */
     .nav-btn {
       display: inline-flex;
@@ -328,6 +363,12 @@
       </div>
       <!-- Navigation at top -->
       <div class="flex items-center gap-2">
+        <!-- Reference overlay: the 16:9 canvas boundary + each slot's exact
+             bounds, i.e. the geometry the public view page assumes. -->
+        <label class="guides-toggle text-xs text-[var(--muted)]">
+          <input type="checkbox" x-model="showGuides" />
+          Guides
+        </label>
         <a class="nav-btn nav-btn-ghost" :href="'/display.html?displayid=' + (display && display.displayid)">
           View live
         </a>
@@ -359,9 +400,11 @@
            template's slot_positions (slotBoxStyle), matching the Template
            Admin preview pane. -->
       <div x-show="display && display.slots && display.slots.length > 0"
-           class="display-grid" x-ref="grid">
+           class="display-grid" x-ref="grid" :class="{ 'guides-on': showGuides }">
         <template x-for="(slot, i) in (display && display.slots || [])" :key="slot.slotid">
-          <div class="slot-card" :style="slotBoxStyle(i) + slotCardDirectionStyle()">
+          <div class="slot-card" :style="slotBoxStyle(i) + slotCardDirectionStyle()" :class="{ 'guides-on': showGuides }">
+            <!-- Guide label: this slot's raw x/y/w/h from slot_positions. -->
+            <span x-show="showGuides" class="slot-guide-label" x-text="slotGuideLabel(i)"></span>
             <!-- Photo area — the framed photo keeps its own aspect ratio and
                  is aligned within any leftover space per presentation.align;
                  that leftover space is always just background, never a frame

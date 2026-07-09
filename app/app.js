@@ -1875,6 +1875,12 @@ function displayEditApp() {
     // back to the CSS approximation via photoFrameSizeStyle().
     frameSizes: [],
 
+    // Layout guides — a reference overlay showing the 16:9 canvas boundary
+    // and each slot's exact bounding box (from slot_positions), so a
+    // template author can see the geometry the public view page assumes
+    // while editing. Edit-only; display.html never shows this.
+    showGuides: true,
+
     // Photo picker (search + assign a photo to a slot)
     pickerOpen:       false,
     pickerSlotIndex:  null,
@@ -1895,6 +1901,15 @@ function displayEditApp() {
     photoAreaStyle() { return photoAreaStyle(this.display && this.display.template && this.display.template.presentation); },
     photoFrameSizeStyle(i, slot) { return photoFrameSizeStyle(this.frameSizes[i], slot); },
     avatarSrc(user)  { return avatarSrc(user);  },
+
+    // Label text for a slot's guide overlay — the raw x/y/w/h (percent) from
+    // slot_positions, so it's obvious this is the template's own geometry
+    // and not something derived from the photo.
+    slotGuideLabel(i) {
+      const p = this.slotPositions[i];
+      if (!p) return '';
+      return 'x:' + p.x + ' y:' + p.y + '  ' + p.w + '×' + p.h;
+    },
 
     // Measures each slot's rendered .photo-area and computes its exact
     // frame box size (see computeFrameBoxSize()). Re-run whenever the grid

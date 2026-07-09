@@ -471,3 +471,29 @@ Several Alpine CSP build constraints were discovered and worked around:
 - Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
 - Phase 6: admin pages
 - Phase 7: photo uploads
+
+---
+
+## Session 12 — Layout Guide Overlay on the Display Edit Page
+
+### What was done
+
+**Request**: a visual reference on the display edit page showing the 16:9 canvas boundary and each slot's exact bounds (from `slot_positions`), matching what the public view page assumes — useful after Session 11's investigation made clear that a slot's *box* and the *photo rendered inside it* can differ significantly once matte/frame/aspect-ratio containment is applied.
+
+**Implementation** (`app/display-edit.html`, `app/app.js`), edit page only — `display.html` (the public view) is untouched:
+- New `showGuides` state on `displayEditApp()`, defaulting to `true`, toggled via a small "Guides" checkbox added next to "View live" in the header
+- `.display-grid` gets a dashed `outline` (not `border`, so it never affects box sizing/layout) when `guides-on` is toggled, marking the 16:9 canvas boundary
+- Each `.slot-card` gets the same treatment — since `.slot-card`'s own box is already positioned/sized exactly per `slot_positions` (via `slotBoxStyle()`), outlining it directly shows the slot's true bounds independent of whatever's actually rendered inside (photo, matte, frame, empty placeholder)
+- Each slot also gets a small floating label (top-left corner) showing its raw `x`/`y`/`w`/`h` from `slot_positions` (new `slotGuideLabel(i)` method), so it's unambiguous this is the template's own geometry, not something derived from the photo
+
+### Testing notes
+- Verified via the JSDOM harness with the exact staggered `slot_positions` from Session 11's bug report: `guides-on` class present on the grid and all three slot-cards by default, labels showing `x:10 y:60  22×30` etc., and toggling `showGuides` to `false` correctly removes the classes and hides the labels (`display:none`) and unchecks the checkbox
+- Confirmed zero references to the new guide classes/state in `display.html`, so the public view page is unaffected
+
+### Open items
+- Non-JSON config UI for `presentation` (matte/frame/placard/align) in Template Admin — explicitly deferred by user
+- Side placard's fixed 200px width could dominate narrow slots the same way the bottom placard's old min-height did — not yet reported as an issue, flagged for awareness
+- Phase 4: Microsoft sign-in
+- Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
+- Phase 6: admin pages
+- Phase 7: photo uploads
