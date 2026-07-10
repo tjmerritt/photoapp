@@ -90,6 +90,17 @@
       min-width: 0;
       min-height: 0;
     }
+    /* .photo-link fills the matte's content box so the <img>'s
+       max-width/max-height:100% still resolves against the same area it
+       did before the link wrapper was added — sizing is unchanged, it's
+       just now clickable through to the photo's own page. */
+    .photo-link {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+    }
     .photo-matte img {
       max-width: 100%;
       max-height: 100%;
@@ -272,9 +283,13 @@
               <div class="photo-frame" :style="frameOuterStyle(i) + photoFrameSizeStyle(i, slot)">
                 <template x-if="slot.photo">
                   <div class="photo-matte" :style="matteInnerStyle(i)">
-                    <img :src="thumbUrl(slot.photo.imageurl, 600)"
-                         :alt="'Slot ' + slot.slot_index"
-                         loading="lazy" />
+                    <a :href="'/photo.html?photoid=' + slot.photo.photoid"
+                       target="_blank"
+                       class="photo-link">
+                      <img :src="thumbUrl(slot.photo.imageurl, 600)"
+                           :alt="'Slot ' + slot.slot_index"
+                           loading="lazy" />
+                    </a>
                   </div>
                 </template>
                 <!-- Empty slot placeholder -->

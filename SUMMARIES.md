@@ -534,3 +534,28 @@ When nothing is percentage-based (`coef = 0` everywhere), this reduces to exactl
 - Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
 - Phase 6: admin pages
 - Phase 7: photo uploads
+
+---
+
+## Session 14 — Clickable Photos on the Display View Page
+
+### What was done
+
+**Request**: clicking a photo on the public display view page (`display.html`) should navigate to that photo's own page.
+
+**Implementation** (`app/display.html` only — `display-edit.html` deliberately untouched, since its photo area already has its own click target, the "Add/Change photo" overlay button):
+- Each filled slot's `<img>` is now wrapped in `<a :href="'/photo.html?photoid=' + slot.photo.photoid" target="_blank" class="photo-link">`, following the exact `:href` pattern already established in `index.html`'s photo wall (string concatenation — the Alpine CSP build this app uses rejects template literals and method calls inside `:href` bindings)
+- New `.photo-link` CSS makes the anchor fill the matte's content box exactly (`display:flex; width:100%; height:100%`), so the `<img>`'s existing `max-width/max-height:100%` sizing still resolves against the same area it did before the link was added — no visual/sizing change, purely adds a click target
+- Empty slots (no photo) get no link, matching the wall's own photo-only-links behavior
+
+### Testing notes
+- Verified via the JSDOM harness: a display with one filled and one empty slot renders exactly one `.photo-link`, with the correct `href`/`target="_blank"`, wrapping the `<img>`; the empty slot has no link
+- Re-ran the matte/frame/alignment/percentage-width regression suites — no changes to any rendered sizing, since `.photo-link` is purely a same-size pass-through wrapper
+
+### Open items
+- Non-JSON config UI for `presentation` (matte/frame/placard/align) in Template Admin — explicitly deferred by user
+- Side placard's fixed 200px width could dominate narrow slots the same way the bottom placard's old min-height did — not yet reported as an issue, flagged for awareness
+- Phase 4: Microsoft sign-in
+- Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
+- Phase 6: admin pages
+- Phase 7: photo uploads
