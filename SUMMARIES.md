@@ -559,3 +559,30 @@ When nothing is percentage-based (`coef = 0` everywhere), this reduces to exactl
 - Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
 - Phase 6: admin pages
 - Phase 7: photo uploads
+
+---
+
+## Session 15 — Create Template Moved Into a Popup
+
+### What was done
+
+**Request**: replace the inline "Create New Template" box on Template Admin with a "Create Template" button in the upper right corner, opening a popup with the fields and a button to create.
+
+**Implementation** (`app/template-admin.html`, `app/app.js`):
+- Page header changed to a flex row: title/subtitle on the left, a `+ Create Template` button (upper right) that calls `openCreateModal()`
+- Removed the old inline create-form box entirely
+- New modal (`createModalOpen`), styled to match the photo-picker modal already used on `display-edit.html` (`.backdrop` blur, centered card, `animate-scalein`), closable via the `×` button, Cancel, clicking the backdrop, or Escape — same interaction pattern as that existing modal
+- Modal contains the same fields the inline form had (name, photo count, the "starts with an evenly-spaced grid" helper text, error message) plus a **New** button that calls the existing `createTemplate()`
+- `openCreateModal()` resets `newName`/`newPhotoCount`/`createError` before showing the modal, so reopening it after a previous session doesn't show stale input; `createTemplate()` now also closes the modal on success (stays open with the error shown on failure, so the user can retry without re-entering everything)
+
+### Testing notes
+- Verified via the JSDOM harness: the header button and modal both exist, the old inline form text is gone, the modal is hidden by default; opening the modal resets the fields; a successful create closes the modal and adds the template to the list; a failed create leaves the modal open with the error message; Cancel closes the modal without creating anything
+- Re-ran the existing Template Admin regression suite (mini/full preview rendering, `defaultSlotPositions` sharing with the display pages) — no regressions
+
+### Open items
+- Non-JSON config UI for `presentation` (matte/frame/placard/align) in Template Admin — explicitly deferred by user
+- Side placard's fixed 200px width could dominate narrow slots the same way the bottom placard's old min-height did — not yet reported as an issue, flagged for awareness
+- Phase 4: Microsoft sign-in
+- Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
+- Phase 6: admin pages
+- Phase 7: photo uploads

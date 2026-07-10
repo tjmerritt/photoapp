@@ -2542,11 +2542,23 @@ function templateAdminApp() {
     loading:   true,
     error:     null,
 
-    // Create form
+    // Create form — fields live in a modal (createModalOpen), triggered by
+    // the "+ Create Template" button in the page header.
+    createModalOpen: false,
     newName:       '',
     newPhotoCount: 4,
     creating:      false,
     createError:   '',
+
+    openCreateModal() {
+      this.newName       = '';
+      this.newPhotoCount = 4;
+      this.createError   = '';
+      this.createModalOpen = true;
+    },
+    closeCreateModal() {
+      this.createModalOpen = false;
+    },
 
     // Expanded editor (one at a time)
     expandedId:        null,
@@ -2650,8 +2662,9 @@ function templateAdminApp() {
         }
         const t = await resp.json();
         this.templates = sortTemplates(this.templates.concat([t]));
-        this.newName       = '';
-        this.newPhotoCount = 4;
+        this.newName         = '';
+        this.newPhotoCount   = 4;
+        this.createModalOpen = false;
         this.showToast('Template created.');
       } catch(e) {
         this.createError = e.message;

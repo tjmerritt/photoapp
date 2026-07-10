@@ -29,6 +29,15 @@
     .animate-fadein  { animation: fadeIn  .25s ease both; }
     .animate-scalein { animation: scaleIn .2s  ease both; }
     [x-cloak] { display: none !important; }
+    .backdrop { background: rgba(26,26,46,.55); backdrop-filter: blur(3px); }
+    .modal-card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 20px 50px rgba(0,0,0,.25);
+      width: 100%;
+      max-width: 26rem;
+      padding: 1.25rem;
+    }
 
     .template-row {
       background: var(--card);
@@ -190,8 +199,13 @@
 <!-- ══ MAIN ══════════════════════════════════════════════════════════════════ -->
 <main class="flex-1 max-w-3xl mx-auto w-full px-4 py-10">
 
-  <h1 class="text-3xl font-serif mb-1">Template Admin</h1>
-  <p class="text-sm text-[var(--muted)] mb-8">Manage display templates — slot count and layout.</p>
+  <div class="flex items-start justify-between gap-4 mb-8">
+    <div>
+      <h1 class="text-3xl font-serif mb-1">Template Admin</h1>
+      <p class="text-sm text-[var(--muted)]">Manage display templates — slot count and layout.</p>
+    </div>
+    <button class="btn-primary shrink-0" @click="openCreateModal()">+ Create Template</button>
+  </div>
 
   <!-- Loading -->
   <div x-show="loading" class="flex items-center justify-center py-24 gap-3">
@@ -209,34 +223,6 @@
   </div>
 
   <div x-show="!loading" class="animate-fadein">
-
-    <!-- ── Create template form ────────────────────────────────────────── -->
-    <div class="mb-8 p-5 bg-white border border-[var(--border)] rounded-xl">
-      <h2 class="text-base font-semibold mb-3">Create New Template</h2>
-      <div class="flex gap-2 items-start flex-wrap">
-        <input class="input flex-1 min-w-[180px]"
-               type="text"
-               x-model="newName"
-               placeholder="Template name"
-               @keyup.enter="createTemplate()" />
-        <input class="input w-28"
-               type="number"
-               min="1"
-               x-model.number="newPhotoCount"
-               placeholder="Photo count"
-               @keyup.enter="createTemplate()" />
-        <button class="btn-primary shrink-0"
-                @click="createTemplate()"
-                :disabled="creating || !newName.trim() || newPhotoCount < 1">
-          <span x-show="!creating">+ Create</span>
-          <span x-show="creating">Creating…</span>
-        </button>
-      </div>
-      <p class="text-xs text-[var(--muted)] mt-2">
-        A new template starts with an evenly-spaced grid layout for its photo count — edit the layout after creating it.
-      </p>
-      <p x-show="createError" class="text-red-500 text-xs mt-2" x-text="createError"></p>
-    </div>
 
     <!-- ── Template list ──────────────────────────────────────────────── -->
     <div x-show="templates.length === 0 && !error" class="text-center py-12 text-[var(--muted)] text-sm">
@@ -363,6 +349,53 @@
 
   </div>
 </main>
+
+<!-- ══ CREATE TEMPLATE MODAL ═══════════════════════════════════════════════ -->
+<div x-show="createModalOpen" x-cloak x-transition
+     class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
+     @click.self="closeCreateModal()"
+     @keydown.escape.window="closeCreateModal()">
+  <div class="modal-card animate-scalein">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-serif text-lg">Create Template</h3>
+      <button class="text-[var(--muted)] hover:text-[var(--brand)] text-xl leading-none px-1" @click="closeCreateModal()">&times;</button>
+    </div>
+
+    <div class="flex flex-col gap-3">
+      <label class="text-xs font-medium text-[var(--muted)]">
+        Name
+        <input class="input w-full mt-1"
+               type="text"
+               x-model="newName"
+               placeholder="Template name"
+               @keyup.enter="createTemplate()" />
+      </label>
+      <label class="text-xs font-medium text-[var(--muted)]">
+        Photo count
+        <input class="input w-full mt-1"
+               type="number"
+               min="1"
+               x-model.number="newPhotoCount"
+               placeholder="Photo count"
+               @keyup.enter="createTemplate()" />
+      </label>
+      <p class="text-xs text-[var(--muted)]">
+        A new template starts with an evenly-spaced grid layout for its photo count — edit the layout after creating it.
+      </p>
+      <p x-show="createError" class="text-red-500 text-xs" x-text="createError"></p>
+
+      <div class="flex gap-2 mt-1">
+        <button class="btn-primary text-sm"
+                @click="createTemplate()"
+                :disabled="creating || !newName.trim() || newPhotoCount < 1">
+          <span x-show="!creating">New</span>
+          <span x-show="creating">Creating…</span>
+        </button>
+        <button class="btn-secondary text-sm" @click="closeCreateModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ══ TOAST ═══════════════════════════════════════════════════════════════ -->
 <div x-show="toast.visible" x-transition
