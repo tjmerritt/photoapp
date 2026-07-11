@@ -1809,10 +1809,31 @@ var CM_PER_IN = 2.54;
 var DEFAULT_BOARD_WIDTH_IN   = 48;   // a reasonably-sized display board
 var DEFAULT_PLACARD_WIDTH_IN = 4;    // a small caption card
 var DEFAULT_PLACARD_HEIGHT_IN = 1.5;
+// The reference density (CSS's own definition of "1in" = 96px) that placard
+// item font sizes are assumed to be chosen against — see placardFontScale().
+var CSS_PX_PER_IN = 96;
 
 function inToCm(v) { return v * CM_PER_IN; }
 function cmToIn(v) { return v / CM_PER_IN; }
 function round2(v) { return Math.round(v * 100) / 100; }
+
+// Placard item font sizes (fontSize, letterSpacing) are stored in px as if
+// the board were rendered at exactly boardWidthIn inches wide, at CSS's
+// standard 96px/in. But the display canvas is responsive — it's shown at
+// whatever width fits the screen/window, not its "true" physical size — so
+// the same 12px item could end up looking tiny on a canvas rendered small
+// (e.g. a 96in board squeezed into a 600px-wide phone screen) or huge on one
+// rendered large. This computes the scale factor to correct for that: the
+// ratio of the canvas's *actual* on-screen pixel width to its *design*
+// pixel width (boardWidthIn * 96px/in). At scale 1, fonts render exactly as
+// specified; below/above 1, they shrink/grow with the canvas so text stays
+// proportionate to the board (and to the placard box, since the box is
+// always a fixed percent of the canvas — see the comment above
+// normalizeGalleryPlacard()).
+function placardFontScale(boardWidthIn, canvasPxWidth) {
+  if (!(boardWidthIn > 0) || !(canvasPxWidth > 0)) return 1;
+  return canvasPxWidth / (boardWidthIn * CSS_PX_PER_IN);
+}
 
 // The placard's own physical size in inches. Normalized gallery objects
 // already carry widthIn/heightIn directly (see normalizeGalleryPlacard), so
@@ -1872,17 +1893,22 @@ function normalizeGalleryPlacard(raw) {
   };
 }
 
-function typographyStyle(typo) {
+// `scale` (default 1, from placardFontScale()) corrects px-based properties
+// (fontSize, letterSpacing) for the canvas's actual on-screen size vs. its
+// physical definition — see placardFontScale(). lineHeight is unitless
+// (a multiple of fontSize), so it doesn't need scaling on its own.
+function typographyStyle(typo, scale) {
   var t = typo || {};
+  var s = typeof scale === 'number' && scale > 0 ? scale : 1;
   var css = '';
   if (t.fontFamily)             css += 'font-family: ' + t.fontFamily + ';';
-  if (t.fontSize != null)       css += 'font-size: ' + t.fontSize + 'px;';
+  if (t.fontSize != null)       css += 'font-size: ' + (t.fontSize * s) + 'px;';
   if (t.fontWeight)             css += 'font-weight: ' + t.fontWeight + ';';
   if (t.fontStyle)              css += 'font-style: ' + t.fontStyle + ';';
   if (t.color)                  css += 'color: ' + t.color + ';';
   if (t.textAlign)              css += 'text-align: ' + t.textAlign + ';';
   if (t.textTransform)          css += 'text-transform: ' + t.textTransform + ';';
-  if (t.letterSpacing != null)  css += 'letter-spacing: ' + t.letterSpacing + 'px;';
+  if (t.letterSpacing != null)  css += 'letter-spacing: ' + (t.letterSpacing * s) + 'px;';
   if (t.lineHeight != null)     css += 'line-height: ' + t.lineHeight + ';';
   return css;
 }
@@ -1916,20 +1942,24 @@ function placardBoxStyle(gallery, slotPos) {
 // a resize, only this computed percent does (see the comment above
 // defaultPlacardItemPosition() for why an item can end up rendered outside
 // the box, and clipped, after a resize).
-function placardItemStyle(item, placardWidthIn, placardHeightIn) {
+function placardItemStyle(item, placardWidthIn, placardHeightIn, fontScale) {
   var xPct = placardWidthIn  > 0 ? (item.xIn / placardWidthIn)  * 100 : 0;
   var yPct = placardHeightIn > 0 ? (item.yIn / placardHeightIn) * 100 : 0;
-  return 'position: absolute; left: ' + xPct + '%; top: ' + yPct + '%;' + typographyStyle(item);
+  return 'position: absolute; left: ' + xPct + '%; top: ' + yPct + '%;' + typographyStyle(item, fontScale);
 }
 
 // Resolved { id, text, style } list for one slot: gallery items with label
 // substitution applied, a per-slot text override (display_slots.placard.
 // overrides, keyed by item id) taking precedence when set, and items hidden
 // per hideIfMissing when their substitution can't be resolved and there's no
-// override.
-function placardItemsFor(gallery, slot) {
+// override. `canvasPxWidth` — the display grid's actual measured on-screen
+// pixel width (see layoutFrames() in displayApp/displayEditApp) — drives the
+// font-size scale factor (placardFontScale()) so item text renders true to
+// the placard's physical size regardless of how big the canvas is shown.
+function placardItemsFor(gallery, slot, canvasPxWidth) {
   var g         = normalizeGalleryPlacard(gallery && gallery.placard_defaults);
   var size      = placardPhysicalSize(g);
+  var fontScale = placardFontScale(g.boardWidthIn, canvasPxWidth);
   var overrides = (slot && slot.placard && slot.placard.overrides) || {};
   var labels    = (slot && slot.photo && slot.photo.labels) || [];
   var out = [];
@@ -1944,7 +1974,7 @@ function placardItemsFor(gallery, slot) {
       text = r.text;
     }
     if (!text) return;
-    out.push({ id: item.id, text: text, style: placardItemStyle(item, size.widthIn, size.heightIn) });
+    out.push({ id: item.id, text: text, style: placardItemStyle(item, size.widthIn, size.heightIn, fontScale) });
   });
   return out;
 }
@@ -1980,6 +2010,14 @@ function displayApp() {
     // aspect-ratio. null entries (before the first measurement pass) fall
     // back to the CSS approximation via photoFrameSizeStyle().
     frameSizes: [],
+    // The display grid's actual rendered pixel width (its .display-grid,
+    // which is where slot/placard percent positions are relative to) —
+    // measured alongside frameSizes in layoutFrames(). Drives the placard
+    // item font-size scale factor (placardFontScale()) so text renders true
+    // to the placard's physical size regardless of how big the canvas
+    // happens to be shown on this particular screen. 0 before the first
+    // measurement pass, which placardFontScale() treats as "no scaling".
+    canvasWidthPx: 0,
 
     thumbUrl(url, w) { return thumbUrl(url, w); },
     // i is needed (not just the presentation) so percentage-based matte/frame
@@ -2001,7 +2039,7 @@ function displayApp() {
     // Gallery-level placard box (position from the template, size/appearance
     // + item content from the gallery) — see the placard helper block above.
     placardBoxStyle(i) { return placardBoxStyle(this.gallery, this.slotPositions[i]); },
-    placardItemsFor(slot) { return placardItemsFor(this.gallery, slot); },
+    placardItemsFor(slot) { return placardItemsFor(this.gallery, slot, this.canvasWidthPx); },
 
     // Measures each slot's rendered .photo-area and computes its exact
     // frame box size (see computeFrameBoxSize()). Re-run whenever the grid
@@ -2016,7 +2054,8 @@ function displayApp() {
       for (let i = 0; i < areas.length; i++) {
         next.push(computeFrameBoxSize(areas[i].clientWidth, areas[i].clientHeight, slots[i], presentation));
       }
-      this.frameSizes = next;
+      this.frameSizes    = next;
+      this.canvasWidthPx = grid.clientWidth;
     },
 
     goToPrev() { if (this.prevDisplayId) window.location.href = '/display.html?displayid=' + this.prevDisplayId; },
@@ -2109,6 +2148,10 @@ function displayEditApp() {
     // aspect-ratio. null entries (before the first measurement pass) fall
     // back to the CSS approximation via photoFrameSizeStyle().
     frameSizes: [],
+    // The display grid's actual rendered pixel width — see the matching
+    // field/comment in displayApp above. Drives the placard item font-size
+    // scale factor (placardFontScale()).
+    canvasWidthPx: 0,
 
     // Layout guides — a reference overlay showing the 16:9 canvas boundary
     // and each slot's exact bounding box (from slot_positions), so a
@@ -2146,7 +2189,7 @@ function displayEditApp() {
     // Gallery-level placard box (position from the template, size/appearance
     // + item content from the gallery) — see the placard helper block above.
     placardBoxStyle(i) { return placardBoxStyle(this.gallery, this.slotPositions[i]); },
-    placardItemsFor(slot) { return placardItemsFor(this.gallery, slot); },
+    placardItemsFor(slot) { return placardItemsFor(this.gallery, slot, this.canvasWidthPx); },
     avatarSrc(user)  { return avatarSrc(user);  },
 
     // Label text for a slot's guide overlay — the raw x/y/w/h (percent) from
@@ -2173,7 +2216,8 @@ function displayEditApp() {
       for (let i = 0; i < areas.length; i++) {
         next.push(computeFrameBoxSize(areas[i].clientWidth, areas[i].clientHeight, slots[i], presentation));
       }
-      this.frameSizes = next;
+      this.frameSizes    = next;
+      this.canvasWidthPx = grid.clientWidth;
     },
 
     showToast(message) {

@@ -764,3 +764,23 @@ Since the display canvas is rendered responsively (no fixed physical size on its
 
 ### Open items
 - None known.
+
+## Session 23 — Fixed: Placard Item Font Sizes Didn't Scale With the Displayed Canvas Size
+
+### What was done
+- Fixed a reported bug: on the display view/edit pages, the placard box itself rendered at the right size, but item text (font sizes, stored as raw px) stayed a fixed pixel size regardless of how big the 16:9 canvas actually rendered on screen — so a placard set up for a small preview looked right there but too big/small once shown on an actual display (whose canvas can render at any pixel width depending on viewport).
+- Font sizes are now scaled by the ratio of the canvas's *actual* on-screen pixel width to its *design* pixel width — `boardWidthIn * 96` (CSS's own 96px = 1in reference). At scale 1 (canvas shown at its true physical size) fonts render exactly as specified; if the canvas is shown smaller/larger, fonts shrink/grow proportionally, so caption text stays true to the placard's physical size on any screen.
+- `app/app.js`:
+  - New `CSS_PX_PER_IN = 96` constant and `placardFontScale(boardWidthIn, canvasPxWidth)` helper.
+  - `typographyStyle(typo, scale)` now multiplies `fontSize`/`letterSpacing` (px properties) by `scale` (default 1); unitless `lineHeight` and non-numeric properties are untouched.
+  - `placardItemStyle(item, placardWidthIn, placardHeightIn, fontScale)` and `placardItemsFor(gallery, slot, canvasPxWidth)` thread the scale factor through to rendering.
+  - `displayApp`/`displayEditApp`: added a `canvasWidthPx` field, updated in `layoutFrames()` (the same ResizeObserver-driven measurement already used for exact frame sizing) from `grid.clientWidth`; `placardItemsFor(slot)` now passes `this.canvasWidthPx` through.
+- Scoped to the real display pages (`display.html`, `display-edit.html`) since that's where the bug was reported. The Gallery Admin Placard Settings mini preview is left unscaled — it's a rough layout tool capped at a small fixed width, not a true render of on-screen text size.
+
+### Testing notes
+- `run30.js`: added pure-function tests for `placardFontScale` (scale 1 at design width, 0.5/2 at half/double, defaults to 1 with no/invalid measurement), scale-aware `typographyStyle`/`placardItemStyle` (px properties scale, unitless/non-numeric properties don't), and `placardItemsFor`'s new `canvasPxWidth` argument end-to-end.
+- `run31.js`: added a DOM-level test that stubs `.display-grid`'s `clientWidth` (JSDOM has no real layout engine) to a known pixel value, calls `layoutFrames()` directly (exactly what the ResizeObserver does on a real resize), and confirms the re-rendered `.placard-item` style attribute reflects the scaled font size — first at the design width (scale 1, unchanged), then at half that width (font halved). This is the true end-to-end confirmation that the fix works through the real reactive rendering path, not just the underlying helper functions.
+- Full placard suite (`run30`–`run37`, 139 checks) passes with no regressions.
+
+### Open items
+- Gallery Admin's mini placard preview doesn't apply this scaling (documented above as an intentional scope decision) — if that becomes confusing in practice, it could be added later using the same `placardFontScale()` helper against the preview canvas's measured width.
