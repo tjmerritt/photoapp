@@ -1767,11 +1767,37 @@ function defaultPlacardItemPosition(n) {
   return { x: 4 + col * 32, y: 8 + row * 22 };
 }
 
+// ── Physical units ──────────────────────────────────────────────────────────
+// Placard width/height are still stored (and rendered) as a percent of the
+// 16:9 canvas — that part hasn't changed. But percent alone isn't intuitive
+// to set by hand, since the canvas has no fixed physical size on its own (it
+// just scales to fill whatever screen shows it). `boardWidthIn` is the
+// physical width, in inches, that the whole canvas is meant to represent
+// (e.g. "this gallery's display is a 48 inch wide board") — purely a
+// conversion reference for the Gallery Admin editor UI; it has no other
+// effect on rendering. `unit` remembers which unit (in/cm) the editor was
+// last shown in. Canvas height in inches is always boardWidthIn * 9/16
+// (16:9), so placard width/height in inches convert to percent via:
+//   width%  = (widthIn  / boardWidthIn)          * 100
+//   height% = (heightIn / (boardWidthIn * 9/16)) * 100
+var CM_PER_IN = 2.54;
+var DEFAULT_BOARD_WIDTH_IN   = 48;   // a reasonably-sized display board
+var DEFAULT_PLACARD_WIDTH_IN = 4;    // a small caption card
+var DEFAULT_PLACARD_HEIGHT_IN = 1.5;
+
+function inToCm(v) { return v * CM_PER_IN; }
+function cmToIn(v) { return v / CM_PER_IN; }
+function round2(v) { return Math.round(v * 100) / 100; }
+
 function normalizeGalleryPlacard(raw) {
   var p = raw || {};
+  var boardWidthIn  = typeof p.boardWidthIn === 'number' && p.boardWidthIn > 0 ? p.boardWidthIn : DEFAULT_BOARD_WIDTH_IN;
+  var boardHeightIn = boardWidthIn * 9 / 16;
   return {
-    width:       typeof p.width  === 'number' ? p.width  : 20,
-    height:      typeof p.height === 'number' ? p.height : 8,
+    width:       typeof p.width  === 'number' ? p.width  : (DEFAULT_PLACARD_WIDTH_IN  / boardWidthIn)  * 100,
+    height:      typeof p.height === 'number' ? p.height : (DEFAULT_PLACARD_HEIGHT_IN / boardHeightIn) * 100,
+    boardWidthIn: boardWidthIn,
+    unit:        p.unit === 'cm' ? 'cm' : 'in',
     background:  p.background  || '#faf7f0',
     borderColor: p.borderColor || '#d6ccb0',
     items: Array.isArray(p.items) ? p.items.map(function (it, idx) {
@@ -2562,10 +2588,30 @@ function galleryAdminApp() {
     placardSaving:    false,
     placardError:     '',
 
+    // The draft's width/height are edited as physical size (inches or cm),
+    // not percent — percent has no intuitive meaning on its own since the
+    // canvas has no fixed physical size. `widthIn`/`heightIn`/`boardWidthIn`
+    // are always canonically stored in inches; `unit` just controls which
+    // unit the *Display fields (what the number inputs actually show/edit)
+    // are rendered in. Editing a *Display field converts it straight back
+    // to the canonical inches value (see placardUnitInput()); switching
+    // units re-renders the *Display fields from the canonical inches value
+    // (see refreshPlacardDisplayFields()) — nothing is ever converted
+    // through a chain of round-trips that could drift.
     openPlacardSettings(galleryid) {
       this.placardGalleryId = galleryid;
-      const normalized = normalizeGalleryPlacard(this.expandedGalleryPlacard);
-      this.placardDraft = JSON.parse(JSON.stringify(normalized));
+      const normalized     = normalizeGalleryPlacard(this.expandedGalleryPlacard);
+      const boardHeightIn  = normalized.boardWidthIn * 9 / 16;
+      this.placardDraft = {
+        boardWidthIn: normalized.boardWidthIn,
+        widthIn:      (normalized.width  / 100) * normalized.boardWidthIn,
+        heightIn:     (normalized.height / 100) * boardHeightIn,
+        unit:         normalized.unit,
+        background:   normalized.background,
+        borderColor:  normalized.borderColor,
+        items:        JSON.parse(JSON.stringify(normalized.items)),
+      };
+      this.refreshPlacardDisplayFields();
       this.placardError = '';
       this.placardModalOpen = true;
     },
@@ -2573,6 +2619,35 @@ function galleryAdminApp() {
     closePlacardSettings() {
       this.placardModalOpen = false;
       this.placardDraft     = null;
+    },
+
+    // Re-renders boardWidthDisplay/widthDisplay/heightDisplay from the
+    // canonical inches values in the currently-selected unit. Called after
+    // opening the modal and whenever the unit toggle changes.
+    refreshPlacardDisplayFields() {
+      const d    = this.placardDraft;
+      const conv = d.unit === 'cm' ? inToCm : (v) => v;
+      d.boardWidthDisplay = String(round2(conv(d.boardWidthIn)));
+      d.widthDisplay      = String(round2(conv(d.widthIn)));
+      d.heightDisplay     = String(round2(conv(d.heightIn)));
+    },
+
+    onPlacardUnitChange() {
+      this.refreshPlacardDisplayFields();
+    },
+
+    // field is 'boardWidth' | 'width' | 'height'. Converts whatever the user
+    // just typed (in the current display unit) back to the canonical inches
+    // value; the *Display field itself keeps the raw typed text as-is so
+    // typing "4." or "4.5" doesn't get reformatted mid-keystroke.
+    placardUnitInput(field, rawValue) {
+      const d = this.placardDraft;
+      d[field + 'Display'] = rawValue;
+      const num  = parseFloat(rawValue);
+      const val  = isNaN(num) ? 0 : num;
+      const toIn = d.unit === 'cm' ? cmToIn : (v) => v;
+      const inches = toIn(val);
+      d[field + 'In'] = Math.max(field === 'boardWidth' ? 0.1 : 0, inches);
     },
 
     addPlacardItem() {
@@ -2637,10 +2712,26 @@ function galleryAdminApp() {
       this.placardSaving = true;
       this.placardError  = '';
       try {
+        // Convert the draft's physical inches back to the percent-of-canvas
+        // values that actually drive rendering (see the comment above
+        // normalizeGalleryPlacard()) — boardWidthIn/unit are saved alongside
+        // so re-opening the editor later shows the same physical size in the
+        // same unit, without having to re-derive it from a rounded percent.
+        const d            = this.placardDraft;
+        const boardHeightIn = d.boardWidthIn * 9 / 16;
+        const payload = {
+          width:        (d.widthIn  / d.boardWidthIn)  * 100,
+          height:       (d.heightIn / boardHeightIn)   * 100,
+          boardWidthIn: d.boardWidthIn,
+          unit:         d.unit,
+          background:   d.background,
+          borderColor:  d.borderColor,
+          items:        d.items,
+        };
         const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(this.placardGalleryId), {
           method:  'PATCH',
           headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-          body:    JSON.stringify({ placard_defaults: this.placardDraft }),
+          body:    JSON.stringify({ placard_defaults: payload }),
         });
         if (!resp.ok) {
           const e = await resp.json().catch(() => ({}));

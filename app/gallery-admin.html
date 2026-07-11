@@ -456,12 +456,29 @@
 
         <div class="flex gap-3 flex-wrap items-end">
           <label class="text-xs font-medium text-[var(--muted)]">
-            Width %
-            <input class="input w-20 mt-1" type="number" min="1" max="100" x-model.number="placardDraft.width" />
+            Unit
+            <select class="input mt-1" x-model="placardDraft.unit" @change="onPlacardUnitChange()">
+              <option value="in">inches</option>
+              <option value="cm">centimeters</option>
+            </select>
           </label>
           <label class="text-xs font-medium text-[var(--muted)]">
-            Height %
-            <input class="input w-20 mt-1" type="number" min="1" max="100" x-model.number="placardDraft.height" />
+            Board width
+            <input class="input w-24 mt-1" type="number" min="0.1" step="0.1"
+                   :value="placardDraft.boardWidthDisplay"
+                   @input="placardUnitInput('boardWidth', $event.target.value)" />
+          </label>
+          <label class="text-xs font-medium text-[var(--muted)]">
+            Placard width
+            <input class="input w-24 mt-1" type="number" min="0" step="0.1"
+                   :value="placardDraft.widthDisplay"
+                   @input="placardUnitInput('width', $event.target.value)" />
+          </label>
+          <label class="text-xs font-medium text-[var(--muted)]">
+            Placard height
+            <input class="input w-24 mt-1" type="number" min="0" step="0.1"
+                   :value="placardDraft.heightDisplay"
+                   @input="placardUnitInput('height', $event.target.value)" />
           </label>
           <label class="text-xs font-medium text-[var(--muted)]">
             Background
@@ -472,12 +489,20 @@
             <input class="input mt-1" type="color" x-model="placardDraft.borderColor" style="padding:2px; width:2.75rem;" />
           </label>
         </div>
+        <p class="text-xs text-[var(--muted)] -mt-2">
+          "Board width" is the physical width the whole display represents
+          (e.g. an actual 48in wide wall board) — it's just a reference so
+          placard width/height can be set in real-world units; the display
+          itself still renders responsively at any screen size.
+        </p>
 
-        <!-- Live preview — item chips are draggable to set position. -->
+        <!-- Live preview — item chips are draggable to set position. The
+             preview's own aspect ratio is the placard's real physical
+             width/height ratio, so it's accurate regardless of unit. -->
         <div>
           <p class="text-xs font-medium text-[var(--muted)] mb-1">Preview — drag items to position them</p>
           <div class="placard-preview" x-ref="placardCanvas"
-               :style="'aspect-ratio: ' + (placardDraft.width * 16) + ' / ' + (placardDraft.height * 9) + '; background: ' + placardDraft.background + '; border: 1px solid ' + placardDraft.borderColor + ';'">
+               :style="'aspect-ratio: ' + placardDraft.widthIn + ' / ' + placardDraft.heightIn + '; background: ' + placardDraft.background + '; border: 1px solid ' + placardDraft.borderColor + ';'">
             <template x-for="item in placardDraft.items" :key="item.id">
               <div class="placard-preview-item"
                    :style="'left:' + item.x + '%; top:' + item.y + '%; font-family:' + item.fontFamily + '; font-size:' + item.fontSize + 'px; font-weight:' + item.fontWeight + '; font-style:' + item.fontStyle + '; color:' + item.color + ';'"

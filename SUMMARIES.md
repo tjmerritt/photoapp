@@ -669,3 +669,34 @@ Verified via the JSDOM harness (6 new scripts, 62 checks total, 0 failures):
 
 ### Open items
 - Same as Session 16.
+
+## Session 19 — Placard Sizing in Inches/Centimeters
+
+### What was done
+**Request**: "The sizing of the placard isn't particularly intuitive. Would like to specify it in inches or cm."
+
+Since the display canvas is rendered responsively (no fixed physical size on its own), specifying a real-world unit needs a physical reference. Clarified with the user: add a **"board width"** setting per gallery — the physical width the whole 16:9 canvas is meant to represent (e.g. "this gallery's display is a 48in wide board") — with placard width/height then entered in inches or cm relative to that. Default unit: inches.
+
+**Data model** (`gallery.placard_defaults` — no backend schema change, still the same `json.RawMessage` column):
+- `width`/`height` remain stored and rendered as percent-of-canvas — unchanged, this is still what actually drives the CSS. Nothing about rendering changed.
+- Added `boardWidthIn` (physical width, in inches, that the 16:9 canvas represents — canonical unit is always inches) and `unit` (`'in'` | `'cm'`, remembers which unit the editor was last shown in). Both are purely editor-conversion metadata; they have no effect outside Gallery Admin's Placard Settings.
+- Canvas height in inches is always `boardWidthIn * 9/16`. Defaults: 48in board, 4in × 1.5in placard (previously an oddly-large ~9.6in × 2.16in implied by the old flat 20%/8% default).
+
+**Frontend** (`app/app.js`):
+- `normalizeGalleryPlacard()` now also normalizes/defaults `boardWidthIn`/`unit`.
+- Added `inToCm()`/`cmToIn()`/`round2()` conversion helpers.
+- `galleryAdminApp.openPlacardSettings()` now builds `placardDraft` around **physical** values (`boardWidthIn`, `widthIn`, `heightIn`, all canonically inches) converted from the stored percent, plus `*Display` string fields (`boardWidthDisplay`/`widthDisplay`/`heightDisplay`) rendered in whichever unit is selected — added `refreshPlacardDisplayFields()` (recomputes the Display strings from canonical inches), `onPlacardUnitChange()` (called when the unit toggle changes), and `placardUnitInput(field, rawValue)` (converts a typed Display value back to the canonical inches value; keeps the raw typed text in the Display field itself so it doesn't get reformatted mid-keystroke, e.g. while typing "4.5").
+- `savePlacardSettings()` converts the draft's physical inches back to percent (`width = widthIn/boardWidthIn*100`, `height = heightIn/(boardWidthIn*9/16)*100`) before PATCHing, and persists `boardWidthIn`/`unit` alongside so reopening later shows the same physical size in the same unit rather than a re-derived, potentially-rounded value.
+
+**Frontend markup** (`app/gallery-admin.html`):
+- Placard Settings modal's width%/height% number inputs replaced with: a Unit selector (inches/centimeters), a "Board width" field (with explanatory text: it's a physical reference only, the display itself still renders responsively), and "Placard width"/"Placard height" fields in the selected unit. These use `:value` + `@input` (not `x-model`) so the conversion logic fully controls what's stored, avoiding any double-fire ordering issues with a plain two-way binding.
+- The live preview's `aspect-ratio` CSS now uses the placard's physical `widthIn`/`heightIn` directly (their ratio is identical to the percent ratio, so this needs no board-width math at all) — simpler than before and always accurate regardless of which unit is currently displayed.
+- Item drag-to-position, add/remove, and per-item typography controls are unchanged (item x/y stay percent-within-the-box, since dragging is already an intuitive/visual control, not a typed number).
+
+### Testing notes
+- Extended the pure-function suite (`run30.js`, now 29 checks): `inToCm`/`cmToIn` round-trip correctly; `normalizeGalleryPlacard(null)` defaults `boardWidthIn` to 48 and `unit` to `'in'`, with the default percent correctly corresponding to a 4in × 1.5in placard on a 48in board; explicit `boardWidthIn`/`unit` are preserved; an invalid unit string falls back to `'in'`.
+- Rewrote the Gallery Admin modal test (`run33.js`, now 28 checks) to verify the full physical-unit flow: opening the modal converts stored 18%/7% to ~8.64in/~1.89in on the default 48in board; typing "5" sets `widthIn` to exactly 5; switching the unit to cm re-renders the display field as ~12.7cm *without* changing the canonical inches value; typing "10" while in cm mode converts back to ~3.94in; the board-width field updates `boardWidthIn`; the preview's `aspect-ratio` matches `widthIn`/`heightIn` exactly; saving converts back to ~18%/~7% and persists `boardWidthIn`/`unit`. The existing item add/remove/drag-to-position checks from Session 18 still pass unchanged.
+- Re-ran the full placard suite (`run30`–`run36`, 83 checks total) — no regressions from Sessions 16–18's rendering, override, or drag behavior.
+
+### Open items
+- Same as Session 16, plus: item font sizes are still in px (not inches/points) — not reported as an issue, but flagged for consistency awareness if raised later.
