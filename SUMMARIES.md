@@ -586,3 +586,54 @@ When nothing is percentage-based (`coef = 0` everywhere), this reduces to exactl
 - Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
 - Phase 6: admin pages
 - Phase 7: photo uploads
+
+## Session 16 — Gallery-Level Placard System (Content, Positioning, Per-Slot Overrides)
+
+### What was done
+
+**Request**: track a placard *position* per slot (in addition to the photo's own slot position); configure placard *size*, *background*, and *content* once at the gallery level for consistency across every display in it; support placard items like "Photographer: {Photographer}" that substitute a photo's labels, with a per-item control to hide the item when the referenced label is missing; build a real UI for setting this up (not raw JSON); and let the display editor override an item's rendered text for one slot without touching the photo's labels.
+
+Clarified three design decisions with the user up front: (1) the new gallery-level placard system **replaces** the old template-level `presentation.placard` (position/fields) system entirely, rather than keeping both; (2) per-slot overrides in the display editor replace an item's *text value* only (not full custom items per slot); (3) item positioning within the placard uses a **visual drag-to-position** canvas rather than plain x/y number fields.
+
+**Data model**:
+- Gallery-level `gallery.placard_defaults` (existing but previously-unused `placard_defaults` table/API, now wired up) — `{ width, height }` (percent of the 16:9 canvas, same coordinate space as `slot_positions`), `background`, `borderColor`, and `items[]`. Each item: `{ id, text, x, y, fontFamily, fontSize, fontWeight, fontStyle, color, hideIfMissing }` — `x`/`y` are percent position *within* the placard box; `text` may contain `{LabelName}` tokens.
+- Template `slot_positions[i]` gained a `placard: { x, y }` — the placard box's own independent position on the 16:9 canvas (its *size* comes from the gallery, not the template). `defaultSlotPositions()`/`normalizeSlotPositions()` generate/preserve this alongside the existing `x/y/w/h`.
+- Per-slot override — the existing but previously-inert `display_slots.placard` column now stores `{ overrides: { <itemId>: "replacement text" } }`. An override replaces an item's fully-resolved text verbatim (bypassing substitution and `hideIfMissing`); a blank override field means "use the auto-resolved value."
+
+**Backend** (`internal/models/models.go`, `internal/handlers/displays.go`):
+- `SlotPhoto` gained `Labels []Label` so the frontend can resolve `{LabelName}` substitutions without a per-photo fetch.
+- `GET /api/v1/displays/:id` now also queries `labels` (joined to `users` for username, matching the existing pattern in `fetch.go`) for every photo across the display's slots in one batched query (`WHERE photoid = ANY($1::uuid[])`), grouped in Go and attached to each slot's `Photo.Labels`.
+- No other backend changes needed — `placard_defaults` (gallery) and `display_slots.placard` (per-slot) read/write were already fully wired, just never used by any frontend page until now.
+
+**Frontend** (`app/app.js`):
+- Removed the old template-level placard system entirely: `normalizePlacardConfig`, `placardFieldSourceValue`, `placardFieldsFor`, `slotCardDirectionStyle`, and the old zero-arg `placardBoxStyle`.
+- Added: `normalizeGalleryPlacard(raw)` (defaults + item normalization), `resolvePlacardItemText(template, labels)` (token substitution + missing-token detection), `placardBoxStyle(gallery, slotPos)` (position from the template, size/background from the gallery), `placardItemStyle(item)`, and `placardItemsFor(gallery, slot)` (merges gallery items + label substitution + per-slot override + `hideIfMissing`, in that precedence order). `typographyStyle()` is reused unchanged.
+- `displayApp`/`displayEditApp`: replaced the old placard methods with `placardBoxStyle(i)`/`placardItemsFor(slot)` delegating to the new helpers using `this.gallery` (already fetched for prev/next nav) and `this.slotPositions[i]`.
+- `displayEditApp` gained a caption-override editor: `captionModalOpen`/`captionDraft`/`openCaptionEditor()`/`resolvedCaptionPlaceholder()`/`saveCaptionOverrides()` — PATCHes `display_slots.placard.overrides`, resending `photoid`/`rich_text` as-is per the existing "don't wipe unrelated fields" pattern.
+- `galleryAdminApp` gained the Placard Settings editor: `expandedGalleryPlacard` (loaded alongside displays when a gallery row expands), `placardModalOpen`/`placardDraft` (a deep-cloned, safely-editable copy), `addPlacardItem()`/`removePlacardItem()`, `startItemDrag(item, event)` (a vanilla mousedown/touchstart → window-level mousemove/touchmove → mouseup/touchend drag handler that converts pointer position to a clamped 0–100 percent position on the preview canvas), and `savePlacardSettings()` (PATCHes `placard_defaults`).
+- `templateAdminApp.defaultPresentation()` no longer includes the old `placard` key (moved to the gallery level).
+
+**Frontend markup**:
+- `display.html`/`display-edit.html`: placards are now rendered as a **separate absolutely-positioned loop** in `.display-grid` (sibling to `.slot-card`, not nested inside it) since a placard's position/size is independent of its slot's own bounds. `.slot-card` simplified back to a plain flex wrapper around `.photo-area` (no more `flex-direction` juggling for placard stacking). New `.placard-box`/`.placard-item`/`.placard-empty` CSS.
+- `display-edit.html`: added an "Edit captions" button (`.slot-caption-btn`, left corner, alongside the existing "Add/Change photo" button in the right corner) opening a caption-override modal listing the gallery's configured items with text inputs, each pre-filled as empty with the auto-resolved value shown as the placeholder.
+- `gallery-admin.html`: added a "Placard Settings" button in each expanded gallery's panel, opening a modal with width/height/background/border fields, a live drag-to-position preview canvas (aspect-ratio computed from width%×16 / height%×9 to match the real render), and a per-item editor (text, font family/size/weight/style, color, hide-if-missing checkbox, remove button).
+- `template-admin.html`: the JSON docs paragraph now documents `slot_positions[i].placard` and clarifies that size/content live at the gallery level; the live preview pane gets a dashed `.preview-placard` marker per slot (fixed reference size, since actual size is gallery-controlled) — hidden in the small row-header preview via CSS to avoid clutter.
+
+### Testing notes
+Verified via the JSDOM harness (6 new scripts, 62 checks total, 0 failures):
+- Pure-function tests for `defaultSlotPositions`/`normalizeSlotPositions` (placard field present, explicit values preserved, missing values fall back, y is clamped ≤96 so it doesn't get pushed off-canvas), `normalizeGalleryPlacard`, `resolvePlacardItemText` (substitution, missing-token detection, multiple tokens), and `placardItemsFor` (label resolution, `hideIfMissing` skip behavior, override precedence over both substitution and `hideIfMissing`).
+- `display.html` end-to-end render: two independently-positioned placard boxes (confirmed *not* nested inside `.slot-card`), correct item text/visibility per slot, an override slot showing the override text verbatim while still hiding its other missing-label item, and the box's own position/size styles.
+- `display-edit.html`: "Edit captions" button present, modal opens with the gallery's items, placeholder shows the auto-resolved value (or a "missing" hint), saving PATCHes `overrides` keyed by item id while resending `photoid` so it isn't wiped, and the modal closes on success.
+- `gallery-admin.html`: Placard Settings button and modal, draft is a true deep clone (editing it doesn't mutate the live gallery state until Save), add/remove item, a simulated `startItemDrag` → `mousemove` → position update (stubbing `getBoundingClientRect` since JSDOM doesn't lay out real geometry), and a successful save PATCHing `placard_defaults` and refreshing the cached gallery placard.
+- `template-admin.html`: `defaultPresentation()` no longer has a `placard` key, a newly-created template's `slot_positions` include a `placard` per slot, and the preview renders one `.preview-placard` marker per slot.
+- Regression check: matte/frame/align/clickable-photo-link on `display.html` and the guides overlay/photo-picker button on `display-edit.html` all still work after removing the old placard system — nothing else was affected by pulling placard rendering out of `.slot-card`.
+- No Go toolchain available in this environment; the backend changes (`models.go`, `displays.go`) were verified by careful manual review only — not compiled or run against Postgres.
+
+### Open items
+- Placard item font family is a free-text field rather than a curated font picker — acceptable for now but could use a dropdown of the site's actual loaded fonts later.
+- No drag support for repositioning a slot's placard *box* itself (only its position value in the template's raw `slot_positions` JSON) — the drag-to-position UI only covers *items within* the placard box in Gallery Admin, per the user's explicit scoping of the "visual UI" request to placard content/appearance.
+- Backend changes untested against a live Postgres instance (no DB access in this environment) — needs `make build` + restart, and a smoke test of `GET /api/v1/displays/:id` label attachment, before relying on it in production.
+- Phase 4: Microsoft sign-in
+- Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
+- Phase 6: admin pages
+- Phase 7: photo uploads

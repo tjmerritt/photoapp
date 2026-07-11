@@ -142,6 +142,26 @@
       max-width: 96px;
     }
     .template-preview.mini .preview-slot { font-size: 0; }
+
+    /* Rough marker for each slot's placard position (slot_positions[i].
+       placard). Its real size is set at the gallery level (Gallery Admin's
+       Placard Settings), so this preview uses a fixed guess just to show
+       roughly where it'll sit relative to the slot. */
+    .preview-placard {
+      position: absolute;
+      width: 16%;
+      height: 6%;
+      border: 1px dashed var(--accent);
+      background: rgba(233,69,96,.08);
+      border-radius: 3px;
+      font-size: 0.55rem;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+    }
+    .template-preview.mini .preview-placard { display: none; }
   </style>
 </head>
 
@@ -286,14 +306,20 @@
                 </button>
 
                 <label class="text-xs font-medium text-[var(--muted)]">
-                  Slot positions (JSON — x/y/w/h in percent)
-                  <textarea class="input w-full mt-1" rows="8" x-model="editSlotPositions" spellcheck="false"></textarea>
+                  Slot positions (JSON — x/y/w/h in percent, plus each slot's placard position)
+                  <textarea class="input w-full mt-1" rows="10" x-model="editSlotPositions" spellcheck="false"></textarea>
                 </label>
                 <label class="text-xs font-medium text-[var(--muted)]">
-                  Presentation (JSON) — matte, frame, alignment, and placard for each photo
-                  <textarea class="input w-full mt-1" rows="14" x-model="editPresentation" spellcheck="false"></textarea>
+                  Presentation (JSON) — matte, frame, and alignment for each photo
+                  <textarea class="input w-full mt-1" rows="10" x-model="editPresentation" spellcheck="false"></textarea>
                 </label>
                 <p class="text-xs text-[var(--muted)] -mt-2">
+                  Each slot entry also takes a <code>placard: { x, y }</code> — percent
+                  position (same coordinate space as the slot's own x/y/w/h) of that
+                  slot's placard box. Placard <em>size</em>, background, and content
+                  (items, text, fonts) are configured once for the whole gallery in
+                  Gallery Admin's Placard Settings, so every display in a gallery looks
+                  consistent — only the position is set here, per slot.<br>
                   <code>matte</code>/<code>frame</code> each take <code>enabled</code>, <code>color</code>,
                   and <code>width</code> — a number in px, or a string like <code>"5%"</code> for a
                   percentage of the photo's own rendered width (so the matte/frame scales with
@@ -305,15 +331,7 @@
                   so a slot shaped differently than the photo will have empty space on two sides;
                   that space is always the page background, never a fill.<br>
                   <code>align</code> controls where that space goes:
-                  <code>{ horizontal: "left"|"center"|"right", vertical: "top"|"center"|"bottom" }</code>.<br>
-                  <code>placard.position</code> is <code>top</code>/<code>bottom</code>/<code>left</code>/<code>right</code>
-                  relative to the photo. <code>placard.fields</code> is a list of
-                  <code>{ source, typography }</code> — <code>source</code> is
-                  <code>"title"</code> (the photo's title) or <code>"rich_text"</code> (the slot's
-                  caption); <code>typography</code> accepts <code>fontFamily</code>, <code>fontSize</code>
-                  (px), <code>fontWeight</code>, <code>fontStyle</code>, <code>color</code>,
-                  <code>textAlign</code>, <code>textTransform</code>, <code>letterSpacing</code> (px),
-                  <code>lineHeight</code> — all optional. Fields with no value for a slot are skipped.
+                  <code>{ horizontal: "left"|"center"|"right", vertical: "top"|"center"|"bottom" }</code>.
                 </p>
 
                 <p x-show="editError" class="text-red-500 text-xs" x-text="editError"></p>
@@ -337,7 +355,22 @@
                       <span x-text="i + 1"></span>
                     </div>
                   </template>
+                  <!-- Rough marker for each slot's placard position — actual
+                       size comes from the gallery's Placard Settings, so this
+                       is just a fixed-size reference box. -->
+                  <template x-for="(slot, i) in previewSlots()" :key="'placard-' + i">
+                    <div x-show="slot.placard" class="preview-placard"
+                         :style="'left:' + (slot.placard && slot.placard.x) + '%; top:' + (slot.placard && slot.placard.y) + '%;'">
+                      <span x-text="'P' + (i + 1)"></span>
+                    </div>
+                  </template>
                 </div>
+                <p class="text-xs text-[var(--muted)] mt-1">
+                  Dashed boxes show each slot's placard <em>position</em>
+                  (<code>slot_positions[i].placard</code>). Placard size,
+                  background, and content are set once for the whole gallery
+                  in Gallery Admin's Placard Settings.
+                </p>
               </div>
 
             </div>

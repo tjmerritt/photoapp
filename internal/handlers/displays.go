@@ -139,6 +139,53 @@ func (h *DisplaysHandler) Get(w http.ResponseWriter, r *http.Request, ps httprou
 		return
 	}
 
+	// Attach labels to each slot's photo so the frontend can resolve
+	// gallery placard {LabelName} substitutions without a per-photo fetch.
+	photoIDs := make([]string, 0, len(d.Slots))
+	for i := range d.Slots {
+		if d.Slots[i].Photo != nil {
+			photoIDs = append(photoIDs, d.Slots[i].Photo.PhotoID)
+		}
+	}
+	if len(photoIDs) > 0 {
+		labelRows, err := h.DB.Query(ctx, `
+			SELECT l.photoid::text, l.labelid::text, l.name, l.value,
+			       l.added_by_userid::text, u.username
+			FROM   labels l
+			JOIN   users  u ON u.userid = l.added_by_userid
+			WHERE  l.photoid = ANY($1::uuid[]) AND l.deleted_at IS NULL
+			ORDER  BY l.created_at
+		`, photoIDs)
+		if err != nil {
+			slog.Error("Get display slot labels", "error", err)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		labelsByPhoto := map[string][]models.Label{}
+		for labelRows.Next() {
+			var photoID string
+			var lbl models.Label
+			if err := labelRows.Scan(&photoID, &lbl.LabelID, &lbl.Name, &lbl.Value, &lbl.UserID, &lbl.Username); err != nil {
+				labelRows.Close()
+				slog.Error("Get display slot labels scan", "error", err)
+				middleware.WriteError(w, http.StatusInternalServerError, "db error")
+				return
+			}
+			labelsByPhoto[photoID] = append(labelsByPhoto[photoID], lbl)
+		}
+		labelRows.Close()
+		if err := labelRows.Err(); err != nil {
+			slog.Error("Get display slot labels", "error", err)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		for i := range d.Slots {
+			if d.Slots[i].Photo != nil {
+				d.Slots[i].Photo.Labels = labelsByPhoto[d.Slots[i].Photo.PhotoID]
+			}
+		}
+	}
+
 	middleware.WriteJSON(w, http.StatusOK, d)
 }
 

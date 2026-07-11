@@ -108,6 +108,50 @@
       border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(233,69,96,.12);
     }
+
+    .backdrop { background: rgba(26,26,46,.55); backdrop-filter: blur(3px); }
+    .modal-card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 20px 50px rgba(0,0,0,.25);
+      width: 100%;
+      max-width: 26rem;
+      padding: 1.25rem;
+    }
+    .placard-modal {
+      max-width: 36rem;
+      max-height: 88vh;
+      overflow-y: auto;
+    }
+
+    /* Mini live preview of one gallery's placard box — item chips are
+       draggable (startItemDrag()) to set each item's x/y position (percent
+       of this box), the same coordinate space used to render real
+       placards. */
+    .placard-preview {
+      position: relative;
+      width: 100%;
+      max-width: 22rem;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .placard-preview-item {
+      position: absolute;
+      white-space: nowrap;
+      cursor: grab;
+      padding: 1px 3px;
+      border-radius: 2px;
+      user-select: none;
+    }
+    .placard-preview-item:hover { outline: 1px dashed var(--accent); }
+    .placard-preview-item:active { cursor: grabbing; }
+
+    .placard-item-row {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.625rem;
+      background: #fff;
+    }
   </style>
 </head>
 
@@ -369,6 +413,18 @@
                 </template>
               </select>
             </div>
+
+            <!-- Placard settings — gallery-wide size/appearance/content,
+                 applied consistently to every display's placard boxes. -->
+            <div class="px-5 py-3 border-t border-[var(--border)] flex items-center gap-2 flex-wrap">
+              <button class="btn-secondary text-xs py-1" @click="openPlacardSettings(g.galleryid)">
+                Placard Settings
+              </button>
+              <span class="text-xs text-[var(--muted)]"
+                    x-text="(expandedGalleryPlacard && expandedGalleryPlacard.items && expandedGalleryPlacard.items.length)
+                              ? (expandedGalleryPlacard.items.length + ' item' + (expandedGalleryPlacard.items.length === 1 ? '' : 's') + ' configured')
+                              : 'No placard items configured yet'"></span>
+            </div>
           </div>
 
         </div>
@@ -377,6 +433,112 @@
 
   </div>
 </main>
+
+<!-- ══ PLACARD SETTINGS MODAL ══════════════════════════════════════════════ -->
+<div x-show="placardModalOpen" x-cloak x-transition
+     class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
+     @click.self="closePlacardSettings()"
+     @keydown.escape.window="closePlacardSettings()">
+  <div class="modal-card placard-modal animate-scalein">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-serif text-lg">Placard Settings</h3>
+      <button class="text-[var(--muted)] hover:text-[var(--brand)] text-xl leading-none px-1" @click="closePlacardSettings()">&times;</button>
+    </div>
+
+    <template x-if="placardDraft">
+      <div class="flex flex-col gap-4">
+        <p class="text-xs text-[var(--muted)]">
+          Size and appearance apply to every display in this gallery, for
+          consistency. Drag an item in the preview to position it. Item text
+          can include <code>{LabelName}</code> to pull from a photo's labels
+          — e.g. <code>Photographer: {Photographer}</code>.
+        </p>
+
+        <div class="flex gap-3 flex-wrap items-end">
+          <label class="text-xs font-medium text-[var(--muted)]">
+            Width %
+            <input class="input w-20 mt-1" type="number" min="1" max="100" x-model.number="placardDraft.width" />
+          </label>
+          <label class="text-xs font-medium text-[var(--muted)]">
+            Height %
+            <input class="input w-20 mt-1" type="number" min="1" max="100" x-model.number="placardDraft.height" />
+          </label>
+          <label class="text-xs font-medium text-[var(--muted)]">
+            Background
+            <input class="input mt-1" type="color" x-model="placardDraft.background" style="padding:2px; width:2.75rem;" />
+          </label>
+          <label class="text-xs font-medium text-[var(--muted)]">
+            Border
+            <input class="input mt-1" type="color" x-model="placardDraft.borderColor" style="padding:2px; width:2.75rem;" />
+          </label>
+        </div>
+
+        <!-- Live preview — item chips are draggable to set position. -->
+        <div>
+          <p class="text-xs font-medium text-[var(--muted)] mb-1">Preview — drag items to position them</p>
+          <div class="placard-preview" x-ref="placardCanvas"
+               :style="'aspect-ratio: ' + (placardDraft.width * 16) + ' / ' + (placardDraft.height * 9) + '; background: ' + placardDraft.background + '; border: 1px solid ' + placardDraft.borderColor + ';'">
+            <template x-for="item in placardDraft.items" :key="item.id">
+              <div class="placard-preview-item"
+                   :style="'left:' + item.x + '%; top:' + item.y + '%; font-family:' + item.fontFamily + '; font-size:' + item.fontSize + 'px; font-weight:' + item.fontWeight + '; font-style:' + item.fontStyle + '; color:' + item.color + ';'"
+                   @mousedown="startItemDrag(item, $event)"
+                   @touchstart="startItemDrag(item, $event)">
+                <span x-text="item.text || '(empty item)'"></span>
+              </div>
+            </template>
+            <span x-show="placardDraft.items.length === 0" class="text-xs text-[var(--muted)] italic" style="position:absolute; left:6px; top:6px;">
+              No items yet — add one below.
+            </span>
+          </div>
+        </div>
+
+        <!-- Item list -->
+        <div class="flex flex-col gap-3">
+          <p class="text-xs font-medium text-[var(--muted)]">Items</p>
+          <template x-for="item in placardDraft.items" :key="item.id">
+            <div class="placard-item-row">
+              <input class="input w-full text-xs" type="text" x-model="item.text"
+                     placeholder="e.g. Photographer: {Photographer}" />
+              <div class="flex gap-2 mt-2 flex-wrap items-center">
+                <input class="input text-xs w-28" type="text" x-model="item.fontFamily" placeholder="Font family" />
+                <input class="input text-xs w-14" type="number" x-model.number="item.fontSize" placeholder="Size" />
+                <select class="input text-xs py-1" x-model="item.fontWeight">
+                  <option value="400">Normal</option>
+                  <option value="700">Bold</option>
+                </select>
+                <select class="input text-xs py-1" x-model="item.fontStyle">
+                  <option value="normal">Normal</option>
+                  <option value="italic">Italic</option>
+                </select>
+                <input type="color" x-model="item.color" style="width:1.75rem; height:1.75rem; padding:2px; border:1px solid var(--border); border-radius:5px;" />
+                <label class="text-xs flex items-center gap-1 text-[var(--muted)]">
+                  <input type="checkbox" x-model="item.hideIfMissing" />
+                  Hide if label missing
+                </label>
+                <button class="btn-icon danger ml-auto" title="Remove item" @click="removePlacardItem(item.id)">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </template>
+          <button class="btn-secondary text-xs self-start" @click="addPlacardItem()">+ Add item</button>
+        </div>
+
+        <p x-show="placardError" class="text-red-500 text-xs" x-text="placardError"></p>
+
+        <div class="flex gap-2">
+          <button class="btn-primary text-sm" @click="savePlacardSettings()" :disabled="placardSaving">
+            <span x-show="!placardSaving">Save</span>
+            <span x-show="placardSaving">Saving…</span>
+          </button>
+          <button class="btn-secondary text-sm" @click="closePlacardSettings()">Cancel</button>
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
 
 <!-- ══ TOAST ═══════════════════════════════════════════════════════════════ -->
 <div x-show="toast.visible" x-transition

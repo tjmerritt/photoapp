@@ -46,13 +46,12 @@
     /* Photo slot — positioned absolutely within .display-grid per the
        template's slot_positions (left/top/width/height set inline via
        slotBoxStyle(), in percent — same geometry the Template Admin preview
-       pane renders). flex-direction set inline via slotCardDirectionStyle()
-       per the template's presentation.placard.position (default: column,
-       placard below the photo). */
+       pane renders). Each slot's placard is a separate, independently
+       positioned box (see .placard-box below), not nested here — its size
+       is fixed at the gallery level so it doesn't need to fit inside the
+       photo's own slot bounds. */
     .slot-card {
       display: flex;
-      flex-direction: column;
-      gap: 0.5rem;
       box-sizing: border-box;
       background: var(--surface);
     }
@@ -113,27 +112,31 @@
       color: #c5bfad;
       font-size: 0.75rem;
     }
-    /* Base placard styling is a fallback for fields with no typography of
-       their own; presentation.placard.fields[].typography overrides per line.
-       No min-height: the placard is always non-empty (it falls back to a
-       "No caption" label), so it can size purely from its own content. A
-       fixed minimum here would eat a large share of short slots' height —
-       badly skewing the remaining photo-area's aspect ratio and shrinking
-       the contained photo far more than the slot's own size would suggest. */
-    .slot-placard {
-      background: var(--placard-bg);
-      border: 1px solid var(--placard-border);
+    /* Placard box — independently positioned within the same 16:9 canvas as
+       the slot cards (position from the template's slot_positions[i].
+       placard; size/background/border from the gallery's placard_defaults —
+       see placardBoxStyle()). Each item inside is itself absolutely
+       positioned (placardItemStyle()) so items can be arranged freely
+       within the box, e.g. via the drag-to-position editor in Gallery
+       Admin's Placard Settings. */
+    .placard-box {
+      box-sizing: border-box;
       border-radius: 4px;
-      padding: 0.5rem 0.625rem;
-      flex: 0 0 auto;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      gap: 0.2rem;
-      font-family: 'DM Serif Display', serif;
-      font-size: 0.8rem;
-      line-height: 1.4;
-      color: #3d3424;
+      overflow: hidden;
+      font-family: 'DM Sans', sans-serif;
+    }
+    .placard-item {
+      white-space: nowrap;
+    }
+    .placard-empty {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      opacity: 0.4;
+      font-size: 0.7rem;
+      font-style: italic;
+      white-space: nowrap;
     }
 
     /* Display grid — a fixed-aspect canvas that each slot is positioned
@@ -271,7 +274,7 @@
       <div x-show="display && display.slots && display.slots.length > 0"
            class="display-grid" x-ref="grid">
         <template x-for="(slot, i) in (display && display.slots || [])" :key="slot.slotid">
-          <div class="slot-card" :style="slotBoxStyle(i) + slotCardDirectionStyle()">
+          <div class="slot-card" :style="slotBoxStyle(i)">
             <!-- Photo area — the framed photo keeps its own aspect ratio and
                  is aligned within any leftover space per presentation.align;
                  that leftover space is always just background, never a frame
@@ -300,13 +303,20 @@
                 </template>
               </div>
             </div>
-            <!-- Placard — fields + typography come from presentation.placard -->
-            <div class="slot-placard" :style="placardBoxStyle()">
-              <template x-for="(f, i) in placardFieldsFor(slot)" :key="i">
-                <div :style="f.style" x-text="f.text"></div>
-              </template>
-              <span x-show="placardFieldsFor(slot).length === 0" class="opacity-40 text-xs italic">No caption</span>
-            </div>
+          </div>
+        </template>
+
+        <!-- Placards — independently positioned within the same 16:9 canvas
+             (position from the template, size/appearance/content from the
+             gallery's Placard Settings). Rendered as a separate loop rather
+             than nested in .slot-card since a placard isn't confined to its
+             slot's own bounds. -->
+        <template x-for="(slot, i) in (display && display.slots || [])" :key="'placard-' + slot.slotid">
+          <div class="placard-box" :style="placardBoxStyle(i)">
+            <template x-for="item in placardItemsFor(slot)" :key="item.id">
+              <div class="placard-item" :style="item.style" x-text="item.text"></div>
+            </template>
+            <span x-show="placardItemsFor(slot).length === 0" class="placard-empty">No caption</span>
           </div>
         </template>
       </div>

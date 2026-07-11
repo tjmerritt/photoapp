@@ -1473,6 +1473,13 @@ function galleriesApp() {
 // layout for new templates and as a fallback if a template's slot_positions
 // is missing or doesn't match the display's slot count).
 // ─────────────────────────────────────────────────────────────────────────────
+// Each slot's position also carries a `placard: { x, y }` — the top-left
+// corner (percent, same 16:9 canvas coordinate space as x/y/w/h) where that
+// slot's placard is anchored. It's a separate, independently-positioned box
+// (not nested inside the slot's own x/y/w/h) since a placard's *size* is
+// fixed at the gallery level (see normalizeGalleryPlacard()) and doesn't
+// need to fit inside the photo's own slot bounds. The default below anchors
+// it just beneath the slot as a reasonable starting point.
 function defaultSlotPositions(n) {
   n = Math.max(1, n | 0);
   var cols  = n <= 1 ? 1 : n <= 2 ? 2 : n <= 3 ? 3 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
@@ -1483,11 +1490,11 @@ function defaultSlotPositions(n) {
   var positions = [];
   for (var i = 0; i < n; i++) {
     var col = i % cols, row = Math.floor(i / cols);
+    var x = +(col * (cellW + gap)).toFixed(2);
+    var y = +(row * (cellH + gap)).toFixed(2);
     positions.push({
-      x: +(col * (cellW + gap)).toFixed(2),
-      y: +(row * (cellH + gap)).toFixed(2),
-      w: +cellW.toFixed(2),
-      h: +cellH.toFixed(2),
+      x: x, y: y, w: +cellW.toFixed(2), h: +cellH.toFixed(2),
+      placard: { x: x, y: Math.min(96, +(y + cellH + 1).toFixed(2)) },
     });
   }
   return positions;
@@ -1501,12 +1508,19 @@ function normalizeSlotPositions(raw, count) {
   var arr = Array.isArray(raw) ? raw : [];
   if (count <= 0) return [];
   if (arr.length !== count) return defaultSlotPositions(count);
-  return arr.map(function (p) {
+  var defaults = defaultSlotPositions(count);
+  return arr.map(function (p, i) {
+    var d       = defaults[i];
+    var placard = p && p.placard;
     return {
       x: Number(p && p.x) || 0,
       y: Number(p && p.y) || 0,
       w: Number(p && p.w) || 0,
       h: Number(p && p.h) || 0,
+      placard: {
+        x: (placard && typeof placard.x === 'number') ? placard.x : d.placard.x,
+        y: (placard && typeof placard.y === 'number') ? placard.y : d.placard.y,
+      },
     };
   });
 }
@@ -1713,35 +1727,54 @@ function photoFrameSizeStyle(size, slot) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Placard configuration — also part of a template's `presentation` JSON:
+// Placard configuration — GALLERY-level (set once in Gallery Admin's Placard
+// Settings, applies to every slot in that gallery for visual consistency).
+// Stored as gallery.placard_defaults JSON:
 //   {
-//     "placard": {
-//       "position": "bottom",   // "bottom" | "top" | "left" | "right"
-//       "fields": [
-//         { "source": "title",     "typography": { "fontFamily": "'DM Serif Display', serif", "fontSize": 14, "fontWeight": 700, "color": "#3d3424" } },
-//         { "source": "rich_text", "typography": { "fontFamily": "'DM Sans', sans-serif", "fontSize": 12, "fontStyle": "italic", "color": "#6b7280" } }
-//       ]
-//     }
+//     "width": 20, "height": 8,             // percent of the 16:9 canvas
+//     "background": "#faf7f0", "borderColor": "#d6ccb0",
+//     "items": [
+//       { "id": "photographer", "text": "Photographer: {Photographer}",
+//         "x": 4, "y": 8,                    // percent within the placard box
+//         "fontFamily": "'DM Serif Display', serif", "fontSize": 12,
+//         "fontWeight": 400, "fontStyle": "normal", "color": "#3d3424",
+//         "hideIfMissing": true }
+//     ]
 //   }
-// "source" picks what data fills that line: "rich_text" is the slot's own
-// caption; "title" is the assigned photo's title. Fields with no value for
-// a given slot are skipped. No placard.fields configured = fall back to a
-// single rich_text field styled like the original static placard, so
-// existing templates render unchanged.
-// typography keys (all optional): fontFamily, fontSize (px), fontWeight,
-// fontStyle, color, textAlign, textTransform, letterSpacing (px), lineHeight.
+// An item's `text` may reference photo labels via `{LabelName}` — resolved
+// against the assigned photo's Labels (see resolvePlacardItemText()). If any
+// referenced label is missing and hideIfMissing is true, the whole item is
+// skipped for that slot; otherwise the token resolves to an empty string.
+// Each slot's *position* on the canvas (independent of its photo's slot box)
+// comes from the template's slot_positions[i].placard — see
+// defaultSlotPositions() above. A slot's rendered items can be overridden
+// per-item via display_slots.placard.overrides (see placardItemsFor()),
+// e.g. to correct one photo's caption without touching its labels.
+// This replaces the older template-level presentation.placard
+// (position/fields) system entirely.
 // ─────────────────────────────────────────────────────────────────────────────
-function normalizePlacardConfig(presentation) {
-  var p        = presentation || {};
-  var placard  = p.placard || {};
-  var position = ['top', 'bottom', 'left', 'right'].indexOf(placard.position) !== -1 ? placard.position : 'bottom';
-  var fields   = Array.isArray(placard.fields) && placard.fields.length > 0
-    ? placard.fields
-    : [{ source: 'rich_text', typography: {
-        fontFamily: "'DM Serif Display', serif", fontSize: 12.8, fontWeight: 400,
-        fontStyle: 'normal', color: '#3d3424',
-      } }];
-  return { position: position, fields: fields };
+function normalizeGalleryPlacard(raw) {
+  var p = raw || {};
+  return {
+    width:       typeof p.width  === 'number' ? p.width  : 20,
+    height:      typeof p.height === 'number' ? p.height : 8,
+    background:  p.background  || '#faf7f0',
+    borderColor: p.borderColor || '#d6ccb0',
+    items: Array.isArray(p.items) ? p.items.map(function (it, idx) {
+      return {
+        id:            it.id || ('item-' + idx),
+        text:          it.text || '',
+        x:             typeof it.x === 'number' ? it.x : 4,
+        y:             typeof it.y === 'number' ? it.y : (8 + idx * 22),
+        fontFamily:    it.fontFamily || "'DM Sans', sans-serif",
+        fontSize:      typeof it.fontSize === 'number' ? it.fontSize : 12,
+        fontWeight:    it.fontWeight || 400,
+        fontStyle:     it.fontStyle  || 'normal',
+        color:         it.color      || '#3d3424',
+        hideIfMissing: it.hideIfMissing !== false,
+      };
+    }) : [],
+  };
 }
 
 function typographyStyle(typo) {
@@ -1759,34 +1792,56 @@ function typographyStyle(typo) {
   return css;
 }
 
-function placardFieldSourceValue(source, slot) {
-  if (source === 'rich_text') return (slot && slot.rich_text) || '';
-  if (source === 'title')     return (slot && slot.photo && slot.photo.title) || '';
-  return '';
+// Substitutes {LabelName} tokens in a placard item's text template against
+// a photo's labels ([{ name, value }, ...]). Returns { text, missing } —
+// missing is true if any referenced token had no matching label, so callers
+// can honor hideIfMissing.
+function resolvePlacardItemText(template, labels) {
+  var missing = false;
+  var text = String(template || '').replace(/\{([^{}]+)\}/g, function (m, name) {
+    var lbl = (labels || []).filter(function (l) { return l && l.name === name; })[0];
+    if (!lbl) { missing = true; return ''; }
+    return lbl.value;
+  });
+  return { text: text, missing: missing };
 }
 
-// Resolved { text, style } list for one slot, skipping fields with no value.
-function placardFieldsFor(slot, presentation) {
-  var cfg = normalizePlacardConfig(presentation);
+// The placard box's own position + appearance for one slot — position comes
+// from the template (slotPos.placard), size/background from the gallery.
+function placardBoxStyle(gallery, slotPos) {
+  var g   = normalizeGalleryPlacard(gallery && gallery.placard_defaults);
+  var pos = (slotPos && slotPos.placard) || { x: 0, y: 0 };
+  return 'position: absolute; left: ' + pos.x + '%; top: ' + pos.y + '%; width: ' + g.width + '%; height: ' + g.height + '%; background: ' + g.background + '; border: 1px solid ' + g.borderColor + ';';
+}
+
+function placardItemStyle(item) {
+  return 'position: absolute; left: ' + item.x + '%; top: ' + item.y + '%;' + typographyStyle(item);
+}
+
+// Resolved { id, text, style } list for one slot: gallery items with label
+// substitution applied, a per-slot text override (display_slots.placard.
+// overrides, keyed by item id) taking precedence when set, and items hidden
+// per hideIfMissing when their substitution can't be resolved and there's no
+// override.
+function placardItemsFor(gallery, slot) {
+  var g         = normalizeGalleryPlacard(gallery && gallery.placard_defaults);
+  var overrides = (slot && slot.placard && slot.placard.overrides) || {};
+  var labels    = (slot && slot.photo && slot.photo.labels) || [];
   var out = [];
-  cfg.fields.forEach(function(f) {
-    var text = placardFieldSourceValue(f.source, slot);
-    if (text) out.push({ text: text, style: typographyStyle(f.typography) });
+  g.items.forEach(function (item) {
+    var ov = overrides[item.id];
+    var text;
+    if (typeof ov === 'string' && ov !== '') {
+      text = ov;
+    } else {
+      var r = resolvePlacardItemText(item.text, labels);
+      if (r.missing && item.hideIfMissing) return;
+      text = r.text;
+    }
+    if (!text) return;
+    out.push({ id: item.id, text: text, style: placardItemStyle(item) });
   });
   return out;
-}
-
-function slotCardDirectionStyle(presentation) {
-  var cfg    = normalizePlacardConfig(presentation);
-  var dirMap = { bottom: 'column', top: 'column-reverse', right: 'row', left: 'row-reverse' };
-  return 'flex-direction: ' + dirMap[cfg.position] + ';';
-}
-
-// Side-by-side placard positions need a fixed width instead of stretching
-// to match the photo's height.
-function placardBoxStyle(presentation) {
-  var cfg = normalizePlacardConfig(presentation);
-  return (cfg.position === 'left' || cfg.position === 'right') ? 'width: 200px; flex-shrink: 0;' : '';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1835,12 +1890,13 @@ function displayApp() {
       const size = this.frameSizes[i];
       return matteInnerStyle(presentation, size && size.contentW);
     },
-    slotCardDirectionStyle() { return slotCardDirectionStyle(this.display && this.display.template && this.display.template.presentation); },
-    placardBoxStyle() { return placardBoxStyle(this.display && this.display.template && this.display.template.presentation); },
-    placardFieldsFor(slot) { return placardFieldsFor(slot, this.display && this.display.template && this.display.template.presentation); },
     slotBoxStyle(i) { return slotBoxStyle(this.slotPositions, i); },
     photoAreaStyle() { return photoAreaStyle(this.display && this.display.template && this.display.template.presentation); },
     photoFrameSizeStyle(i, slot) { return photoFrameSizeStyle(this.frameSizes[i], slot); },
+    // Gallery-level placard box (position from the template, size/appearance
+    // + item content from the gallery) — see the placard helper block above.
+    placardBoxStyle(i) { return placardBoxStyle(this.gallery, this.slotPositions[i]); },
+    placardItemsFor(slot) { return placardItemsFor(this.gallery, slot); },
 
     // Measures each slot's rendered .photo-area and computes its exact
     // frame box size (see computeFrameBoxSize()). Re-run whenever the grid
@@ -1979,12 +2035,13 @@ function displayEditApp() {
       const size = this.frameSizes[i];
       return matteInnerStyle(presentation, size && size.contentW);
     },
-    slotCardDirectionStyle() { return slotCardDirectionStyle(this.display && this.display.template && this.display.template.presentation); },
-    placardBoxStyle() { return placardBoxStyle(this.display && this.display.template && this.display.template.presentation); },
-    placardFieldsFor(slot) { return placardFieldsFor(slot, this.display && this.display.template && this.display.template.presentation); },
     slotBoxStyle(i) { return slotBoxStyle(this.slotPositions, i); },
     photoAreaStyle() { return photoAreaStyle(this.display && this.display.template && this.display.template.presentation); },
     photoFrameSizeStyle(i, slot) { return photoFrameSizeStyle(this.frameSizes[i], slot); },
+    // Gallery-level placard box (position from the template, size/appearance
+    // + item content from the gallery) — see the placard helper block above.
+    placardBoxStyle(i) { return placardBoxStyle(this.gallery, this.slotPositions[i]); },
+    placardItemsFor(slot) { return placardItemsFor(this.gallery, slot); },
     avatarSrc(user)  { return avatarSrc(user);  },
 
     // Label text for a slot's guide overlay — the raw x/y/w/h (percent) from
@@ -2191,6 +2248,85 @@ function displayEditApp() {
       }
       this.pickerSaving = false;
     },
+
+    // ── Placard caption overrides ────────────────────────────────────────────
+    // Per-slot text overrides for the gallery's placard items (e.g. fixing
+    // one photo's caption without touching its labels). Stored in
+    // display_slots.placard.overrides, keyed by item id.
+    captionModalOpen:  false,
+    captionSlotIndex:  null,
+    captionDraft:      {},
+    captionSaving:     false,
+
+    // The gallery's configured placard items (id/text/typography), for both
+    // the editor labels and to know which override keys to save.
+    galleryPlacardItems() {
+      return normalizeGalleryPlacard(this.gallery && this.gallery.placard_defaults).items;
+    },
+
+    currentCaptionSlot() {
+      if (!this.display || !this.display.slots || this.captionSlotIndex === null) return null;
+      return this.display.slots.find(s => s.slot_index === this.captionSlotIndex) || null;
+    },
+
+    openCaptionEditor(slotIndex) {
+      this.captionSlotIndex = slotIndex;
+      const slot      = this.display.slots.find(s => s.slot_index === slotIndex);
+      const overrides = (slot && slot.placard && slot.placard.overrides) || {};
+      const draft = {};
+      this.galleryPlacardItems().forEach(item => { draft[item.id] = overrides[item.id] || ''; });
+      this.captionDraft   = draft;
+      this.captionModalOpen = true;
+    },
+
+    closeCaptionEditor() {
+      this.captionModalOpen = false;
+      this.captionSlotIndex = null;
+    },
+
+    // The auto-resolved value for one item on the currently-open slot, shown
+    // as the input's placeholder so it's clear what an override replaces.
+    resolvedCaptionPlaceholder(item) {
+      const slot   = this.currentCaptionSlot();
+      const labels = (slot && slot.photo && slot.photo.labels) || [];
+      const r = resolvePlacardItemText(item.text, labels);
+      return r.missing ? '(label missing — item hidden unless overridden)' : (r.text || '(empty)');
+    },
+
+    async saveCaptionOverrides() {
+      const slot = this.currentCaptionSlot();
+      if (!slot || this.captionSaving) return;
+      this.captionSaving = true;
+      const overrides = {};
+      Object.keys(this.captionDraft).forEach(id => {
+        const v = (this.captionDraft[id] || '').trim();
+        if (v) overrides[id] = v;
+      });
+      try {
+        const resp = await fetch('/api/v1/displays/' + encodeURIComponent(this.display.displayid), {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({
+            slots: [{
+              slot_index: slot.slot_index,
+              photoid:    slot.photo ? slot.photo.photoid : '',
+              rich_text:  slot.rich_text || '',
+              placard:    Object.keys(overrides).length ? { overrides: overrides } : null,
+            }],
+          }),
+        });
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.error || 'HTTP ' + resp.status);
+        }
+        this.display = await resp.json();
+        this.showToast('Captions updated.');
+        this.closeCaptionEditor();
+      } catch(e) {
+        this.showToast('Failed to update captions: ' + e.message);
+      }
+      this.captionSaving = false;
+    },
   };
 }
 
@@ -2225,6 +2361,9 @@ function galleryAdminApp() {
     expandedGalleryId: null,
     expandedDisplays:  [],
     loadingDisplays:   false,
+    // Placard defaults for the currently-expanded gallery (raw JSON from the
+    // API, normalized on demand by normalizeGalleryPlacard()).
+    expandedGalleryPlacard: null,
 
     // Display templates (for the "new display" and per-row template pickers)
     templates:            [],
@@ -2370,11 +2509,13 @@ function galleryAdminApp() {
       if (this.expandedGalleryId === galleryid) {
         this.expandedGalleryId = null;
         this.expandedDisplays  = [];
+        this.expandedGalleryPlacard = null;
         return;
       }
       this.expandedGalleryId    = galleryid;
       this.loadingDisplays      = true;
       this.expandedDisplays     = [];
+      this.expandedGalleryPlacard = null;
       this.newDisplayTemplateId = '';
       try {
         const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(galleryid));
@@ -2388,10 +2529,103 @@ function galleryAdminApp() {
           ...d,
           selectedTemplateId: d.template ? d.template.templateid : '',
         }));
+        this.expandedGalleryPlacard = g.placard_defaults || null;
       } catch(e) {
         this.showToast('Failed to load displays: ' + e.message);
       }
       this.loadingDisplays = false;
+    },
+
+    // ── Placard settings (gallery-level) ─────────────────────────────────────
+    // Placard size, background, and item content are configured once per
+    // gallery for visual consistency across every display in it. Editing
+    // happens on a deep-cloned draft so an in-progress edit doesn't affect
+    // the live preview elsewhere until Save.
+    placardModalOpen: false,
+    placardGalleryId: null,
+    placardDraft:     null,
+    placardSaving:    false,
+    placardError:     '',
+
+    openPlacardSettings(galleryid) {
+      this.placardGalleryId = galleryid;
+      const normalized = normalizeGalleryPlacard(this.expandedGalleryPlacard);
+      this.placardDraft = JSON.parse(JSON.stringify(normalized));
+      this.placardError = '';
+      this.placardModalOpen = true;
+    },
+
+    closePlacardSettings() {
+      this.placardModalOpen = false;
+      this.placardDraft     = null;
+    },
+
+    addPlacardItem() {
+      const n = this.placardDraft.items.length;
+      this.placardDraft.items.push({
+        id: 'item-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36),
+        text: '', x: 4, y: 8 + n * 22,
+        fontFamily: "'DM Sans', sans-serif", fontSize: 12, fontWeight: 400,
+        fontStyle: 'normal', color: '#3d3424', hideIfMissing: true,
+      });
+    },
+
+    removePlacardItem(id) {
+      this.placardDraft.items = this.placardDraft.items.filter(it => it.id !== id);
+    },
+
+    // Drag-to-position: mousedown/touchstart on an item chip in the preview
+    // canvas starts tracking pointer movement, converting it to a percent
+    // position within the canvas (clamped 0-100) and writing it straight
+    // onto the item — Alpine's reactivity picks up the plain-object mutation
+    // and moves the chip live. Listens on window (not the chip itself) so
+    // dragging still works if the pointer leaves the chip mid-drag.
+    startItemDrag(item, event) {
+      event.preventDefault();
+      const canvas = this.$refs.placardCanvas;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const move = (e) => {
+        const pt = e.touches ? e.touches[0] : e;
+        let x = ((pt.clientX - rect.left) / rect.width)  * 100;
+        let y = ((pt.clientY - rect.top)  / rect.height) * 100;
+        item.x = Math.round(Math.max(0, Math.min(100, x)) * 10) / 10;
+        item.y = Math.round(Math.max(0, Math.min(100, y)) * 10) / 10;
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        window.removeEventListener('touchmove', move);
+        window.removeEventListener('touchend', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      window.addEventListener('touchmove', move, { passive: false });
+      window.addEventListener('touchend', up);
+    },
+
+    async savePlacardSettings() {
+      if (this.placardSaving || !this.placardDraft) return;
+      this.placardSaving = true;
+      this.placardError  = '';
+      try {
+        const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(this.placardGalleryId), {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({ placard_defaults: this.placardDraft }),
+        });
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.error || 'HTTP ' + resp.status);
+        }
+        const g = await resp.json();
+        this.expandedGalleryPlacard = g.placard_defaults || null;
+        this.placardModalOpen = false;
+        this.showToast('Placard settings saved.');
+      } catch(e) {
+        this.placardError = e.message;
+      }
+      this.placardSaving = false;
     },
 
     async addDisplay(galleryid) {
@@ -2626,18 +2860,14 @@ function templateAdminApp() {
     // Starter presentation for new templates — a plain matte in the theme's
     // frame color, no outer frame. See app.js's matte/frame helper comment
     // (above displayApp) for the full schema; editable per-template below.
+    // Placard appearance/content is configured at the GALLERY level (Gallery
+    // Admin's Placard Settings), not here — this template only carries each
+    // slot's placard *position* (slot_positions[i].placard).
     defaultPresentation() {
       return {
-        matte:   { enabled: true,  color: '#e8e3d5', width: 16 },
-        frame:   { enabled: false, color: '#3d3424', width: 8 },
-        align:   { horizontal: 'center', vertical: 'center' },
-        placard: {
-          position: 'bottom',
-          fields: [
-            { source: 'title',     typography: { fontFamily: "'DM Serif Display', serif", fontSize: 13, fontWeight: 700, color: '#3d3424' } },
-            { source: 'rich_text', typography: { fontFamily: "'DM Sans', sans-serif", fontSize: 11.5, fontStyle: 'italic', color: '#6b7280' } },
-          ],
-        },
+        matte: { enabled: true,  color: '#e8e3d5', width: 16 },
+        frame: { enabled: false, color: '#3d3424', width: 8 },
+        align: { horizontal: 'center', vertical: 'center' },
       };
     },
 
