@@ -124,6 +124,27 @@
       border-radius: 4px;
       overflow: hidden;
       font-family: 'DM Sans', sans-serif;
+      /* Hover-to-expand: item font sizes are shrunk to stay true to the
+         placard's physical size on a small/compressed canvas (see
+         placardFontScale() in app.js) — which can leave text too small to
+         comfortably read. Hovering the box (after a short pause, so it
+         doesn't flicker on a passing cursor) scales the *whole* box up by
+         --placard-hover-scale (1 / that same shrink factor, set inline by
+         placardBoxStyle()), which grows the box and every pixel inside it
+         — text included — back to its full, un-shrunk design size. Moving
+         the mouse away collapses it again immediately (no delay on the
+         un-hovered transition). Doesn't affect layout of surrounding slots
+         since transform doesn't reflow an absolutely-positioned element's
+         siblings — it only changes how this box itself is painted. */
+      transform: scale(1);
+      transform-origin: center center;
+      transition: transform 0.12s ease-out;
+    }
+    .placard-box:hover {
+      transform: scale(var(--placard-hover-scale, 1));
+      transition: transform 0.18s ease-out 0.35s; /* 0.35s hover delay before expanding */
+      z-index: 40;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
     }
     .placard-item {
       white-space: nowrap;

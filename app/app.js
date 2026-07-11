@@ -1929,10 +1929,20 @@ function resolvePlacardItemText(template, labels) {
 
 // The placard box's own position + appearance for one slot — position comes
 // from the template (slotPos.placard), size/background from the gallery.
-function placardBoxStyle(gallery, slotPos) {
-  var g   = normalizeGalleryPlacard(gallery && gallery.placard_defaults);
-  var pos = (slotPos && slotPos.placard) || { x: 0, y: 0 };
-  return 'position: absolute; left: ' + pos.x + '%; top: ' + pos.y + '%; width: ' + g.width + '%; height: ' + g.height + '%; background: ' + g.background + '; border: 1px solid ' + g.borderColor + ';';
+// `canvasPxWidth` (the display grid's actual measured on-screen pixel
+// width — see layoutFrames() in displayApp/displayEditApp) sets the
+// `--placard-hover-scale` CSS custom property: the inverse of the item
+// font-size shrink factor (placardFontScale()), i.e. the amount a hovered
+// placard needs to visually grow by to show its text at full, un-shrunk
+// design size. The actual hover expand/collapse (delay, transition, z-index)
+// is pure CSS on `.placard-box:hover` (see display.html/display-edit.html) —
+// this just supplies the number that CSS scales by.
+function placardBoxStyle(gallery, slotPos, canvasPxWidth) {
+  var g          = normalizeGalleryPlacard(gallery && gallery.placard_defaults);
+  var pos        = (slotPos && slotPos.placard) || { x: 0, y: 0 };
+  var fontScale  = placardFontScale(g.boardWidthIn, canvasPxWidth);
+  var hoverScale = fontScale > 0 ? 1 / fontScale : 1;
+  return 'position: absolute; left: ' + pos.x + '%; top: ' + pos.y + '%; width: ' + g.width + '%; height: ' + g.height + '%; background: ' + g.background + '; border: 1px solid ' + g.borderColor + '; --placard-hover-scale: ' + hoverScale + ';';
 }
 
 // Converts an item's absolute inches-from-top-left position into the
@@ -2038,7 +2048,7 @@ function displayApp() {
     photoFrameSizeStyle(i, slot) { return photoFrameSizeStyle(this.frameSizes[i], slot); },
     // Gallery-level placard box (position from the template, size/appearance
     // + item content from the gallery) — see the placard helper block above.
-    placardBoxStyle(i) { return placardBoxStyle(this.gallery, this.slotPositions[i]); },
+    placardBoxStyle(i) { return placardBoxStyle(this.gallery, this.slotPositions[i], this.canvasWidthPx); },
     placardItemsFor(slot) { return placardItemsFor(this.gallery, slot, this.canvasWidthPx); },
 
     // Measures each slot's rendered .photo-area and computes its exact
@@ -2188,7 +2198,7 @@ function displayEditApp() {
     photoFrameSizeStyle(i, slot) { return photoFrameSizeStyle(this.frameSizes[i], slot); },
     // Gallery-level placard box (position from the template, size/appearance
     // + item content from the gallery) — see the placard helper block above.
-    placardBoxStyle(i) { return placardBoxStyle(this.gallery, this.slotPositions[i]); },
+    placardBoxStyle(i) { return placardBoxStyle(this.gallery, this.slotPositions[i], this.canvasWidthPx); },
     placardItemsFor(slot) { return placardItemsFor(this.gallery, slot, this.canvasWidthPx); },
     avatarSrc(user)  { return avatarSrc(user);  },
 

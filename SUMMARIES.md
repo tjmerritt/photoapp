@@ -784,3 +784,22 @@ Since the display canvas is rendered responsively (no fixed physical size on its
 
 ### Open items
 - Gallery Admin's mini placard preview doesn't apply this scaling (documented above as an intentional scope decision) — if that becomes confusing in practice, it could be added later using the same `placardFontScale()` helper against the preview canvas's measured width.
+
+## Session 24 — Hover-to-Expand Placards for Full-Size Readable Text
+
+### What was done
+- Added a hover interaction to placard boxes on both display pages: hovering over a placard, after a short pause, expands the whole box (and everything inside it, including text) up to its full, un-shrunk design size — undoing the Session 23 font-size shrink so caption text is comfortably readable, then collapses back immediately when the mouse moves away.
+- Pure CSS, no JS event handling needed — implemented via a `:hover` transition-delay trick: the base `.placard-box` rule transitions `transform` quickly (0.12s, no delay) so it snaps back instantly on mouse-out; the `.placard-box:hover` rule transitions to `transform: scale(var(--placard-hover-scale))` with a 0.35s delay, so a passing cursor doesn't trigger it — only a deliberate pause does. Also adds `z-index: 40` and a drop shadow on hover so the enlarged box visibly lifts above neighboring slots/placards.
+- `--placard-hover-scale` is the exact inverse of the font shrink factor from Session 23 (`1 / placardFontScale(...)`), computed in `placardBoxStyle()` and set as an inline CSS custom property. Scaling the *whole box* by this factor (rather than recomputing per-item font sizes) is mathematically equivalent to rendering the placard as if the canvas were shown at its true physical size — it also scales the box's own dimensions and any drawn border/background proportionally, which is what "read it at full size" implies.
+- `app/app.js`: `placardBoxStyle(gallery, slotPos, canvasPxWidth)` now takes the same `canvasPxWidth` measurement `placardItemsFor` already uses, and appends `--placard-hover-scale: <n>;` to its returned style string. Both `displayApp` and `displayEditApp`'s `placardBoxStyle(i)` wrapper methods now pass `this.canvasWidthPx` through.
+- `app/display.html` and `app/display-edit.html`: added the `:hover` CSS rules above to `.placard-box`. Applied to both pages (view and edit) for consistency — an editor also benefits from being able to read placard text clearly while working.
+- Uses `transform-origin: center center`, and since the box is `position: absolute`, the transform doesn't reflow or shift any sibling slots/placards — it only changes how the hovered box itself is painted, so it can safely grow past its normal footprint without disturbing the rest of the layout.
+
+### Testing notes
+- `run30.js`: added pure-function tests for `placardBoxStyle`'s new `canvasPxWidth` arg and `--placard-hover-scale` output — no scale at the canvas's design width (hover would be a no-op, correctly), scale 2 when the canvas is compressed to half its design width, and confirmed the position/size percent styling is untouched by the addition.
+- `run31.js`: extended the existing DOM-level canvas-width-stubbing test to also check the rendered `.placard-box` style's `--placard-hover-scale` value at both the design width (1) and half the design width (2), alongside the existing font-size checks — confirming the box-level and item-level scale factors stay in lockstep through the real reactive rendering path.
+- Full placard suite (`run30`–`run37`, 145 checks) passes with no regressions. Not able to visually verify the actual hover animation/timing in this sandboxed environment (no real browser) — the CSS was written and manually reasoned through, but worth a quick look in a real browser to confirm the delay/feel is right.
+
+### Open items
+- The 0.35s hover delay and un-hover snap-back speed (0.12s) are reasonable defaults, not something the user specified an exact value for — easy to tune if they feel off in practice.
+- No cap on the expansion magnitude — a placard on a heavily-compressed canvas (e.g. a wide board viewed on a narrow phone) could expand quite dramatically on hover. This matches the literal request ("full size for the font") but is worth watching for if it ever looks excessive.
