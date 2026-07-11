@@ -637,3 +637,19 @@ Verified via the JSDOM harness (6 new scripts, 62 checks total, 0 failures):
 - Phase 5: label colors, restricted labels, emoji improvements, rich-text comments
 - Phase 6: admin pages
 - Phase 7: photo uploads
+
+## Session 17 — Fixed: New Placard Items Beyond the 4th Weren't Visible in the Preview
+
+### What was done
+**Bug report**: adding a 6th placard item in Gallery Admin's Placard Settings didn't show up in the preview, even after resizing the placard box.
+
+**Root cause**: `addPlacardItem()`'s default position was `y: 8 + n * 22` (n = item count), which grows unbounded — the 6th item (n=5) landed at `y: 118%`, far below the visible 0–100% box. Since item x/y is percent *of the placard box itself*, resizing the box couldn't help; the position was simply out of range. `normalizeGalleryPlacard()`'s fallback for items loaded without an explicit x/y had the same unbounded formula.
+
+**Fix** (`app/app.js`): added `defaultPlacardItemPosition(n)`, a shared helper that wraps into a new column every 4 rows (`row = n % 4`, `col = Math.floor(n / 4) % 3`), so any number of sequentially-added items always lands within 0–100% on both axes — items beyond ~12 will start overlapping earlier ones, but remain visible and draggable rather than disappearing off-canvas. Both `addPlacardItem()` and `normalizeGalleryPlacard()`'s fallback now use this helper.
+
+### Testing notes
+- New pure-function test (`run36.js`): 10 sequentially-added default positions all stay within bounds; the specific reported case (6th item) verified in-bounds and distinct from earlier items; `normalizeGalleryPlacard()`'s fallback verified in-bounds for 8 items with no explicit position.
+- Re-ran the full placard test suite (`run30`–`run35`, 47 checks) — no regressions.
+
+### Open items
+- Same as Session 16.

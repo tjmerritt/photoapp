@@ -1753,6 +1753,20 @@ function photoFrameSizeStyle(size, slot) {
 // This replaces the older template-level presentation.placard
 // (position/fields) system entirely.
 // ─────────────────────────────────────────────────────────────────────────────
+// Default position for the Nth item (0-indexed) added with no explicit x/y —
+// wraps into a new column every 4 rows so the position always stays inside
+// the visible 0-100 percent box no matter how many items exist (a plain
+// `8 + n * 22` grows unbounded and pushes later items below/outside the
+// preview, where they can never be seen or dragged back into view). Wraps
+// columns too (mod 3) so it keeps producing in-bounds positions indefinitely,
+// at the cost of eventually overlapping earlier items — acceptable since any
+// position is just a draggable starting point.
+function defaultPlacardItemPosition(n) {
+  var row = n % 4;
+  var col = Math.floor(n / 4) % 3;
+  return { x: 4 + col * 32, y: 8 + row * 22 };
+}
+
 function normalizeGalleryPlacard(raw) {
   var p = raw || {};
   return {
@@ -1761,11 +1775,12 @@ function normalizeGalleryPlacard(raw) {
     background:  p.background  || '#faf7f0',
     borderColor: p.borderColor || '#d6ccb0',
     items: Array.isArray(p.items) ? p.items.map(function (it, idx) {
+      var pos = defaultPlacardItemPosition(idx);
       return {
         id:            it.id || ('item-' + idx),
         text:          it.text || '',
-        x:             typeof it.x === 'number' ? it.x : 4,
-        y:             typeof it.y === 'number' ? it.y : (8 + idx * 22),
+        x:             typeof it.x === 'number' ? it.x : pos.x,
+        y:             typeof it.y === 'number' ? it.y : pos.y,
         fontFamily:    it.fontFamily || "'DM Sans', sans-serif",
         fontSize:      typeof it.fontSize === 'number' ? it.fontSize : 12,
         fontWeight:    it.fontWeight || 400,
@@ -2562,9 +2577,10 @@ function galleryAdminApp() {
 
     addPlacardItem() {
       const n = this.placardDraft.items.length;
+      const pos = defaultPlacardItemPosition(n);
       this.placardDraft.items.push({
         id: 'item-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36),
-        text: '', x: 4, y: 8 + n * 22,
+        text: '', x: pos.x, y: pos.y,
         fontFamily: "'DM Sans', sans-serif", fontSize: 12, fontWeight: 400,
         fontStyle: 'normal', color: '#3d3424', hideIfMissing: true,
       });
