@@ -653,3 +653,19 @@ Verified via the JSDOM harness (6 new scripts, 62 checks total, 0 failures):
 
 ### Open items
 - Same as Session 16.
+
+## Session 18 — Fixed: Placard Item Jumped on First Drag Move
+
+### What was done
+**Bug report**: selecting a placard item to reposition it worked, but the item jumped as soon as dragging started, requiring the user to drag it back to where they wanted — making fine positioning difficult.
+
+**Root cause**: `startItemDrag()`'s `move` handler set the item's `x`/`y` (its top-left corner) directly to the cursor's position on the canvas. Since a user grabs an item wherever they click on it — usually the middle of its text, not its exact top-left corner — the very first `mousemove` snapped the item's corner to the cursor, producing a visible jump equal to the distance between the grab point and the corner.
+
+**Fix** (`app/app.js`, `startItemDrag()`): capture the pixel offset between the pointer and the item's top-left corner once at drag start (`offsetX`/`offsetY`), then subtract that same offset on every subsequent move. The item now moves by the same delta the pointer moves, staying wherever it was grabbed relative to the cursor, instead of snapping its corner to the raw cursor position.
+
+### Testing notes
+- Updated `run33.js`'s drag test to grab an item a few pixels off its corner (simulating a realistic click) and assert: (1) a `mousemove` at the exact grab point produces zero movement (the specific bug), and (2) a subsequent move by a known pixel delta moves the item by the equivalent percent delta, not to an absolute cursor-derived position.
+- Re-ran the full placard suite (`run30`–`run36`, 65 checks) — no regressions.
+
+### Open items
+- Same as Session 16.

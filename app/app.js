@@ -2596,15 +2596,27 @@ function galleryAdminApp() {
     // onto the item — Alpine's reactivity picks up the plain-object mutation
     // and moves the chip live. Listens on window (not the chip itself) so
     // dragging still works if the pointer leaves the chip mid-drag.
+    //
+    // The item's top-left is offset from wherever the pointer grabbed it
+    // (e.g. the middle of the text), so we capture that offset once at
+    // drag start and hold it constant through the drag — otherwise the
+    // first move snaps the item's top-left corner straight to the cursor,
+    // producing a visible jump equal to however far from the corner it was
+    // grabbed, which then has to be dragged back out by hand.
     startItemDrag(item, event) {
       event.preventDefault();
       const canvas = this.$refs.placardCanvas;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
+      const startPt  = event.touches ? event.touches[0] : event;
+      const itemPxX  = (item.x / 100) * rect.width;
+      const itemPxY  = (item.y / 100) * rect.height;
+      const offsetX  = startPt.clientX - rect.left - itemPxX;
+      const offsetY  = startPt.clientY - rect.top  - itemPxY;
       const move = (e) => {
         const pt = e.touches ? e.touches[0] : e;
-        let x = ((pt.clientX - rect.left) / rect.width)  * 100;
-        let y = ((pt.clientY - rect.top)  / rect.height) * 100;
+        let x = ((pt.clientX - rect.left - offsetX) / rect.width)  * 100;
+        let y = ((pt.clientY - rect.top  - offsetY) / rect.height) * 100;
         item.x = Math.round(Math.max(0, Math.min(100, x)) * 10) / 10;
         item.y = Math.round(Math.max(0, Math.min(100, y)) * 10) / 10;
       };
