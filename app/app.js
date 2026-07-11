@@ -2588,6 +2588,16 @@ function galleryAdminApp() {
     placardSaving:    false,
     placardError:     '',
 
+    // Raw-JSON escape hatch: the visual editor covers everyday adjustments,
+    // but exact numeric tweaks (e.g. nudging an item to x: 12.35 after the
+    // general layout is already right) are fiddly with drag/number inputs.
+    // Toggling this shows the exact placard_defaults JSON that gets saved —
+    // the same shape normalizeGalleryPlacard()/placardItemsFor() consume —
+    // so it's a precise view of the real data, not a separate format.
+    placardJsonMode:  false,
+    placardJsonText:  '',
+    placardJsonError: '',
+
     // The draft's width/height are edited as physical size (inches or cm),
     // not percent — percent has no intuitive meaning on its own since the
     // canvas has no fixed physical size. `widthIn`/`heightIn`/`boardWidthIn`
@@ -2612,13 +2622,87 @@ function galleryAdminApp() {
         items:        JSON.parse(JSON.stringify(normalized.items)),
       };
       this.refreshPlacardDisplayFields();
-      this.placardError = '';
+      this.placardError     = '';
+      this.placardJsonMode  = false;
+      this.placardJsonText  = '';
+      this.placardJsonError = '';
       this.placardModalOpen = true;
     },
 
     closePlacardSettings() {
       this.placardModalOpen = false;
       this.placardDraft     = null;
+      this.placardJsonMode  = false;
+    },
+
+    // The exact placard_defaults shape that gets PATCHed to the API —
+    // derived from the draft's physical (inches) fields, which are always
+    // the visual editor's source of truth. Used both to populate the JSON
+    // textarea and to build the real save payload, so the two paths can
+    // never drift apart from each other.
+    placardDraftToStored() {
+      const d = this.placardDraft;
+      const boardHeightIn = d.boardWidthIn * 9 / 16;
+      return {
+        width:        (d.widthIn  / d.boardWidthIn)  * 100,
+        height:       (d.heightIn / boardHeightIn)   * 100,
+        boardWidthIn: d.boardWidthIn,
+        unit:         d.unit,
+        background:   d.background,
+        borderColor:  d.borderColor,
+        items:        d.items,
+      };
+    },
+
+    // Applies a raw placard_defaults-shaped object (parsed from the JSON
+    // textarea) back onto the draft's physical fields, normalizing it
+    // through the same normalizeGalleryPlacard() used everywhere else so
+    // malformed/partial JSON still produces a sane draft rather than
+    // crashing the editor.
+    applyPlacardJSON(raw) {
+      const normalized    = normalizeGalleryPlacard(raw);
+      const boardHeightIn = normalized.boardWidthIn * 9 / 16;
+      const d = this.placardDraft;
+      d.boardWidthIn = normalized.boardWidthIn;
+      d.widthIn      = (normalized.width  / 100) * normalized.boardWidthIn;
+      d.heightIn     = (normalized.height / 100) * boardHeightIn;
+      d.unit         = normalized.unit;
+      d.background   = normalized.background;
+      d.borderColor  = normalized.borderColor;
+      d.items        = normalized.items;
+      this.refreshPlacardDisplayFields();
+    },
+
+    // Parses placardJsonText and applies it to the draft; returns false
+    // (leaving placardJsonError set) on invalid JSON so callers can refuse
+    // to switch back to the visual editor or save until it's fixed, rather
+    // than silently discarding whatever the user typed.
+    applyPlacardJsonText() {
+      let parsed;
+      try {
+        parsed = JSON.parse(this.placardJsonText || '{}');
+      } catch (e) {
+        this.placardJsonError = 'Invalid JSON: ' + e.message;
+        return false;
+      }
+      this.applyPlacardJSON(parsed);
+      this.placardJsonError = '';
+      return true;
+    },
+
+    // Toggling into JSON mode snapshots the current draft as JSON text;
+    // toggling back out applies whatever's in the textarea first (so the
+    // visual editor and preview reflect any precise edits made there) and
+    // refuses to leave JSON mode if the text doesn't parse.
+    togglePlacardJsonMode() {
+      if (this.placardJsonMode) {
+        if (!this.applyPlacardJsonText()) return;
+        this.placardJsonMode = false;
+      } else {
+        this.placardJsonText  = JSON.stringify(this.placardDraftToStored(), null, 2);
+        this.placardJsonError = '';
+        this.placardJsonMode  = true;
+      }
     },
 
     // Re-renders boardWidthDisplay/widthDisplay/heightDisplay from the
@@ -2709,6 +2793,11 @@ function galleryAdminApp() {
 
     async savePlacardSettings() {
       if (this.placardSaving || !this.placardDraft) return;
+      // If the JSON editor is open, apply whatever's currently typed there
+      // first — otherwise Save would silently save the stale pre-JSON-edit
+      // draft instead of what's on screen. Invalid JSON blocks the save
+      // (placardJsonError is already set by applyPlacardJsonText()).
+      if (this.placardJsonMode && !this.applyPlacardJsonText()) return;
       this.placardSaving = true;
       this.placardError  = '';
       try {
@@ -2717,17 +2806,7 @@ function galleryAdminApp() {
         // normalizeGalleryPlacard()) — boardWidthIn/unit are saved alongside
         // so re-opening the editor later shows the same physical size in the
         // same unit, without having to re-derive it from a rounded percent.
-        const d            = this.placardDraft;
-        const boardHeightIn = d.boardWidthIn * 9 / 16;
-        const payload = {
-          width:        (d.widthIn  / d.boardWidthIn)  * 100,
-          height:       (d.heightIn / boardHeightIn)   * 100,
-          boardWidthIn: d.boardWidthIn,
-          unit:         d.unit,
-          background:   d.background,
-          borderColor:  d.borderColor,
-          items:        d.items,
-        };
+        const payload = this.placardDraftToStored();
         const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(this.placardGalleryId), {
           method:  'PATCH',
           headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },

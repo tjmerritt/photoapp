@@ -447,13 +447,52 @@
 
     <template x-if="placardDraft">
       <div class="flex flex-col gap-4">
-        <p class="text-xs text-[var(--muted)]">
-          Size and appearance apply to every display in this gallery, for
-          consistency. Drag an item in the preview to position it. Item text
-          can include <code>{LabelName}</code> to pull from a photo's labels
-          — e.g. <code>Photographer: {Photographer}</code>.
-        </p>
+        <div class="flex items-start justify-between gap-3">
+          <p class="text-xs text-[var(--muted)]">
+            Size and appearance apply to every display in this gallery, for
+            consistency. Drag an item in the preview to position it. Item text
+            can include <code>{LabelName}</code> to pull from a photo's labels
+            — e.g. <code>Photographer: {Photographer}</code>.
+          </p>
+          <!-- :checked (not x-model) so togglePlacardJsonMode() can veto
+               leaving JSON mode when the text doesn't parse — the checkbox
+               only reflects placardJsonMode after the toggle actually
+               succeeds, rather than flipping unconditionally on click. -->
+          <label class="text-xs flex items-center gap-1.5 text-[var(--muted)] shrink-0 whitespace-nowrap">
+            <input type="checkbox" :checked="placardJsonMode" @change="togglePlacardJsonMode()" />
+            Edit as JSON
+          </label>
+        </div>
 
+        <!-- Raw JSON editor — an escape hatch for precise numeric tweaks
+             (exact item x/y, font sizes, etc.) once the general layout is
+             already right. Shows/edits the exact placard_defaults shape
+             that gets saved; switching back to the visual editor (or
+             clicking Save while this is open) applies it first. -->
+        <template x-if="placardJsonMode">
+          <div class="flex flex-col gap-2">
+            <textarea class="input w-full" rows="16" spellcheck="false"
+                      x-model="placardJsonText"></textarea>
+            <p x-show="placardJsonError" class="text-red-500 text-xs" x-text="placardJsonError"></p>
+            <p class="text-xs text-[var(--muted)]">
+              <code>width</code>/<code>height</code> are percent of the 16:9 canvas (what
+              actually renders); <code>boardWidthIn</code>/<code>unit</code> are just the
+              physical-size reference the visual editor's inch/cm fields convert through.
+              Each item in <code>items</code>: <code>text</code> (supports
+              <code>{LabelName}</code>), <code>x</code>/<code>y</code> (percent position
+              within the placard box), <code>fontFamily</code>, <code>fontSize</code> (px),
+              <code>fontWeight</code>, <code>fontStyle</code>, <code>color</code>, and
+              <code>hideIfMissing</code> (skip the item entirely if a referenced label is
+              missing from the photo).
+            </p>
+            <button class="btn-secondary text-xs self-start" @click="togglePlacardJsonMode()">
+              Apply &amp; back to visual editor
+            </button>
+          </div>
+        </template>
+
+        <template x-if="!placardJsonMode">
+        <div class="flex flex-col gap-4">
         <div class="flex gap-3 flex-wrap items-end">
           <label class="text-xs font-medium text-[var(--muted)]">
             Unit
@@ -550,6 +589,8 @@
           </template>
           <button class="btn-secondary text-xs self-start" @click="addPlacardItem()">+ Add item</button>
         </div>
+        </div>
+        </template>
 
         <p x-show="placardError" class="text-red-500 text-xs" x-text="placardError"></p>
 

@@ -700,3 +700,25 @@ Since the display canvas is rendered responsively (no fixed physical size on its
 
 ### Open items
 - Same as Session 16, plus: item font sizes are still in px (not inches/points) — not reported as an issue, but flagged for consistency awareness if raised later.
+
+## Session 20 — Raw-JSON Editor for Placard Settings
+
+### What was done
+**Request**: add a way to edit the placard config as JSON, for making precise changes after the general layout has been adjusted with the visual editor.
+
+**Implementation** (`app/app.js`, `app/gallery-admin.html`): added an "Edit as JSON" checkbox to the Placard Settings modal. It shows/hides a textarea containing the exact `placard_defaults` JSON that gets saved (same shape `normalizeGalleryPlacard()`/`placardItemsFor()` consume elsewhere) — not a separate format, so what you see is exactly what's persisted.
+
+- `galleryAdminApp.placardDraftToStored()` — derives the stored (percent-based) shape from the draft's physical (inches) fields; used both to populate the JSON textarea and as the actual save payload, so the two paths can't drift apart.
+- `applyPlacardJSON(raw)` — applies a parsed object back onto the draft by running it through `normalizeGalleryPlacard()` (so malformed/partial JSON still produces a sane draft) and converting its percent width/height back to the draft's canonical inches fields.
+- `applyPlacardJsonText()` — parses `placardJsonText`, applying it via `applyPlacardJSON()` on success or setting `placardJsonError` and returning `false` on invalid JSON.
+- `togglePlacardJsonMode()` — entering JSON mode snapshots the current draft as formatted JSON; **leaving** JSON mode applies the typed JSON first and refuses to leave (leaving `placardJsonMode` `true`, with the error shown) if it doesn't parse — so a syntax error can't silently discard the edit or corrupt the draft.
+- `savePlacardSettings()` now also auto-applies pending JSON text if the editor is still open when Save is clicked, so `Save` doesn't need an explicit "apply" step first.
+- The checkbox binds via `:checked` (not `x-model`) specifically so the veto behavior works — a plain two-way binding would flip the underlying state before the handler could reject an invalid parse.
+- The visual controls (unit/board-width/size fields, drag preview, item list) are wrapped in `x-if="!placardJsonMode"` and swapped for the textarea + a short inline schema reference + an "Apply & back to visual editor" button when JSON mode is on.
+
+### Testing notes
+- New `run37.js` (19 checks): toggling into JSON mode snapshots the exact draft state; editing the JSON (adding an item, changing width/background) and toggling back applies it to the visual draft, correctly re-deriving `widthIn` from the edited percent; invalid JSON keeps the editor in JSON mode, sets the error message, and leaves the existing draft untouched; clicking Save while JSON mode is still open auto-applies the (now valid) JSON and PATCHes exactly those values, including a completely different `boardWidthIn`/`unit` (60cm) and item list; reopening the modal after a save resets back to visual mode.
+- Re-ran the full placard suite (`run30`–`run37`, 111 checks total) — no regressions from Sessions 16–19.
+
+### Open items
+- Same as Session 16, plus: the JSON textarea has no live syntax highlighting or inline validation-as-you-type (only on toggle/save) — acceptable for the "precise tweak after the fact" use case this was built for, but worth revisiting if it becomes a primary editing path.
