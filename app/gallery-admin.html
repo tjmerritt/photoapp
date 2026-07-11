@@ -475,10 +475,12 @@
                       x-model="placardJsonText"></textarea>
             <p x-show="placardJsonError" class="text-red-500 text-xs" x-text="placardJsonError"></p>
             <p class="text-xs text-[var(--muted)]">
-              <code>width</code>/<code>height</code> are percent of the 16:9 canvas (what
-              actually renders); <code>boardWidthIn</code>/<code>unit</code> are just the
-              physical-size reference the visual editor's inch/cm fields convert through.
-              Each item in <code>items</code>: <code>text</code> (supports
+              <code>widthIn</code>/<code>heightIn</code> are the placard's own physical size
+              in inches — the exact same numbers shown in the "Placard width"/"Placard
+              height" fields below (converted to/from cm there if that's the active unit);
+              <code>boardWidthIn</code>/<code>unit</code> are the physical-size reference and
+              display unit the visual editor uses. Each item in <code>items</code>:
+              <code>text</code> (supports
               <code>{LabelName}</code>), <code>xIn</code>/<code>yIn</code> — a fixed distance
               in inches from the placard's own top-left corner (not a percentage, so it
               doesn't move if you resize the placard), <code>fontFamily</code>,

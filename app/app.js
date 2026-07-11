@@ -1790,18 +1790,21 @@ function defaultPlacardItemPosition(n, placardWidthIn, placardHeightIn) {
 }
 
 // ── Physical units ──────────────────────────────────────────────────────────
-// Placard width/height are still stored (and rendered) as a percent of the
-// 16:9 canvas — that part hasn't changed. But percent alone isn't intuitive
-// to set by hand, since the canvas has no fixed physical size on its own (it
-// just scales to fill whatever screen shows it). `boardWidthIn` is the
-// physical width, in inches, that the whole canvas is meant to represent
-// (e.g. "this gallery's display is a 48 inch wide board") — purely a
-// conversion reference for the Gallery Admin editor UI; it has no other
-// effect on rendering. `unit` remembers which unit (in/cm) the editor was
-// last shown in. Canvas height in inches is always boardWidthIn * 9/16
-// (16:9), so placard width/height in inches convert to percent via:
+// widthIn/heightIn (the placard's own physical size, in inches) are the
+// canonical stored fields — same convention as items' xIn/yIn, and what the
+// Gallery Admin visual editor and the raw-JSON editor both show, so the two
+// views always agree. `boardWidthIn` is the physical width, in inches, that
+// the whole 16:9 canvas is meant to represent (e.g. "this gallery's display
+// is a 48 inch wide board") — a conversion reference the editor UI uses; it
+// has no other effect on rendering. `unit` remembers which unit (in/cm) the
+// editor was last shown in. Rendering still needs percent-of-canvas (CSS
+// can't use inches directly against a canvas that scales to any screen
+// size), so percent is derived at normalize time via:
 //   width%  = (widthIn  / boardWidthIn)          * 100
 //   height% = (heightIn / (boardWidthIn * 9/16)) * 100
+// Older saved galleries (from before this field existed) only have percent
+// width/height; normalizeGalleryPlacard() falls back to converting those
+// into widthIn/heightIn so they still load correctly.
 var CM_PER_IN = 2.54;
 var DEFAULT_BOARD_WIDTH_IN   = 48;   // a reasonably-sized display board
 var DEFAULT_PLACARD_WIDTH_IN = 4;    // a small caption card
@@ -1811,36 +1814,48 @@ function inToCm(v) { return v * CM_PER_IN; }
 function cmToIn(v) { return v / CM_PER_IN; }
 function round2(v) { return Math.round(v * 100) / 100; }
 
-// The placard's own physical size in inches, derived from its stored
-// percent-of-canvas width/height and the canvas's physical boardWidthIn —
-// the inverse of how Gallery Admin's Placard Settings derives percent from
-// what the user types. Shared by item-position defaulting/rendering so an
-// item's inches offset is always interpreted against the placard's *actual*
-// current physical size, not a stale or assumed one.
+// The placard's own physical size in inches. Normalized gallery objects
+// already carry widthIn/heightIn directly (see normalizeGalleryPlacard), so
+// this just reads them back out — kept as a small helper since several call
+// sites want the pair as a unit.
 function placardPhysicalSize(g) {
-  var boardHeightIn = g.boardWidthIn * 9 / 16;
-  return {
-    widthIn:  (g.width  / 100) * g.boardWidthIn,
-    heightIn: (g.height / 100) * boardHeightIn,
-  };
+  return { widthIn: g.widthIn, heightIn: g.heightIn };
 }
 
 function normalizeGalleryPlacard(raw) {
   var p = raw || {};
   var boardWidthIn  = typeof p.boardWidthIn === 'number' && p.boardWidthIn > 0 ? p.boardWidthIn : DEFAULT_BOARD_WIDTH_IN;
   var boardHeightIn = boardWidthIn * 9 / 16;
-  var width  = typeof p.width  === 'number' ? p.width  : (DEFAULT_PLACARD_WIDTH_IN  / boardWidthIn)  * 100;
-  var height = typeof p.height === 'number' ? p.height : (DEFAULT_PLACARD_HEIGHT_IN / boardHeightIn) * 100;
-  var size   = placardPhysicalSize({ width: width, height: height, boardWidthIn: boardWidthIn });
+  // widthIn/heightIn are canonical; width/height (percent) are only read
+  // here as a fallback for galleries saved before physical units existed.
+  var widthIn, heightIn;
+  if (typeof p.widthIn === 'number' && p.widthIn > 0) {
+    widthIn = p.widthIn;
+  } else if (typeof p.width === 'number') {
+    widthIn = (p.width / 100) * boardWidthIn;
+  } else {
+    widthIn = DEFAULT_PLACARD_WIDTH_IN;
+  }
+  if (typeof p.heightIn === 'number' && p.heightIn > 0) {
+    heightIn = p.heightIn;
+  } else if (typeof p.height === 'number') {
+    heightIn = (p.height / 100) * boardHeightIn;
+  } else {
+    heightIn = DEFAULT_PLACARD_HEIGHT_IN;
+  }
+  var width  = (widthIn  / boardWidthIn)  * 100;
+  var height = (heightIn / boardHeightIn) * 100;
   return {
-    width:       width,
-    height:      height,
+    widthIn:     widthIn,
+    heightIn:    heightIn,
+    width:       width,   // derived percent-of-canvas, for CSS rendering only
+    height:      height,  // derived percent-of-canvas, for CSS rendering only
     boardWidthIn: boardWidthIn,
     unit:        p.unit === 'cm' ? 'cm' : 'in',
     background:  p.background  || '#faf7f0',
     borderColor: p.borderColor || '#d6ccb0',
     items: Array.isArray(p.items) ? p.items.map(function (it, idx) {
-      var pos = defaultPlacardItemPosition(idx, size.widthIn, size.heightIn);
+      var pos = defaultPlacardItemPosition(idx, widthIn, heightIn);
       return {
         id:            it.id || ('item-' + idx),
         text:          it.text || '',
@@ -2659,12 +2674,11 @@ function galleryAdminApp() {
     // through a chain of round-trips that could drift.
     openPlacardSettings(galleryid) {
       this.placardGalleryId = galleryid;
-      const normalized     = normalizeGalleryPlacard(this.expandedGalleryPlacard);
-      const boardHeightIn  = normalized.boardWidthIn * 9 / 16;
+      const normalized = normalizeGalleryPlacard(this.expandedGalleryPlacard);
       this.placardDraft = {
         boardWidthIn: normalized.boardWidthIn,
-        widthIn:      (normalized.width  / 100) * normalized.boardWidthIn,
-        heightIn:     (normalized.height / 100) * boardHeightIn,
+        widthIn:      normalized.widthIn,
+        heightIn:     normalized.heightIn,
         unit:         normalized.unit,
         background:   normalized.background,
         borderColor:  normalized.borderColor,
@@ -2685,16 +2699,16 @@ function galleryAdminApp() {
     },
 
     // The exact placard_defaults shape that gets PATCHed to the API —
-    // derived from the draft's physical (inches) fields, which are always
-    // the visual editor's source of truth. Used both to populate the JSON
-    // textarea and to build the real save payload, so the two paths can
-    // never drift apart from each other.
+    // widthIn/heightIn straight from the draft (the visual editor's source
+    // of truth), so the JSON view always shows the exact same numbers as
+    // the visual editor's fields, just like items' xIn/yIn already do. Used
+    // both to populate the JSON textarea and to build the real save
+    // payload, so the two paths can never drift apart from each other.
     placardDraftToStored() {
       const d = this.placardDraft;
-      const boardHeightIn = d.boardWidthIn * 9 / 16;
       return {
-        width:        (d.widthIn  / d.boardWidthIn)  * 100,
-        height:       (d.heightIn / boardHeightIn)   * 100,
+        widthIn:      d.widthIn,
+        heightIn:     d.heightIn,
         boardWidthIn: d.boardWidthIn,
         unit:         d.unit,
         background:   d.background,
@@ -2707,14 +2721,13 @@ function galleryAdminApp() {
     // textarea) back onto the draft's physical fields, normalizing it
     // through the same normalizeGalleryPlacard() used everywhere else so
     // malformed/partial JSON still produces a sane draft rather than
-    // crashing the editor.
+    // crashing the editor (and so legacy percent-only JSON still loads).
     applyPlacardJSON(raw) {
-      const normalized    = normalizeGalleryPlacard(raw);
-      const boardHeightIn = normalized.boardWidthIn * 9 / 16;
+      const normalized = normalizeGalleryPlacard(raw);
       const d = this.placardDraft;
       d.boardWidthIn = normalized.boardWidthIn;
-      d.widthIn      = (normalized.width  / 100) * normalized.boardWidthIn;
-      d.heightIn     = (normalized.height / 100) * boardHeightIn;
+      d.widthIn      = normalized.widthIn;
+      d.heightIn     = normalized.heightIn;
       d.unit         = normalized.unit;
       d.background   = normalized.background;
       d.borderColor  = normalized.borderColor;

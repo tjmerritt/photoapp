@@ -744,3 +744,23 @@ Since the display canvas is rendered responsively (no fixed physical size on its
 
 ### Open items
 - None known. All four bug reports/feature requests from this session (unbounded item growth, drag-jump, physical units, JSON editor) plus this absolute-positioning change are implemented and tested.
+
+## Session 22 — Placard Width/Height Now Match Between Visual Editor and JSON View
+
+### What was done
+- Fixed a reported mismatch: the visual editor's "Placard width"/"Placard height" fields showed physical inches/cm, but the JSON view (added in Session 20) showed `width`/`height` as percent-of-canvas — different units for the same value, so the numbers never matched at a glance.
+- `widthIn`/`heightIn` (physical inches) are now the canonical stored/JSON field for the placard box's own size, mirroring the `xIn`/`yIn` convention already used for items. Percent-of-canvas is still computed, but only internally at normalize time, purely for CSS rendering — it's no longer part of the saved/JSON shape.
+- `app/app.js`:
+  - `normalizeGalleryPlacard` now reads `widthIn`/`heightIn` directly (falling back to converting legacy percent `width`/`height` for galleries saved before this change), and returns both the canonical inches and the derived render-time percent.
+  - `placardPhysicalSize(g)` simplified to just read `g.widthIn`/`g.heightIn` (no longer recomputes from percent).
+  - `placardDraftToStored()` now outputs `widthIn`/`heightIn` as-is instead of converting to percent — this is what populates both the JSON textarea and the real PATCH payload, so the two can't drift.
+  - `applyPlacardJSON()` and `openPlacardSettings()` simplified to copy `widthIn`/`heightIn` straight across instead of round-tripping through percent math.
+- `app/gallery-admin.html`: updated the JSON-mode docs paragraph to describe `widthIn`/`heightIn` as the same numbers shown in the visual editor's size fields.
+- Backend is unaffected — `placard_defaults` is stored as opaque `json.RawMessage`, no schema change needed there.
+
+### Testing notes
+- Updated `run33.js`/`run37.js` assertions that checked the PATCH/JSON payload's `width`/`height` percent to check `widthIn`/`heightIn` instead.
+- Full placard-related suite (`run30`–`run37`, 130 checks) passes, including the legacy-fallback path (`run30`/`run36` still normalize old percent-only `width`/`height` fixtures correctly) and the full open → edit → JSON round-trip → save cycle.
+
+### Open items
+- None known.
