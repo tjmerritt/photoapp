@@ -722,3 +722,25 @@ Since the display canvas is rendered responsively (no fixed physical size on its
 
 ### Open items
 - Same as Session 16, plus: the JSON textarea has no live syntax highlighting or inline validation-as-you-type (only on toggle/save) — acceptable for the "precise tweak after the fact" use case this was built for, but worth revisiting if it becomes a primary editing path.
+
+## Session 21 — Placard Item Positions Are Now Absolute Inches, Not Percent-of-Box
+
+### What was done
+- Changed placard item positioning from percent-of-placard-box (`x`/`y`, 0-100) to a fixed physical offset from the placard's top-left corner (`xIn`/`yIn`, in inches). Percent is now only computed at render time, from the item's fixed inches and the placard's *current* physical size.
+- As explicitly requested: resizing the placard no longer moves items. If a placard is shrunk below an item's stored offset, that item can render outside the box and become invisible (clipped by `overflow:hidden`) until the placard is enlarged again or the item is dragged back in.
+- `app/app.js`:
+  - New `placardPhysicalSize(g)` helper — derives `{widthIn, heightIn}` from a normalized gallery's percent `width`/`height` and `boardWidthIn`.
+  - `defaultPlacardItemPosition(n, placardWidthIn, placardHeightIn)` — now takes the placard's actual current size and returns inches (falls back to the module defaults if size is unknown), wrapping new items into a bounded grid instead of the old unbounded percent formula.
+  - `placardItemStyle(item, placardWidthIn, placardHeightIn)` and `placardItemsFor` — convert the item's fixed inches to render-time percent against the placard's current size.
+  - `normalizeGalleryPlacard` — computes physical size first, then fills in any item missing `xIn`/`yIn` via the new default-position logic.
+  - Gallery Admin (`galleryAdminApp`): `addPlacardItem` stores new items with `xIn`/`yIn`; new `previewItemStyle(item)` (modal preview chip positioning) and `itemPositionLabel(item)` (human-readable "X, Y from top-left" label in the current unit) methods; `startItemDrag` rewritten to convert drag deltas to inches instead of percent, preserving the existing grab-offset fix from Session 18.
+- `app/gallery-admin.html`: preview item styling now calls `previewItemStyle(item)`; added explanatory copy under the preview noting that resizing won't move items and can make them fall outside the box; added a position label under each item row; updated the JSON-mode docs paragraph to describe `xIn`/`yIn` instead of `x`/`y`.
+
+### Testing notes
+- JSDOM harness, `run30`–`run37` (121 checks total across pure-function and DOM-level tests), all passing after the rewrite.
+- `run30.js`/`run36.js` directly verify: default positions stay within actual current bounds at multiple placard sizes, `xIn`/`yIn` are never mutated by the render-time style function, and shrinking a placard below an item's offset correctly pushes its rendered percent past 100% (the intended "gets clipped" behavior).
+- `run33.js` verifies drag math now tracks inches (not percent) and that resizing changes an item's rendered percent while leaving its stored `xIn`/`yIn` untouched. One test-fixture bug (a leftover placard size from the drag sub-test wasn't restored before the final save/PATCH assertion) was found and fixed in the test itself — the app's round-trip math was already correct.
+- `run31.js`/`run37.js` (display render + JSON-mode editor) updated with `xIn`/`yIn` fixtures, all passing.
+
+### Open items
+- None known. All four bug reports/feature requests from this session (unbounded item growth, drag-jump, physical units, JSON editor) plus this absolute-positioning change are implemented and tested.

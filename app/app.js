@@ -1735,12 +1735,25 @@ function photoFrameSizeStyle(size, slot) {
 //     "background": "#faf7f0", "borderColor": "#d6ccb0",
 //     "items": [
 //       { "id": "photographer", "text": "Photographer: {Photographer}",
-//         "x": 4, "y": 8,                    // percent within the placard box
+//         "xIn": 0.3, "yIn": 0.2,           // inches from the placard's OWN
+//                                            // top-left corner (absolute —
+//                                            // NOT a percent of the placard's
+//                                            // size; see the note below)
 //         "fontFamily": "'DM Serif Display', serif", "fontSize": 12,
 //         "fontWeight": 400, "fontStyle": "normal", "color": "#3d3424",
 //         "hideIfMissing": true }
 //     ]
 //   }
+// An item's `xIn`/`yIn` is a fixed physical distance from the placard's own
+// top-left corner — deliberately NOT a percent of the placard's width/height,
+// so resizing the placard later (via Gallery Admin's Placard Settings) never
+// reflows an item's position. An item can end up outside the (resized)
+// placard's bounds this way — that's expected; the placard box clips its
+// contents (overflow: hidden), so the item just becomes invisible until the
+// placard is made large enough again or the item is dragged back in.
+// Rendering still needs a *percent* to position via CSS, so it's computed at
+// render time as xIn / placardWidthIn * 100 (see placardItemStyle()) — the
+// percent is a render-time detail, not what's stored.
 // An item's `text` may reference photo labels via `{LabelName}` — resolved
 // against the assigned photo's Labels (see resolvePlacardItemText()). If any
 // referenced label is missing and hideIfMissing is true, the whole item is
@@ -1753,18 +1766,27 @@ function photoFrameSizeStyle(size, slot) {
 // This replaces the older template-level presentation.placard
 // (position/fields) system entirely.
 // ─────────────────────────────────────────────────────────────────────────────
-// Default position for the Nth item (0-indexed) added with no explicit x/y —
-// wraps into a new column every 4 rows so the position always stays inside
-// the visible 0-100 percent box no matter how many items exist (a plain
-// `8 + n * 22` grows unbounded and pushes later items below/outside the
-// preview, where they can never be seen or dragged back into view). Wraps
-// columns too (mod 3) so it keeps producing in-bounds positions indefinitely,
-// at the cost of eventually overlapping earlier items — acceptable since any
-// position is just a draggable starting point.
-function defaultPlacardItemPosition(n) {
-  var row = n % 4;
-  var col = Math.floor(n / 4) % 3;
-  return { x: 4 + col * 32, y: 8 + row * 22 };
+// Default position (in inches, from the placard's own top-left corner) for
+// the Nth item (0-indexed) added with no explicit xIn/yIn — wraps into a new
+// column every 4 rows so new items always start out visible inside the
+// *current* placard bounds no matter how many already exist, with a small
+// inset from each edge. Falls back to the module-level default placard size
+// if the actual current size isn't known yet (e.g. normalizing stored data
+// before any editor session has opened it).
+function defaultPlacardItemPosition(n, placardWidthIn, placardHeightIn) {
+  var w = placardWidthIn  > 0 ? placardWidthIn  : DEFAULT_PLACARD_WIDTH_IN;
+  var h = placardHeightIn > 0 ? placardHeightIn : DEFAULT_PLACARD_HEIGHT_IN;
+  var rows = 4, cols = 3;
+  var row  = n % rows;
+  var col  = Math.floor(n / rows) % cols;
+  var marginX = w * 0.08;
+  var marginY = h * 0.08;
+  var stepX = cols > 1 ? (w - 2 * marginX) / cols : 0;
+  var stepY = rows > 1 ? (h - 2 * marginY) / rows : 0;
+  return {
+    xIn: Math.round((marginX + col * stepX) * 100) / 100,
+    yIn: Math.round((marginY + row * stepY) * 100) / 100,
+  };
 }
 
 // ── Physical units ──────────────────────────────────────────────────────────
@@ -1789,24 +1811,41 @@ function inToCm(v) { return v * CM_PER_IN; }
 function cmToIn(v) { return v / CM_PER_IN; }
 function round2(v) { return Math.round(v * 100) / 100; }
 
+// The placard's own physical size in inches, derived from its stored
+// percent-of-canvas width/height and the canvas's physical boardWidthIn —
+// the inverse of how Gallery Admin's Placard Settings derives percent from
+// what the user types. Shared by item-position defaulting/rendering so an
+// item's inches offset is always interpreted against the placard's *actual*
+// current physical size, not a stale or assumed one.
+function placardPhysicalSize(g) {
+  var boardHeightIn = g.boardWidthIn * 9 / 16;
+  return {
+    widthIn:  (g.width  / 100) * g.boardWidthIn,
+    heightIn: (g.height / 100) * boardHeightIn,
+  };
+}
+
 function normalizeGalleryPlacard(raw) {
   var p = raw || {};
   var boardWidthIn  = typeof p.boardWidthIn === 'number' && p.boardWidthIn > 0 ? p.boardWidthIn : DEFAULT_BOARD_WIDTH_IN;
   var boardHeightIn = boardWidthIn * 9 / 16;
+  var width  = typeof p.width  === 'number' ? p.width  : (DEFAULT_PLACARD_WIDTH_IN  / boardWidthIn)  * 100;
+  var height = typeof p.height === 'number' ? p.height : (DEFAULT_PLACARD_HEIGHT_IN / boardHeightIn) * 100;
+  var size   = placardPhysicalSize({ width: width, height: height, boardWidthIn: boardWidthIn });
   return {
-    width:       typeof p.width  === 'number' ? p.width  : (DEFAULT_PLACARD_WIDTH_IN  / boardWidthIn)  * 100,
-    height:      typeof p.height === 'number' ? p.height : (DEFAULT_PLACARD_HEIGHT_IN / boardHeightIn) * 100,
+    width:       width,
+    height:      height,
     boardWidthIn: boardWidthIn,
     unit:        p.unit === 'cm' ? 'cm' : 'in',
     background:  p.background  || '#faf7f0',
     borderColor: p.borderColor || '#d6ccb0',
     items: Array.isArray(p.items) ? p.items.map(function (it, idx) {
-      var pos = defaultPlacardItemPosition(idx);
+      var pos = defaultPlacardItemPosition(idx, size.widthIn, size.heightIn);
       return {
         id:            it.id || ('item-' + idx),
         text:          it.text || '',
-        x:             typeof it.x === 'number' ? it.x : pos.x,
-        y:             typeof it.y === 'number' ? it.y : pos.y,
+        xIn:           typeof it.xIn === 'number' ? it.xIn : pos.xIn,
+        yIn:           typeof it.yIn === 'number' ? it.yIn : pos.yIn,
         fontFamily:    it.fontFamily || "'DM Sans', sans-serif",
         fontSize:      typeof it.fontSize === 'number' ? it.fontSize : 12,
         fontWeight:    it.fontWeight || 400,
@@ -1855,8 +1894,17 @@ function placardBoxStyle(gallery, slotPos) {
   return 'position: absolute; left: ' + pos.x + '%; top: ' + pos.y + '%; width: ' + g.width + '%; height: ' + g.height + '%; background: ' + g.background + '; border: 1px solid ' + g.borderColor + ';';
 }
 
-function placardItemStyle(item) {
-  return 'position: absolute; left: ' + item.x + '%; top: ' + item.y + '%;' + typographyStyle(item);
+// Converts an item's absolute inches-from-top-left position into the
+// percent CSS actually needs, against the placard's *current* physical
+// size — this is where "fixed physical position, not repositioned when the
+// placard is resized" actually happens: the stored xIn/yIn never change on
+// a resize, only this computed percent does (see the comment above
+// defaultPlacardItemPosition() for why an item can end up rendered outside
+// the box, and clipped, after a resize).
+function placardItemStyle(item, placardWidthIn, placardHeightIn) {
+  var xPct = placardWidthIn  > 0 ? (item.xIn / placardWidthIn)  * 100 : 0;
+  var yPct = placardHeightIn > 0 ? (item.yIn / placardHeightIn) * 100 : 0;
+  return 'position: absolute; left: ' + xPct + '%; top: ' + yPct + '%;' + typographyStyle(item);
 }
 
 // Resolved { id, text, style } list for one slot: gallery items with label
@@ -1866,6 +1914,7 @@ function placardItemStyle(item) {
 // override.
 function placardItemsFor(gallery, slot) {
   var g         = normalizeGalleryPlacard(gallery && gallery.placard_defaults);
+  var size      = placardPhysicalSize(g);
   var overrides = (slot && slot.placard && slot.placard.overrides) || {};
   var labels    = (slot && slot.photo && slot.photo.labels) || [];
   var out = [];
@@ -1880,7 +1929,7 @@ function placardItemsFor(gallery, slot) {
       text = r.text;
     }
     if (!text) return;
-    out.push({ id: item.id, text: text, style: placardItemStyle(item) });
+    out.push({ id: item.id, text: text, style: placardItemStyle(item, size.widthIn, size.heightIn) });
   });
   return out;
 }
@@ -2736,10 +2785,10 @@ function galleryAdminApp() {
 
     addPlacardItem() {
       const n = this.placardDraft.items.length;
-      const pos = defaultPlacardItemPosition(n);
+      const pos = defaultPlacardItemPosition(n, this.placardDraft.widthIn, this.placardDraft.heightIn);
       this.placardDraft.items.push({
         id: 'item-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36),
-        text: '', x: pos.x, y: pos.y,
+        text: '', xIn: pos.xIn, yIn: pos.yIn,
         fontFamily: "'DM Sans', sans-serif", fontSize: 12, fontWeight: 400,
         fontStyle: 'normal', color: '#3d3424', hideIfMissing: true,
       });
@@ -2749,12 +2798,39 @@ function galleryAdminApp() {
       this.placardDraft.items = this.placardDraft.items.filter(it => it.id !== id);
     },
 
+    // Preview chip style — position is xIn/yIn (absolute inches from the
+    // placard's own top-left corner) converted to a percent of the
+    // *current* draft size, exactly like the real render (placardItemStyle())
+    // so this preview always matches what actually shows up on a display.
+    previewItemStyle(item) {
+      const d    = this.placardDraft;
+      const xPct = d.widthIn  > 0 ? (item.xIn / d.widthIn)  * 100 : 0;
+      const yPct = d.heightIn > 0 ? (item.yIn / d.heightIn) * 100 : 0;
+      return 'left:' + xPct + '%; top:' + yPct + '%; font-family:' + item.fontFamily +
+        '; font-size:' + item.fontSize + 'px; font-weight:' + item.fontWeight +
+        '; font-style:' + item.fontStyle + '; color:' + item.color + ';';
+    },
+
+    // Small human-readable label ("0.30in, 1.20in from top-left") shown next
+    // to each item row so it's clear the position is now a fixed physical
+    // offset, not a percentage that would shift if the placard is resized.
+    itemPositionLabel(item) {
+      const d    = this.placardDraft;
+      const conv = d.unit === 'cm' ? inToCm : (v) => v;
+      const x = round2(conv(item.xIn));
+      const y = round2(conv(item.yIn));
+      return x + d.unit + ', ' + y + d.unit + ' from top-left';
+    },
+
     // Drag-to-position: mousedown/touchstart on an item chip in the preview
     // canvas starts tracking pointer movement, converting it to a percent
-    // position within the canvas (clamped 0-100) and writing it straight
-    // onto the item — Alpine's reactivity picks up the plain-object mutation
-    // and moves the chip live. Listens on window (not the chip itself) so
-    // dragging still works if the pointer leaves the chip mid-drag.
+    // position within the canvas (clamped 0-100), then to an absolute inches
+    // offset from the placard's top-left using the draft's *current*
+    // physical size — so what's stored is a fixed physical position, not a
+    // percentage that would silently shift if the placard is resized later.
+    // Alpine's reactivity picks up the plain-object mutation and moves the
+    // chip live. Listens on window (not the chip itself) so dragging still
+    // works if the pointer leaves the chip mid-drag.
     //
     // The item's top-left is offset from wherever the pointer grabbed it
     // (e.g. the middle of the text), so we capture that offset once at
@@ -2767,17 +2843,20 @@ function galleryAdminApp() {
       const canvas = this.$refs.placardCanvas;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
+      const d = this.placardDraft;
       const startPt  = event.touches ? event.touches[0] : event;
-      const itemPxX  = (item.x / 100) * rect.width;
-      const itemPxY  = (item.y / 100) * rect.height;
+      const itemPxX  = (d.widthIn  > 0 ? item.xIn / d.widthIn  : 0) * rect.width;
+      const itemPxY  = (d.heightIn > 0 ? item.yIn / d.heightIn : 0) * rect.height;
       const offsetX  = startPt.clientX - rect.left - itemPxX;
       const offsetY  = startPt.clientY - rect.top  - itemPxY;
       const move = (e) => {
         const pt = e.touches ? e.touches[0] : e;
-        let x = ((pt.clientX - rect.left - offsetX) / rect.width)  * 100;
-        let y = ((pt.clientY - rect.top  - offsetY) / rect.height) * 100;
-        item.x = Math.round(Math.max(0, Math.min(100, x)) * 10) / 10;
-        item.y = Math.round(Math.max(0, Math.min(100, y)) * 10) / 10;
+        let xPct = ((pt.clientX - rect.left - offsetX) / rect.width)  * 100;
+        let yPct = ((pt.clientY - rect.top  - offsetY) / rect.height) * 100;
+        xPct = Math.max(0, Math.min(100, xPct));
+        yPct = Math.max(0, Math.min(100, yPct));
+        item.xIn = Math.round((xPct / 100) * d.widthIn  * 100) / 100;
+        item.yIn = Math.round((yPct / 100) * d.heightIn * 100) / 100;
       };
       const up = () => {
         window.removeEventListener('mousemove', move);

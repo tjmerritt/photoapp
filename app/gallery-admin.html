@@ -479,11 +479,12 @@
               actually renders); <code>boardWidthIn</code>/<code>unit</code> are just the
               physical-size reference the visual editor's inch/cm fields convert through.
               Each item in <code>items</code>: <code>text</code> (supports
-              <code>{LabelName}</code>), <code>x</code>/<code>y</code> (percent position
-              within the placard box), <code>fontFamily</code>, <code>fontSize</code> (px),
-              <code>fontWeight</code>, <code>fontStyle</code>, <code>color</code>, and
-              <code>hideIfMissing</code> (skip the item entirely if a referenced label is
-              missing from the photo).
+              <code>{LabelName}</code>), <code>xIn</code>/<code>yIn</code> — a fixed distance
+              in inches from the placard's own top-left corner (not a percentage, so it
+              doesn't move if you resize the placard), <code>fontFamily</code>,
+              <code>fontSize</code> (px), <code>fontWeight</code>, <code>fontStyle</code>,
+              <code>color</code>, and <code>hideIfMissing</code> (skip the item entirely if
+              a referenced label is missing from the photo).
             </p>
             <button class="btn-secondary text-xs self-start" @click="togglePlacardJsonMode()">
               Apply &amp; back to visual editor
@@ -537,14 +538,19 @@
 
         <!-- Live preview — item chips are draggable to set position. The
              preview's own aspect ratio is the placard's real physical
-             width/height ratio, so it's accurate regardless of unit. -->
+             width/height ratio, so it's accurate regardless of unit. An
+             item's position is a fixed physical offset from this box's own
+             top-left corner (previewItemStyle()) — dragging it here sets
+             that fixed offset; it does NOT move if you change the width/
+             height fields above, since it isn't stored as a percentage of
+             this box's size. -->
         <div>
           <p class="text-xs font-medium text-[var(--muted)] mb-1">Preview — drag items to position them</p>
           <div class="placard-preview" x-ref="placardCanvas"
                :style="'aspect-ratio: ' + placardDraft.widthIn + ' / ' + placardDraft.heightIn + '; background: ' + placardDraft.background + '; border: 1px solid ' + placardDraft.borderColor + ';'">
             <template x-for="item in placardDraft.items" :key="item.id">
               <div class="placard-preview-item"
-                   :style="'left:' + item.x + '%; top:' + item.y + '%; font-family:' + item.fontFamily + '; font-size:' + item.fontSize + 'px; font-weight:' + item.fontWeight + '; font-style:' + item.fontStyle + '; color:' + item.color + ';'"
+                   :style="previewItemStyle(item)"
                    @mousedown="startItemDrag(item, $event)"
                    @touchstart="startItemDrag(item, $event)">
                 <span x-text="item.text || '(empty item)'"></span>
@@ -554,6 +560,13 @@
               No items yet — add one below.
             </span>
           </div>
+          <p class="text-xs text-[var(--muted)] mt-1">
+            An item's position is a fixed distance from this box's top-left
+            corner — resizing the placard above won't move items, but an
+            item can end up outside the box (and become invisible) if you
+            shrink the placard past it. Drag it back in, or enlarge the
+            placard again.
+          </p>
         </div>
 
         <!-- Item list -->
@@ -585,6 +598,7 @@
                   </svg>
                 </button>
               </div>
+              <p class="text-xs text-[var(--muted)] mt-1" x-text="itemPositionLabel(item)"></p>
             </div>
           </template>
           <button class="btn-secondary text-xs self-start" @click="addPlacardItem()">+ Add item</button>
