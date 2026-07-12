@@ -475,7 +475,7 @@
           <a :href="'/photo.html?photoid=' + p.photoid"
              target="_blank"
              class="wall-photo"
-             :style="`flex:${p.flexGrow} 1 0px`">
+             :style="row.stretch ? `flex:${p.flexGrow} 1 0px` : `flex:0 0 ${p.widthPx}px`">
             <img :src="thumbUrl(p.imageurl, p.displayWidth)"
                  :width="p.displayWidth"
                  :height="p.displayHeight"

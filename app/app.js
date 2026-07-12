@@ -1234,9 +1234,7 @@ function packRows(photos, containerWidth) {
   if (!photos.length) return [];
 
   const GAP          = 4;   // px gap between photos (matches CSS gap)
-  const MAX_ROW_H    = 400; // px — cap very-tall rows
-  const TARGET_ROW_H = 240; // px — target height for partial last rows
-  const MIN_ROW_H    = 80;  // px — floor so tiny images don't collapse
+  const TARGET_ROW_H = 240; // px — height for the trailing partial row (see `stretch` below)
 
   const rows = [];
   let i = 0;
@@ -1274,6 +1272,9 @@ function packRows(photos, containerWidth) {
 
     // ── Compute aspect-corrected (nominal) widths ──────────────────────────────
     // Scale every photo to the same height (maxNatH) so widths are comparable.
+    // This step alone is already size-invariant: two photos with the same
+    // aspect ratio always end up with the same scaledW regardless of how many
+    // native pixels each one has, since s = maxNatH/height cancels it out.
     const maxNatH = Math.max(...rowPhotos.map(p => p.height || 1));
     let nominalW = 0;
     const photoScales = rowPhotos.map(p => {
@@ -1282,33 +1283,59 @@ function packRows(photos, containerWidth) {
       return s;
     });
 
-    // ── Compute row height ────────────────────────────────────────────────────
-    // rowHeight controls how tall the row appears.  It depends on containerWidth
-    // but only affects the visual height, not whether photos overflow horizontally.
-    let rowHeight = TARGET_ROW_H;
-    if (containerWidth > 0) {
-      const totalGapPx = GAP * (rowPhotos.length - 1);
-      const rowScale   = (containerWidth - totalGapPx) / nominalW;
-      rowHeight = Math.round(maxNatH * rowScale);
-      if (isPartial) rowHeight = Math.min(rowHeight, TARGET_ROW_H);
-      rowHeight = Math.min(rowHeight, MAX_ROW_H);
-      rowHeight = Math.max(rowHeight, MIN_ROW_H);
+    // ── Compute row height + stretch mode ─────────────────────────────────────
+    // A full row is scaled by ONE uniform factor (rowScale) applied to both
+    // width and height together, so every photo's aspect ratio is preserved
+    // exactly — this is the original algorithm's whole point. It's then
+    // rendered with CSS flex-grow so the row fills exactly containerWidth.
+    //
+    // Previously this also clamped rowHeight to a [MIN_ROW_H, MAX_ROW_H]
+    // range independently of width — but flex-grow still stretches the row to
+    // fill the full container width regardless of that clamp, so whenever the
+    // clamp actually changed rowHeight from its natural value, every photo in
+    // the row got uniformly stretched/squashed by the ratio between the
+    // natural and clamped heights, distorting aspect ratio for the whole row
+    // (worst for rows with photos of very different native sizes, since a
+    // huge size disparity is exactly what pushes the natural height to an
+    // extreme that needed clamping). Removed: rowHeight is now always exactly
+    // maxNatH * rowScale for full rows, so width and height are always scaled
+    // by the same factor, with no separate clamp to fight it.
+    //
+    // The trailing partial row doesn't have enough photos to justify
+    // stretching to the full container width without the same distortion, so
+    // it isn't stretched at all: it renders each photo at its own natural
+    // aspect-correct width for a fixed TARGET_ROW_H, left-aligned, same as any
+    // other justified-gallery layout's last row.
+    const totalGapPx = GAP * (rowPhotos.length - 1);
+    const stretch    = !isPartial && containerWidth > 0;
+    let rowHeight, finalScale;
+    if (stretch) {
+      const rowScale = (containerWidth - totalGapPx) / nominalW;
+      finalScale = rowScale;
+      rowHeight  = Math.max(1, Math.round(maxNatH * rowScale));
+    } else {
+      finalScale = TARGET_ROW_H / maxNatH;
+      rowHeight  = TARGET_ROW_H;
     }
 
     // ── Build row ──────────────────────────────────────────────────────────────
-    // flexGrow = aspect-corrected nominal width (un-rounded) → CSS distributes
-    // the row's available space proportionally, always summing to 100% width.
+    // flexGrow  = aspect-corrected nominal width (un-rounded) → CSS distributes
+    //             the row's available space proportionally when stretch=true,
+    //             always summing to exactly 100% width.
+    // widthPx   = each photo's own fixed pixel width when stretch=false, so it
+    //             renders at its true aspect ratio rather than being stretched
+    //             to fill the row.
     // displayWidth = pixel estimate for the imgproxy size hint (not used for layout).
-    const finalScale = rowHeight / maxNatH;
-
     rows.push({
       startIndex: i,
       height:     rowHeight,
+      stretch,
       photos: rowPhotos.map((p, idx) => {
         const scaledW = (p.width || 1) * photoScales[idx];
         return {
           ...p,
-          flexGrow:      scaledW,                                   // CSS flex-grow
+          flexGrow:      scaledW,                                        // CSS flex-grow (stretch rows)
+          widthPx:       Math.max(1, Math.round(scaledW * finalScale)),  // CSS fixed width (non-stretch rows)
           displayHeight: rowHeight,
           displayWidth:  Math.max(80, Math.round(scaledW * finalScale)), // thumbUrl hint
         };
