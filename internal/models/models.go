@@ -408,4 +408,5 @@ type EmojiTypeResponse struct {
 	HasSkintones bool    `json:"has_skintones,omitempty"` // true if skintone variants exist
 	Skintone     *string `json:"skintone,omitempty"`      // set on variant rows
 	Hexcode      string  `json:"hexcode,omitempty"`       // needed to fetch variants
+	UsageCount   int     `json:"usage_count,omitempty"`   // total reactions across all photos (Phase 5c popularity sort)
 }

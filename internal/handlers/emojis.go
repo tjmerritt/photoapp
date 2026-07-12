@@ -235,7 +235,12 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 		return
 	}
 
-	// Page of results with has_skintones flag.
+	// Page of results with has_skintones flag and global usage_count.
+	// Popular-first (5c): order by total reaction count across all photos,
+	// descending, falling back to alphabetical alt_text for ties — since
+	// most emoji types have zero reactions, this naturally reads as
+	// "frequently-used emojis first, everything else alphabetical" while
+	// still being a single stable ORDER BY that's safe to paginate over.
 	args = append(args, limit, offset)
 	rows, err := h.DB.Query(r.Context(),
 		fmt.Sprintf(`
@@ -244,10 +249,16 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 			       EXISTS (
 			           SELECT 1 FROM emoji_types v
 			           WHERE v.base_hexcode = et.hexcode AND v.is_active = TRUE
-			       ) AS has_skintones
+			       ) AS has_skintones,
+			       COALESCE(ec.usage_count, 0) AS usage_count
 			FROM   emoji_types et
+			LEFT JOIN (
+			    SELECT emojiid, COUNT(*) AS usage_count
+			    FROM   emoji_reactions
+			    GROUP  BY emojiid
+			) ec ON ec.emojiid = et.emojiid
 			WHERE  %s
-			ORDER  BY et.sort_order, et.created_at
+			ORDER  BY COALESCE(ec.usage_count, 0) DESC, et.alt_text ASC, et.sort_order, et.created_at
 			LIMIT  $%d OFFSET $%d
 		`, where, n, n+1),
 		args...,
@@ -263,7 +274,7 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 	for rows.Next() {
 		var et models.EmojiTypeResponse
 		if err := rows.Scan(&et.EmojiID, &et.EmojiChar, &et.ImageURL, &et.AltText,
-			&et.IsActive, &et.Hexcode, &et.HasSkintones); err != nil {
+			&et.IsActive, &et.Hexcode, &et.HasSkintones, &et.UsageCount); err != nil {
 			slog.Error("ListTypes", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
@@ -437,7 +448,7 @@ func (h *EmojisHandler) UploadType(w http.ResponseWriter, r *http.Request, _ htt
 
 	middleware.WriteJSON(w, http.StatusCreated, models.EmojiTypeResponse{
 		EmojiID:  emojiid,
-		ImageURL: &imageURL,
+		ImageURL: proxyImageURLPtr(&imageURL),
 		AltText:  altText,
 		IsActive: true,
 	})

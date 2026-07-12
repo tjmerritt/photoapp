@@ -40,6 +40,12 @@ function getCurrentUser() {
 function getIsLabelAdmin() {
   return !!window._isLabelAdmin;
 }
+// window._canUploadEmoji: true when the current user holds the EmojiUpload
+// permission (see photoApp.refreshPermissions) — governs whether emojiPicker
+// shows its "Upload your own" control (Phase 5c).
+function getCanUploadEmoji() {
+  return !!window._canUploadEmoji;
+}
 
 // fetchPermissionSummary — shared by photoApp and wallApp's refreshPermissions
 // methods so both the photo page and the photo wall gate the upload icon
@@ -308,6 +314,17 @@ function emojiPicker(photo) {
     skintoneVariants: [],
     skintoneLoading:  false,
 
+    // 5c: "Upload your own" — a small inline form (gated on EmojiUpload)
+    // exposing the existing POST /api/v1/emoji/types endpoint, which
+    // previously had no frontend UI at all.
+    showUploadForm: false,
+    uploadAltText:  '',
+    uploadFile:     null,
+    uploading:      false,
+    uploadError:    '',
+
+    get canUploadEmoji() { return getCanUploadEmoji(); },
+
     async init() {
       const uid = window._testUserID;   // set for both real sessions and test-user mode
       if (uid) {
@@ -410,6 +427,48 @@ function emojiPicker(photo) {
       } catch(e) {
         document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Reaction failed: ${e.message}` }));
       }
+    },
+
+    toggleUploadForm() {
+      this.showUploadForm = !this.showUploadForm;
+      this.uploadError = '';
+    },
+
+    handleUploadFile(ev) {
+      this.uploadFile = (ev.target.files && ev.target.files[0]) || null;
+    },
+
+    async submitUpload() {
+      if (!this.uploadFile || !this.uploadAltText.trim()) return;
+      this.uploading = true;
+      this.uploadError = '';
+      try {
+        const fd = new FormData();
+        fd.append('image', this.uploadFile);
+        fd.append('alttext', this.uploadAltText.trim());
+        const resp = await fetch('/api/v1/emoji/types', {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: fd,
+        });
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.error || `HTTP ${resp.status}`);
+        }
+        const created = await resp.json();
+        // New upload goes straight to the front of the visible list — it has
+        // no reactions yet, so it wouldn't otherwise surface until page 1 of
+        // the popularity-sorted list caught up with the alphabetical tail.
+        this.emojis = [created, ...this.emojis];
+        this.total++;
+        this.showUploadForm = false;
+        this.uploadAltText  = '';
+        this.uploadFile     = null;
+        if (this.$refs.uploadFileInput) this.$refs.uploadFileInput.value = '';
+      } catch(e) {
+        this.uploadError = e.message;
+      }
+      this.uploading = false;
     },
   };
 }
@@ -723,6 +782,7 @@ function photoApp() {
     testUser: null,
     isLabelAdmin: false,
     canUploadPhotos: false,
+    canUploadEmoji: false,
 
     searchQuery: '',
 
@@ -741,11 +801,20 @@ function photoApp() {
     //    is clickable at all (see index.html/photo.html), so a user without
     //    it never even reaches the popup, rather than discovering the
     //    rejection only after picking files (see Session 41 in SUMMARIES.md).
+    //  - canUploadEmoji (Phase 5c): EmojiUpload — matches exactly what the
+    //    backend's POST /api/v1/emoji/types checks (that handler doesn't
+    //    treat Admin as an implicit fallback the way the label-restriction
+    //    checks do, so this deliberately checks EmojiUpload alone). Governs
+    //    whether the "Upload your own" control shows in the Add Reaction
+    //    picker. window._canUploadEmoji mirrors this for emojiPicker, same
+    //    reason as window._isLabelAdmin above.
     async refreshPermissions() {
       const summary = await fetchPermissionSummary(() => this.authHeaders());
       this.isLabelAdmin = summary.includes('Admin') || summary.includes('LabelAdmin');
       this.canUploadPhotos = summary.includes('PhotoCreate');
+      this.canUploadEmoji = summary.includes('EmojiUpload');
       window._isLabelAdmin = this.isLabelAdmin;
+      window._canUploadEmoji = this.canUploadEmoji;
     },
 
     authHeaders() {
@@ -1203,7 +1272,10 @@ function emojiHover() {
     },
 
     reactionTitle(em) {
-      return this.hasReacted(em) ? 'Click to remove reaction' : 'Click to react';
+      // 5c: name the emoji in the native browser tooltip, not just the click
+      // action — e.g. "thumbs up — Click to remove reaction".
+      const action = this.hasReacted(em) ? 'Click to remove reaction' : 'Click to react';
+      return em.alttext ? (em.alttext + ' — ' + action) : action;
     },
 
     onEmojiEnter(em) {
