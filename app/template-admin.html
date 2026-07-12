@@ -397,7 +397,16 @@
                   or a dashed placard marker to re-attach it to a different
                   side of the slot.
                 </p>
-                <div class="template-preview" x-ref="templatePreview">
+                <!-- Deliberately no x-ref here: Alpine's x-ref inside this
+                     x-for (one per template row, all present in the DOM at
+                     once since x-show only hides via CSS) would collide —
+                     $refs is a single flat map keyed by name, so it'd always
+                     resolve to whichever row registered last, not the one
+                     actually being dragged in. The drag handlers in app.js
+                     instead resolve the container via
+                     event.currentTarget.closest('.template-preview'), which
+                     is unambiguous per-row. -->
+                <div class="template-preview">
                   <template x-for="(slot, i) in previewSlots()" :key="i">
                     <div class="preview-slot"
                          :style="'left:' + slot.x + '%; top:' + slot.y + '%; width:' + slot.w + '%; height:' + slot.h + '%;'"

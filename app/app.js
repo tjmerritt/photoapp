@@ -3569,7 +3569,17 @@ function templateAdminApp() {
     // the edge isn't a supported look.
     startSlotDrag(i, event) {
       event.preventDefault();
-      const canvas = this.$refs.templatePreview;
+      // NOT this.$refs.templatePreview: Alpine's x-ref inside an x-for loop
+      // registers into a single flat map on the component root keyed only by
+      // ref name (confirmed in the vendored alpinejs.min.js source) — with
+      // one template-preview per template row, all present in the DOM at
+      // once (x-show only toggles CSS display, it doesn't remove elements,
+      // so the ref is never re-registered/cleaned up on collapse), $refs
+      // would silently resolve to whichever row happened to register last,
+      // not necessarily the row actually being dragged in. Walking up from
+      // the clicked element itself is unambiguous regardless of how many
+      // templates exist.
+      const canvas = event.currentTarget.closest('.template-preview');
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
       // rect is captured once here and reused for every move of this drag
@@ -3617,7 +3627,8 @@ function templateAdminApp() {
     // the parent slot.
     startSlotResize(i, corner, event) {
       event.preventDefault();
-      const canvas = this.$refs.templatePreview;
+      // See the $refs-in-x-for comment in startSlotDrag() above.
+      const canvas = event.currentTarget.closest('.template-preview');
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
       // See the same guard/comment in startSlotDrag() above — a zero-size
@@ -3659,7 +3670,8 @@ function templateAdminApp() {
     // design tools.
     startPlacardDrag(i, event) {
       event.preventDefault();
-      const canvas = this.$refs.templatePreview;
+      // See the $refs-in-x-for comment in startSlotDrag() above.
+      const canvas = event.currentTarget.closest('.template-preview');
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
       // See the same guard/comment in startSlotDrag() above — a zero-size

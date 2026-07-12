@@ -905,3 +905,19 @@ Since the display canvas is rendered responsively (no fixed physical size on its
 
 ### Open items
 - None. Both files are static frontend assets — sync-only, no backend rebuild needed.
+
+## Session 30 — Fixed: Slot Drag/Resize Broken by Alpine x-ref Collision Across Templates
+
+### What was done
+- Follow-up bug report right after Session 29's fix: "adjusting the placard in template admin is working, but adjusting the slot is now broken — corners don't move, box doesn't move."
+- Root cause, found by reading the vendored `alpinejs.min.js` source directly: Alpine's `x-ref` directive registers into a single flat map on the component root, keyed only by the ref name — `n._x_refs[e] = t`, with no per-`x-for`-iteration scoping, and the entry is only ever cleaned up when its element is truly removed from the DOM (never on an `x-show` hide, which just toggles CSS `display`). Template Admin's preview `<div class="template-preview" x-ref="templatePreview">` lives inside the `x-for="templates"` loop — one per template row, and since `x-show` keeps every row's markup in the DOM (just hidden), **all** of them register the same `x-ref="templatePreview"` name. `this.$refs.templatePreview` therefore always resolved to whichever row happened to register *last*, regardless of which template the user actually expanded. If that "winning" row wasn't the one currently expanded, its preview is `display:none` — a genuinely zero-size box — which Session 29's new zero-rect guard then (correctly, but unhelpfully) used to block the drag entirely. This bug has existed since Session 27 whenever a template-admin user had 2+ templates; it just hadn't been reported yet, and the test suite never caught it because `run34.js`'s fixture only ever created a single template, so there was never a "wrong row" for `$refs` to collide with.
+- `app/app.js`: `startSlotDrag()`, `startSlotResize()`, `startPlacardDrag()` no longer read `this.$refs.templatePreview`. Each now resolves its preview container via `event.currentTarget.closest('.template-preview')` — unambiguous no matter how many templates exist, since it's derived from the actual element that was clicked/touched rather than a name-keyed lookup.
+- `app/template-admin.html`: removed the now-unused `x-ref="templatePreview"` attribute (left a comment explaining why, so nobody re-adds it and reintroduces the same collision).
+
+### Testing notes
+- `run34.js`: added a new regression block that seeds **two** templates ("Alpha", "Beta" — same photo count, so alphabetically Alpha is first/non-last in the sorted list), expands the non-last one (Alpha), stubs *only* Alpha's own preview to a valid non-zero rect (Beta's is left at JSDOM's default 0x0, exactly simulating a real collapsed row), and confirms dragging Alpha's slot and resizing it by a corner both actually work.
+- Verified this test is a real regression guard, not a tautology: temporarily reverted the fix back to `this.$refs.templatePreview`, re-ran the suite, and confirmed 8 checks failed (including, notably, some in the original single-template placard-drag flow too — `$refs` was fragile there in a subtler way this fixture hadn't previously exercised). Restored the fix and confirmed all checks pass again.
+- Full placard/template suite (`run30`–`run37`, 230 checks) passes with no regressions.
+
+### Open items
+- None. Both files are static frontend assets — sync-only, no backend rebuild needed.
