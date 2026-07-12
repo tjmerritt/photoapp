@@ -1357,3 +1357,53 @@ Fixed by restoring the missing `>`. Re-ran the plain open/close `<a>` tag count 
 ### Open items
 - This is a good argument for treating any "ambiguous"/non-green result from my own verification scripts as worth a follow-up look rather than a dismissible artifact, especially right before telling the user a fix is ready to test.
 - Still pending the accumulated `make build` / end-to-end verification caveat from every prior Go-touching session (unaffected by this particular fix, which is pure HTML markup).
+
+## Session 48 — Photo Wall Confirmed Fixed; Restricted-Label Testing Begins
+
+### What was done
+The user confirmed the photo wall now renders correctly — closing out the whole Session 43/45/47 investigation (aspect-ratio math → CSP template-literal parsing → a missing `>` typo). Restricted-label testing (Phase 5b, from Session 39) then surfaced its first bug: the Add Label dropdown's lock indicator for restricted names showed the literal text `u{1F512}` instead of a 🔒 glyph.
+
+Root cause is the *same family* of CSP-evaluator limitation found in Sessions 40 and 45, just in the string-escape handling rather than syntax parsing. Decompiling the tokenizer's `readString()` (done back in Session 40) shows it only special-cases four escapes — `\n`, `\t`, `\r`, `\\` — plus whatever the current quote character is; any other escape sequence hits its `default` branch, which keeps the character *after* the backslash but drops the backslash itself. So the source's `'flex:' ... ' \u{1F512}'` (from Session 39) tokenized as the literal seven characters `u{1F512}`, not the Unicode code point escape it was written as.
+
+Fixed in `app/photo.html`'s label-name `<option>` template by replacing the escape sequence with the actual 🔒 character typed directly into the string literal — since the file is UTF-8 and the CSP tokenizer just copies non-backslash characters through verbatim, an unescaped literal emoji works fine; only escape *sequences* are the problem. Grepped all of `app/*.html` for any other `\u{` or `\uXXXX` escape inside directive attributes — this was the only one.
+
+### Testing notes
+- Grep confirmed no remaining `\u` escapes in any `.html` directive attribute.
+- Tag-balance re-check on `photo.html` (`div`/`template`/`span`/`option`/`select`) unchanged and balanced.
+- Bumped `app.js` cache-bust query string to `?v=47`.
+- No live browser here to confirm the glyph renders — but this fix has the same "about as verifiable as it gets" character as the missing-`>` fix: the literal character is now directly in the source rather than routed through an escape the evaluator can't handle.
+
+### Open items
+- Worth a quick visual sweep of any other emoji/symbol usage added across Sessions 39–41 (color swatches, restricted-label lock icon on the chip itself) — the chip's lock icon is an inline `<svg>`, not a text escape, so it's unaffected, but flagging as a reminder that *any* future non-ASCII character in a directive expression should be typed literally, never as a `\u` escape, given this parser's limitation.
+- Still pending the accumulated `make build` / end-to-end verification caveat from every prior Go-touching session (unaffected by this fix, which is pure HTML markup) — restricted-label testing is now underway per the user's message, so more findings may follow in this same thread.
+
+## Session 49 — Hide Restricted Label Names from Non-Admins + Live Custom-Name Validation
+
+### What was done
+Continued restricted-label testing feedback: the user didn't want restricted label names visible in the Add Label dropdown at all unless they have LabelAdmin (previously they showed up disabled with a 🔒 suffix, per Session 39/48), and wanted an immediate error if they typed a restricted name into the custom "Other…" text field, rather than only finding out after clicking Add Label and getting a 403 back.
+
+In `app/app.js`'s `labelEditor()`: split the single `knownNames` array into two. `allNameInfos` now holds the full, unfiltered `{name, color, restricted}` list straight from `GET /api/v1/label-names`, kept around purely for validation. `knownNames` — the array the dropdown's `x-for` actually iterates — is now a filtered view: LabelAdmins see everything, everyone else gets `allNameInfos.filter(n => !n.restricted)`, so restricted names never appear as options at all for non-admins (the old per-option `:disabled`/lock-emoji rendering in `photo.html` still exists and still works correctly for LabelAdmins, who do see restricted entries; it's simply unreachable for non-admins now since they never receive a restricted `n` to iterate over).
+
+Added a new computed getter, `customNameRestricted`, that trims `customName`, looks it up (exact match, mirroring the backend's `WHERE name = $1`) in the unfiltered `allNameInfos`, and returns true only when that name is restricted and the user isn't a LabelAdmin. Wired this into `photo.html`'s custom-name `<input>`: it now gets a red border/ring and an inline `"<name>" is a restricted label name.` message the moment the typed text matches, live as they type (no need to press Add Label first). Also added `customNameRestricted` to the Add Label button's `:disabled` condition so submission is blocked outright while the error is showing, not just visually flagged.
+
+### Testing notes
+- `node --check app/app.js` passes.
+- Grepped `app.js` and `photo.html` for the CSP-parser hazards this codebase has repeatedly hit (backticks and semicolons inside directive attributes, `\u` escapes) — none introduced by this change.
+- Re-ran the tag-balance script (`div`/`template`/`span`/`a`/`option`/`select`/`p`/`button`/`input`) across `photo.html` and `index.html` — all balanced.
+- Bumped `app.js` cache-bust query string to `?v=48` across all 7 HTML files (both `app.js` and `photo.html` changed this session).
+- No live browser in this sandbox — as with every frontend change this conversation, recommend the user reload and confirm: (1) a non-LabelAdmin's Add Label dropdown no longer lists any restricted names, (2) a LabelAdmin's dropdown still shows them (with the 🔒 suffix, selectable), and (3) typing a restricted name into the "Other…" field as a non-admin shows the red inline error immediately and keeps the Add Label button disabled.
+
+### Open items
+- None outstanding from this specific request. All bugs reported so far this conversation (label edit/delete buttons, upload permission error/gating, uploaded-photo visibility, wall aspect ratio, CSP template literals, `/api/v1/permissions` 500, missing `>` typo, lock-icon escape, and now restricted-name dropdown filtering/live validation) have been fixed; still pending is the standing `make build` / end-to-end verification caveat, since no Go toolchain or live browser is available in this sandbox.
+
+## Session 50 — Removed `app.js?v=N` Cache-Busting
+
+### What was done
+The user pointed out that the `?v=N` cache-busting query string added across Sessions 37/44–48 wasn't actually needed — their browser's clear-cache button works fine — and that bumping it on every change was just gratuitous diff noise. Removed the query string from all 7 `<script src="/app.js...">` tags (`index.html`, `photo.html`, `galleries.html`, `gallery-admin.html`, `template-admin.html`, `display.html`, `display-edit.html`), reverting to a plain `/app.js`.
+
+### Testing notes
+- Grepped all `.html` files to confirm no `app.js?v=` references remain.
+- No other content changed; this is a pure revert of the cache-bust query string.
+
+### Open items
+- None. Going forward, `app.js` changes don't need any accompanying script-tag edit.

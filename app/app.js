@@ -467,7 +467,8 @@ function labelEditor(data, photo) {
     photo,
     editingLabel: data,
 
-    knownNames:  [],
+    knownNames:   [], // dropdown list — restricted names filtered out unless isLabelAdmin
+    allNameInfos: [], // unfiltered — used to validate a manually-typed "Other…" name
     knownValues: [],
     loadingValues: false,
 
@@ -485,14 +486,32 @@ function labelEditor(data, photo) {
     get effectiveValue() { return this.valueIsOther ? this.customValue.trim() : this.selectedValue; },
     get isLabelAdmin()   { return getIsLabelAdmin(); },
 
+    // True when the manually-typed "Other…" name exactly matches a name
+    // that's restricted and the current user isn't an Admin/LabelAdmin —
+    // lets the modal show an error immediately as the user types, rather
+    // than waiting for the 403 that would come back after clicking Add Label.
+    get customNameRestricted() {
+      if (!this.nameIsOther) return false;
+      const trimmed = this.customName.trim();
+      if (!trimmed) return false;
+      const info = this.allNameInfos.find(n => n.name === trimmed);
+      return !!(info && info.restricted && !this.isLabelAdmin);
+    },
+
     async init() {
       try {
         const r = await fetch('/api/v1/label-names');
         const d = await r.json();
-        // Phase 5b: each entry is now {name, color, restricted} rather than a
-        // bare string, so the picker can show/disable restricted names.
-        this.knownNames = d.names || [];
-      } catch { this.knownNames = []; }
+        // Phase 5b: each entry is {name, color, restricted}. Non-admins never
+        // even see restricted names as options — they may view labels that
+        // already exist with a restricted name, but shouldn't be offered them
+        // when adding a new one. allNameInfos keeps the full list around so a
+        // manually-typed "Other…" name can still be checked against it.
+        this.allNameInfos = d.names || [];
+      } catch { this.allNameInfos = []; }
+      this.knownNames = this.isLabelAdmin
+        ? this.allNameInfos
+        : this.allNameInfos.filter(n => !n.restricted);
 
       if (this.editingLabel) {
         if (!this.knownNames.some(n => n.name === this.editingLabel.name)) {
