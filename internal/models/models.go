@@ -67,6 +67,23 @@ type Label struct {
 	Value    string `json:"value"`
 	UserID   string `json:"userid"`
 	Username string `json:"username"`
+	// ColorHex is this label name's persisted color override (Phase 5a), if
+	// any — omitted entirely when unset, in which case clients fall back to
+	// a deterministic hash-based color derived from Name.
+	ColorHex *string `json:"color,omitempty"`
+	// Restricted mirrors label_names.restricted for this label's name
+	// (Phase 5b): true means only Admin/LabelAdmin may add, modify, or
+	// delete labels with this name. Existing labels remain visible to
+	// everyone regardless.
+	Restricted bool `json:"restricted"`
+}
+
+// LabelNameInfo describes a label name's shared, cross-photo attributes —
+// returned by GET /api/v1/label-names and PATCH /api/v1/label-names.
+type LabelNameInfo struct {
+	Name       string  `json:"name"`
+	ColorHex   *string `json:"color,omitempty"`
+	Restricted bool    `json:"restricted"`
 }
 
 type Emoji struct {

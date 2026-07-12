@@ -22,6 +22,7 @@
 //	--label           Extra label in Name=Value format; may be repeated
 //	--output          Write url,photoid results to this file
 //	--refresh-exif    Re-download images and update labels even when photoid already exists
+//	--restrict-labels Mark --label-supplied label names as restricted (EXIF-derived label names are always restricted)
 //	--dry-run         Print what would be inserted without writing to the DB
 package main
 
@@ -71,6 +72,7 @@ func main() {
 		titleFromURL   bool
 		dryRun         bool
 		refreshEXIF    bool
+		restrictLabels bool
 		outputFile     string
 		extraLabels    labelFlag
 		cascadeXMLPath string
@@ -83,6 +85,7 @@ func main() {
 	flag.BoolVar(&titleFromURL, "title-from-url", true, "Derive title from URL basename")
 	flag.BoolVar(&dryRun, "dry-run", false, "Print rows without inserting")
 	flag.BoolVar(&refreshEXIF, "refresh-exif", false, "Re-download images and replace labels even when photoid already exists")
+	flag.BoolVar(&restrictLabels, "restrict-labels", false, "Mark --label-supplied label names as restricted (EXIF-derived label names are always restricted regardless of this flag)")
 	flag.StringVar(&outputFile, "output", "", "Write url,photoid results to this CSV file")
 	flag.Var(&extraLabels, "label", "Extra label in Name=Value format (repeatable)")
 	flag.StringVar(&cascadeXMLPath, "cascade", os.Getenv("HAAR_CASCADE_XML"),
@@ -227,6 +230,11 @@ func main() {
 					} else {
 						action = "updated"
 						updated++
+						if restrictLabels {
+							if err := photoimport.MarkNamesRestricted(ctx, pool, names([]label(extraLabels))); err != nil {
+								slog.Warn("failed to mark label names restricted", "photoid", hintID, "error", err)
+							}
+						}
 					}
 				} else {
 					unchanged++
@@ -276,6 +284,22 @@ func main() {
 		}
 		allLabels := mergeLabels(exifLabels, computedLabels)
 		allLabels = mergeLabels(allLabels, []label(extraLabels))
+
+		// Phase 5b: EXIF-derived label names are always restricted, regardless
+		// of --restrict-labels — see internal/photoimport.MarkNamesRestricted's
+		// doc. --restrict-labels additionally restricts --label-supplied names
+		// (not the computed Resolution/Public names). Both are no-ops in
+		// --dry-run mode, since nothing else is written to the DB either.
+		if !dryRun {
+			if err := photoimport.MarkNamesRestricted(ctx, pool, names(exifLabels)); err != nil {
+				slog.Warn("failed to mark EXIF label names restricted", "url", rawURL, "error", err)
+			}
+			if restrictLabels {
+				if err := photoimport.MarkNamesRestricted(ctx, pool, names([]label(extraLabels))); err != nil {
+					slog.Warn("failed to mark label names restricted", "url", rawURL, "error", err)
+				}
+			}
+		}
 
 		if dryRun {
 			action := "insert"
@@ -497,6 +521,16 @@ func mergeLabels(base, extra []label) []label {
 	out := make([]label, len(merged))
 	for i, l := range merged {
 		out[i] = label{l.Name, l.Value}
+	}
+	return out
+}
+
+// names extracts just the Name field from a slice of local labels — used to
+// pass label names on to photoimport.MarkNamesRestricted.
+func names(ls []label) []string {
+	out := make([]string, len(ls))
+	for i, l := range ls {
+		out[i] = l.name
 	}
 	return out
 }

@@ -34,6 +34,12 @@ function getAuthHeaders() {
 function getCurrentUser() {
   return window._currentUser || null;
 }
+// window._isLabelAdmin: true when the current user holds the Admin or
+// LabelAdmin permission (see photoApp.refreshPermissions) — restricted label
+// names (Phase 5b) can only be added/modified/deleted by these users.
+function getIsLabelAdmin() {
+  return !!window._isLabelAdmin;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Utilities
@@ -461,17 +467,20 @@ function labelEditor(data, photo) {
 
     get effectiveName()  { return this.nameIsOther  ? this.customName.trim()  : this.selectedName; },
     get effectiveValue() { return this.valueIsOther ? this.customValue.trim() : this.selectedValue; },
+    get isLabelAdmin()   { return getIsLabelAdmin(); },
 
     async init() {
       try {
         const r = await fetch('/api/v1/label-names');
         const d = await r.json();
+        // Phase 5b: each entry is now {name, color, restricted} rather than a
+        // bare string, so the picker can show/disable restricted names.
         this.knownNames = d.names || [];
       } catch { this.knownNames = []; }
 
       if (this.editingLabel) {
-        if (!this.knownNames.includes(this.editingLabel.name)) {
-          this.knownNames = [this.editingLabel.name, ...this.knownNames];
+        if (!this.knownNames.some(n => n.name === this.editingLabel.name)) {
+          this.knownNames = [{ name: this.editingLabel.name, color: null, restricted: false }, ...this.knownNames];
         }
         await this.loadValues(this.editingLabel.name);
         if (this.knownValues.includes(this.editingLabel.value)) {
@@ -510,6 +519,15 @@ function labelEditor(data, photo) {
         this.selectedValue = '';
         this.customValue   = '';
         this.$nextTick(() => { if (this.$refs.customNameInput) this.$refs.customNameInput.focus(); });
+        return;
+      }
+      // Defense in depth: the backend is the source of truth on restriction
+      // (POST /api/v1/labels rejects with 403), but disabled <option>s should
+      // already prevent a non-admin from getting here for a restricted name.
+      const info = this.knownNames.find(n => n.name === this.selectedName);
+      if (info && info.restricted && !this.isLabelAdmin) {
+        document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `"${info.name}" is a restricted label name.` }));
+        this.selectedName = '';
         return;
       }
       this.selectedValue = '';
@@ -668,12 +686,30 @@ function photoApp() {
     authConfig: { googleEnabled: false, appleEnabled: false, facebookEnabled: false, microsoftEnabled: false },
 
     testUser: null,
+    isLabelAdmin: false,
 
     searchQuery: '',
 
     thumbUrl(url, cssWidth) { return thumbUrl(url, cssWidth); },
     labelColorFor(name) { return labelColorFor(name); },
     avatarSrc(user) { return avatarSrc(user); },
+
+    // Phase 5b: refreshes whether the current user (real login or test-user
+    // impersonation) holds Admin or LabelAdmin, which governs whether
+    // restricted label names can be added/edited/deleted/recolored from the
+    // photo page. window._isLabelAdmin mirrors this for labelEditor, which
+    // runs in its own Alpine scope and can't reach photoApp's `this`.
+    async refreshPermissions() {
+      try {
+        const resp = await fetch('/api/v1/permissions', { headers: this.authHeaders() });
+        const d = await resp.json();
+        const summary = d.summary || [];
+        this.isLabelAdmin = summary.includes('Admin') || summary.includes('LabelAdmin');
+      } catch {
+        this.isLabelAdmin = false;
+      }
+      window._isLabelAdmin = this.isLabelAdmin;
+    },
 
     authHeaders() {
       if (this.loggedInUser) return {};
@@ -688,6 +724,7 @@ function photoApp() {
       this.testUser = user;
       window._testUserID = user ? user.userid : null;
       window._currentUser = user;
+      this.refreshPermissions();
       if (this.photo) this.loadPhoto(this.photo.photoid);
     },
 
@@ -697,6 +734,7 @@ function photoApp() {
       window._testUserID = null;
       window._loggedIn = false;
       window._currentUser = null;
+      this.refreshPermissions();
       if (this.photo) this.loadPhoto(this.photo.photoid);
     },
 
@@ -726,6 +764,7 @@ function photoApp() {
           document.dispatchEvent(new CustomEvent('photoapp:auth-ready', { detail: me }));
         }
       } catch { /* non-fatal */ }
+      await this.refreshPermissions();
 
       const params = new URLSearchParams(window.location.search);
       const photoid = params.get('photoid') || 'random';
@@ -742,6 +781,7 @@ function photoApp() {
         window._testUserID = e.detail.userid;
         window._loggedIn = true;
         window._currentUser = e.detail;
+        this.refreshPermissions();
         if (this.photo) this.loadPhoto(this.photo.photoid);
       });
       document.addEventListener('photoapp:profile-image', (e) => {
@@ -932,6 +972,29 @@ function photoApp() {
         this.photo.labels = this.photo.labels.filter(l => l.labelid !== label.labelid);
       } catch(e) {
         this.showToast(`Delete failed: ${e.message}`);
+      }
+    },
+
+    // Phase 5a: assigns/overrides the color for every label sharing this
+    // name (color is a property of the label *name*, not an individual
+    // label row — see label_names table). Pass '' to clear an override and
+    // fall back to labelColorFor's deterministic hash color. Admin/LabelAdmin
+    // only; the backend enforces this (PATCH /api/v1/label-names).
+    async setLabelColor(label, colorHex) {
+      try {
+        const resp = await fetch(`/api/v1/label-names?name=${encodeURIComponent(label.name)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
+          body: JSON.stringify({ color_hex: colorHex }),
+        });
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.error || `HTTP ${resp.status}`);
+        }
+        const updated = await resp.json();
+        this.photo.labels.forEach(l => { if (l.name === label.name) l.color = updated.color; });
+      } catch(e) {
+        this.showToast(`Color update failed: ${e.message}`);
       }
     },
   };

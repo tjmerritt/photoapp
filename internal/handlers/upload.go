@@ -214,6 +214,15 @@ func (h *UploadPhotosHandler) uploadOne(
 		}
 	}
 
+	// Phase 5b: EXIF-derived label names are always restricted, regardless
+	// of entry point — see internal/photoimport's MarkNamesRestricted doc.
+	// Done inside this same transaction so a photo and its restricted-name
+	// bookkeeping commit or roll back together.
+	if err := photoimport.MarkNamesRestricted(ctx, tx, photoimport.Names(exifLabels)); err != nil {
+		cleanup()
+		return "", fmt.Errorf("marking EXIF label names restricted: %w", err)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		cleanup()
 		return "", fmt.Errorf("committing: %w", err)

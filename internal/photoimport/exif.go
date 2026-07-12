@@ -14,6 +14,7 @@ package photoimport
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -21,6 +22,7 @@ import (
 	_ "image/png"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rwcarlsen/goexif/exif"
 )
 
@@ -132,4 +134,47 @@ func MergeLabels(base, extra []Label) []Label {
 		}
 	}
 	return out
+}
+
+// Names extracts just the Name field from a label slice — a small
+// convenience for callers that need to pass label names on to
+// MarkNamesRestricted without the values.
+func Names(labels []Label) []string {
+	names := make([]string, len(labels))
+	for i, l := range labels {
+		names[i] = l.Name
+	}
+	return names
+}
+
+// dbExecer is satisfied by both *pgxpool.Pool and pgx.Tx, letting
+// MarkNamesRestricted run either standalone or as part of a caller's own
+// transaction (internal/handlers/upload.go uses the latter, so a photo and
+// its restricted label names commit or roll back together).
+type dbExecer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// MarkNamesRestricted upserts each name into label_names with restricted set
+// to TRUE — creating the row if the name has never been seen before, or
+// flipping restricted on if it already existed unrestricted. It never
+// un-restricts a name; that's only done explicitly (PATCH
+// /api/v1/label-names). Empty names are skipped. This is how Phase 5b's
+// "EXIF import always marks its labels restricted" rule is implemented: both
+// cmd/import-photos and the browser upload endpoint call this with the
+// names that came out of ExtractEXIF.
+func MarkNamesRestricted(ctx context.Context, db dbExecer, names []string) error {
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if _, err := db.Exec(ctx, `
+			INSERT INTO label_names (name, restricted)
+			VALUES ($1, TRUE)
+			ON CONFLICT (name) DO UPDATE SET restricted = TRUE, updated_at = NOW()
+		`, name); err != nil {
+			return fmt.Errorf("marking label name %q restricted: %w", name, err)
+		}
+	}
+	return nil
 }

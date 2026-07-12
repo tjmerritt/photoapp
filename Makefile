@@ -30,9 +30,16 @@ migrate-up:
 	psql "$$DATABASE_URL" -f migrations/008_exhibitions.sql
 	psql "$$DATABASE_URL" -f migrations/009_public_flag.sql
 	psql "$$DATABASE_URL" -f migrations/010_profile_image_source.sql
+	psql "$$DATABASE_URL" -f migrations/011_facebook_auth.sql
+	psql "$$DATABASE_URL" -f migrations/012_permissions.sql
+	psql "$$DATABASE_URL" -f migrations/013_remove_authorized_non_public.sql
+	psql "$$DATABASE_URL" -f migrations/014_galleries_displays.sql
+	psql "$$DATABASE_URL" -f migrations/015_microsoft_auth.sql
+	psql "$$DATABASE_URL" -f migrations/016_label_names.sql
 
-migrate-down:
-	psql "$$DATABASE_URL" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+#Commented out so that the database isn't destroyed accidentally
+#migrate-down:
+#	psql "$$DATABASE_URL" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 
 seed:
 	psql "$$DATABASE_URL" -f migrations/002_seed.sql

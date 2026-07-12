@@ -42,9 +42,11 @@ func fetchLabels(ctx context.Context, pool *db.Pool, photoid string, offset, lim
 
 	rows, err := pool.Query(ctx, `
 		SELECT l.labelid::text, l.name, l.value,
-		       l.added_by_userid::text, u.username
+		       l.added_by_userid::text, u.username,
+		       ln.color_hex, COALESCE(ln.restricted, FALSE)
 		FROM   labels l
-		JOIN   users  u ON u.userid = l.added_by_userid
+		JOIN   users  u  ON u.userid = l.added_by_userid
+		LEFT   JOIN label_names ln ON ln.name = l.name
 		WHERE  l.photoid = $1 AND l.deleted_at IS NULL
 		ORDER  BY l.created_at
 		LIMIT  $2 OFFSET $3
@@ -57,7 +59,8 @@ func fetchLabels(ctx context.Context, pool *db.Pool, photoid string, offset, lim
 	labels := make([]models.Label, 0)
 	for rows.Next() {
 		var l models.Label
-		if err := rows.Scan(&l.LabelID, &l.Name, &l.Value, &l.UserID, &l.Username); err != nil {
+		if err := rows.Scan(&l.LabelID, &l.Name, &l.Value, &l.UserID, &l.Username,
+			&l.ColorHex, &l.Restricted); err != nil {
 			return nil, 0, err
 		}
 		labels = append(labels, l)

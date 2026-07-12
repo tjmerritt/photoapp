@@ -565,19 +565,42 @@
                    ? 'ring-2 ring-accent'
                    : 'ring-1 ring-[var(--border)]'"
                  x-data="{ open: false }" @click.outside="open = false">
-              <!-- Clicking the name toggles inline edit/delete controls (logged-in users only) -->
-              <span class="label-name flex items-center px-3 py-1 text-white font-medium text-xs rounded-l-full"
-                    :class="currentUser ? 'cursor-pointer' : ''"
-                    :style="'background:' + labelColorFor(label.name)"
-                    @click.stop="currentUser && (open = !open)"
-                    x-text="label.name"></span>
+              <!-- Clicking the name toggles inline edit/delete controls (logged-in users only).
+                   Restricted labels (Phase 5b) only open the popup for Admin/LabelAdmin —
+                   regular users can still view the label, just not modify it. -->
+              <span class="label-name flex items-center gap-1 px-3 py-1 text-white font-medium text-xs rounded-l-full"
+                    :class="currentUser && (isLabelAdmin || !label.restricted) ? 'cursor-pointer' : ''"
+                    :style="'background:' + (label.color || labelColorFor(label.name))"
+                    @click.stop="currentUser && (isLabelAdmin || !label.restricted) && (open = !open)"
+                    :title="label.restricted ? 'Restricted label' : ''">
+                <!-- Lock icon: restricted labels may be viewed by anyone but only
+                     added/edited/deleted/recolored by Admin/LabelAdmin. -->
+                <template x-if="label.restricted">
+                  <svg class="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <rect x="5" y="11" width="14" height="9" rx="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M8 11V7a4 4 0 018 0v4"/>
+                  </svg>
+                </template>
+                <span x-text="label.name"></span>
+              </span>
               <span class="flex items-center px-3 py-1 bg-white text-brand font-medium rounded-r-full cursor-pointer hover:bg-gray-50 transition-colors"
                     @click.stop="loadPhoto(photo.photoid, activeLabelID === label.labelid ? null : label.labelid)"
                     :title="activeLabelID === label.labelid ? 'Clear label filter' : 'Find photos with this label'"
                     x-text="label.value"></span>
-              <template x-if="currentUser && open">
+              <template x-if="currentUser && open && (isLabelAdmin || !label.restricted)">
                 <span class="absolute left-1/2 -translate-x-1/2 top-full flex flex-col items-center z-10" style="padding-top:3px">
                   <span class="flex items-center gap-1 bg-white border border-[var(--border)] rounded-lg shadow-md px-1 py-0.5">
+                    <!-- Phase 5a: color override, Admin/LabelAdmin only. Applies to
+                         every label sharing this name, since color is keyed on the
+                         label name, not the individual label row. -->
+                    <template x-if="isLabelAdmin">
+                      <input type="color"
+                             :value="label.color || '#888888'"
+                             @click.stop
+                             @input.stop="setLabelColor(label, $event.target.value)"
+                             class="w-6 h-6 rounded cursor-pointer border-0 p-0 bg-transparent"
+                             title="Set color for this label name" />
+                    </template>
                     <button @click.stop="open = false; openLabelModal(label)"
                             class="w-6 h-6 flex items-center justify-center rounded hover:bg-gray-100 text-muted hover:text-brand transition"
                             title="Edit">
@@ -1030,8 +1053,10 @@
                       @change="onNameChange()"
                       class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30 bg-white">
                 <option value="" disabled>— choose a name —</option>
-                <template x-for="n in knownNames" :key="n">
-                  <option :value="n" x-text="n"></option>
+                <template x-for="n in knownNames" :key="n.name">
+                  <option :value="n.name"
+                          :disabled="n.restricted && !isLabelAdmin"
+                          x-text="n.restricted ? (n.name + ' \u{1F512}') : n.name"></option>
                 </template>
                 <option value="__other__">Other…</option>
               </select>

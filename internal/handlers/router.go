@@ -80,6 +80,9 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	r.PATCH("/api/v1/labels/:labelid",                    auth(labels.Update))
 	r.DELETE("/api/v1/labels/:labelid",                   auth(labels.Delete))
 
+	// Label names (write — PermAdmin/PermLabelAdmin enforced in handler)
+	r.PATCH("/api/v1/label-names",                        auth(labels.UpdateName))
+
 	// Emoji reactions
 	r.POST("/api/v1/emoji/react",                         auth(emojis.React))
 	r.DELETE("/api/v1/emoji/react",                       auth(emojis.Unreact))

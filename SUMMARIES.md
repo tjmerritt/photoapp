@@ -1111,3 +1111,37 @@ Left `labelLimit = 10` (the initial page size) unchanged — the fix that matter
 ### Open items
 - `photo.emojisurl` has the identical un-wired-pagination shape; flagged for awareness, not fixed here (out of scope for this request).
 - Still pending the `make build` / end-to-end verification called out in prior Phase 7 sessions.
+
+## Session 39 — Phase 5a & 5b: Label Colors and Restricted Labels
+
+### What was done
+Implemented both remaining Phase 5 sub-phases together, since PLAN.md's two drafts (a `label_name_colors` table for 5a, columns added to a `label_names` table for 5b) describe attributes of the same underlying concept — a label *name*, not an individual label row — and unifying them avoided two overlapping tables.
+
+**Migration** (`migrations/016_label_names.sql`): new `label_names` table, one row per distinct label name — `color_hex` (nullable, `CHECK`-constrained to `#rrggbb`), `restricted` (`BOOLEAN NOT NULL DEFAULT FALSE`), plus the standard `created_at`/`updated_at` + `trg_set_updated_at` trigger. A name only gets a row once something explicitly sets one of these (EXIF import, `--restrict-labels`, or the new admin PATCH endpoint) — no row means "no color override, not restricted," which is exactly what the zero values already mean.
+
+**Backend:**
+- `internal/models/models.go`: `Label` gained `ColorHex *string` (json `color`, omitempty) and `Restricted bool`; new `LabelNameInfo{Name, ColorHex, Restricted}` type.
+- `internal/handlers/fetch.go`: `fetchLabels` now `LEFT JOIN`s `label_names` so every label a photo page loads carries its name's color/restricted state.
+- `internal/handlers/labels.go`: added `fetchLabelNameInfo`/`isLabelNameRestricted` helpers. `Create`, `Update`, and `Delete` all now check the relevant label name(s) against `label_names.restricted` and reject with 403 unless the caller holds `Admin` or `LabelAdmin` (`Update` checks both the existing name and, on rename, the new name). `Names()` (`GET /api/v1/label-names`) now returns `{name, color, restricted}` objects instead of bare strings. New `UpdateName` handler (`PATCH /api/v1/label-names?name=`, Admin/LabelAdmin only) upserts a name's `color_hex` and/or `restricted` — an empty `color_hex` clears the override back to the frontend's deterministic hash color.
+- `internal/handlers/router.go`: registered the new `PATCH /api/v1/label-names` route.
+- `internal/photoimport/exif.go`: new `Names(labels)` helper and `MarkNamesRestricted(ctx, db, names)`, which upserts each name into `label_names` with `restricted = TRUE` (never un-restricts). Takes a small `dbExecer` interface so it works against both a bare pool and a transaction.
+- `internal/handlers/upload.go`: `uploadOne()` now calls `MarkNamesRestricted` with the photo's EXIF-derived label names, inside the same transaction as the photo/label inserts — so a photo and its restricted-name bookkeeping commit or roll back together. Implements "EXIF import always marks its labels restricted."
+- `cmd/import-photos/main.go`: added `--restrict-labels` flag. EXIF-derived names are now *always* marked restricted after each successful (non-dry-run) fetch, regardless of the flag; when `--restrict-labels` is also set, `--label`-supplied names are marked restricted too (computed `Resolution`/`Public` names are never restricted). Wired into both the main per-URL insert path and the `--refresh-exif`-off fast path that patches labels onto an already-existing photoid without re-downloading.
+
+**Frontend** (`app/app.js`, `app/photo.html`):
+- New `window._isLabelAdmin` global (mirrors the existing `window._currentUser` pattern) plus `getIsLabelAdmin()` helper, kept in sync by `photoApp.refreshPermissions()` — fetches `GET /api/v1/permissions` and checks its `summary` for `Admin`/`LabelAdmin`. Called on init, login, logout, and test-user switch (every point `currentUser` changes).
+- Label chips: background color now prefers `label.color` (the admin-set override) over `labelColorFor(name)`'s hash-based fallback; a lock icon renders on restricted labels; the edit/delete popup only opens for non-restricted labels or for Admin/LabelAdmin.
+- Admin/LabelAdmin users additionally see an inline `<input type="color">` swatch in the chip popup, wired to a new `setLabelColor(label, colorHex)` method (`PATCH /api/v1/label-names`) that applies the new color to every currently-loaded label sharing that name.
+- The add/edit label modal's name dropdown (`labelEditor` in `app.js`) now consumes the `{name,color,restricted}` object shape from `GET /api/v1/label-names`; restricted names show a lock glyph and are `disabled` in the `<select>` for non-admins (defense in depth — the backend is the actual enforcement point).
+
+### Testing notes
+- `node --check app/app.js` passes.
+- `photo.html` tag-balance scan (`div`/`template`/`span`) all balanced (177/177, 98/98, 74/74).
+- Manually traced every new/edited Go code path line by line (handlers, models, router, photoimport, cmd/import-photos) for type correctness and call-signature matches — no Go toolchain available in this sandbox (no `go` binary, no network egress to install one), so this is review, not compilation.
+- Confirmed `github.com/jackc/pgx/v5/pgconn` (used by `MarkNamesRestricted`'s `dbExecer` interface) needs no new `go.mod`/`go.sum` entry — it's a sub-package of the already-required `pgx/v5` module.
+- Confirmed `permissions.Checker.HasAny` (used throughout the new restricted-label checks) already existed prior to this session with the exact signature called.
+
+### Open items
+- `make build` / `go vet` still needs to be run in an environment with the Go toolchain before deploying — this is the accumulated caveat across every Go-touching session so far.
+- No UI was added for manually toggling a label name's `restricted` flag on/off (only for setting color) — 5b's requirements describe restriction as applied automatically (EXIF import, `--restrict-labels`), not as something admins toggle by hand, so this was left out as out of scope. `PATCH /api/v1/label-names` supports a `restricted` field already if that's wanted later — it would just need a small UI affordance.
+- End-to-end verification (upload a photo with EXIF, confirm its labels show as restricted and locked to non-admins; run `import-photos --restrict-labels`, confirm `--label`-supplied names get restricted too; confirm the color picker round-trips) still needs a real Postgres + running server, unavailable in this sandbox.
