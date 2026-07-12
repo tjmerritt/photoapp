@@ -873,3 +873,18 @@ Since the display canvas is rendered responsively (no fixed physical size on its
 
 ### Open items
 - Placard drag's `gapIn` is an approximation (assumes a default board width, since a template isn't tied to any one gallery) — same caveat already noted for the marker's rendered position in Session 26, now also applying to what dragging produces.
+
+## Session 28 — Fixed: Placard Marker Ignored gapIn in Template Admin Preview
+
+### What was done
+- Bug report: dragging the placard marker in Template Admin's preview correctly updated the stored `gapIn` value (confirmed working in Session 27), but the marker itself never visually moved to reflect it — it always rendered at a fixed, hardcoded gap regardless of what `gapIn` actually was, whether set by dragging or typed directly into the JSON textarea.
+- Root cause: `templateAdminApp.previewPlacardStyle(slot)` had `const pw = 16, ph = 6, gap = 1;` — `gap` was a leftover placeholder constant from before `gapIn` existed as a real per-slot value, and was never wired up when the `{side, align, gapIn}` schema was introduced (Session 26) or when drag-to-reposition was added (Session 27). Both of those sessions correctly wrote `gapIn` into the data; nothing read it back for rendering.
+- `app/app.js`: `previewPlacardStyle()` now computes `gap` dynamically from `cfg.gapIn` (falling back to `DEFAULT_PLACARD_GAP_IN`, clamped non-negative), converted from inches to percent using the same `DEFAULT_BOARD_WIDTH_IN` / `boardHeightIn` reference `placardDragToConfig()` already used for the reverse conversion — the two are now exact inverses, so drag → store gapIn → re-render round-trips correctly.
+- `app/template-admin.html`: updated the stale HTML comment above the placard-marker template loop, which used to say the marker used "a fixed reference size/gap" — only the *size* is still a fixed reference; gapIn is now honored.
+
+### Testing notes
+- Added a new targeted regression test to `run34.js` calling `previewPlacardStyle()` directly with two different `gapIn` values (0.15in and 2.7in) on an identical slot/side/align, hand-verifying the exact expected `top%` for each (50.56% and 60% respectively) — this is the precise scenario the bug involved, and no prior test would have caught it (existing tests only checked the stored `gapIn` value coming out of `placardDragToConfig`, never whether the marker's rendered position actually used it).
+- Full placard/template suite (`run30`–`run37`, 217 checks) passes with no regressions.
+
+### Open items
+- None. Both files are static frontend assets — sync-only, no backend rebuild needed.

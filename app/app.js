@@ -3508,13 +3508,23 @@ function templateAdminApp() {
     // aspect ratio, matte/frame width, and presentation.align — none of
     // which this schematic preview (no real photos) has. This instead
     // treats the slot's own box as a stand-in for the frame, and uses the
-    // marker's fixed CSS size (.preview-placard: 16% x 6%) and a small fixed
-    // gap, just to show roughly which edge/side the placard will end up on.
+    // marker's fixed CSS size (.preview-placard: 16% x 6%). gapIn (inches)
+    // is converted to percent-of-canvas via DEFAULT_BOARD_WIDTH_IN — the
+    // exact inverse of placardDragToConfig()'s own conversion — so dragging
+    // the marker further from the slot, or typing a larger gapIn directly
+    // into the JSON, visibly moves it further away here too, rather than
+    // always rendering at some fixed guessed gap regardless of the real
+    // stored value.
     previewPlacardStyle(slot) {
       const cfg   = (slot && slot.placard) || {};
       const side  = ['top', 'bottom', 'left', 'right'].indexOf(cfg.side) !== -1 ? cfg.side : 'bottom';
       const align = typeof cfg.align === 'number' ? Math.max(0, Math.min(100, cfg.align)) : 50;
-      const pw = 16, ph = 6, gap = 1; // matches .preview-placard's fixed reference size
+      const gapIn = typeof cfg.gapIn === 'number' ? Math.max(0, cfg.gapIn) : DEFAULT_PLACARD_GAP_IN;
+      const pw = 16, ph = 6; // matches .preview-placard's fixed reference size
+      const boardHeightIn = DEFAULT_BOARD_WIDTH_IN * 9 / 16;
+      const gap = (side === 'top' || side === 'bottom')
+        ? (gapIn / boardHeightIn) * 100
+        : (gapIn / DEFAULT_BOARD_WIDTH_IN) * 100;
       const sx = slot.x || 0, sy = slot.y || 0, sw = slot.w || 0, sh = slot.h || 0;
       let left, top;
       if (side === 'top' || side === 'bottom') {

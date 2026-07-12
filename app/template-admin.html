@@ -415,7 +415,11 @@
                        measured box (which this schematic preview, with no
                        real photos, can't reproduce), so previewPlacardStyle()
                        approximates it using the slot's own box as a stand-in
-                       for the frame and a fixed reference size/gap. Draggable —
+                       for the frame and a fixed reference *size* — gapIn
+                       itself is honored (converted from inches to percent),
+                       so the marker's distance from the slot does reflect
+                       whatever side/align/gapIn is actually stored, whether
+                       set by dragging or typed into the JSON. Draggable —
                        see startPlacardDrag()/placardDragToConfig() in app.js. -->
                   <template x-for="(slot, i) in previewSlots()" :key="'placard-' + i">
                     <div x-show="slot.placard" class="preview-placard"
