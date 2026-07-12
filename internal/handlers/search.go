@@ -146,11 +146,14 @@ func parseSearchQuery(raw string) parsedQuery {
 //
 //	$1 = exhibitionID string ('' means all exhibitions)
 //	$2 = canSeePrivate bool (true when caller holds PrivatePhotoView)
+//	$3 = currentUserID string ('' when anonymous) — lets a photo's own owner
+//	     find it in search even when it's private and they lack
+//	     PrivatePhotoView (see the owner exception in the WHERE clause below).
 //
-// Additional parameters are appended dynamically starting at $3.
-func buildSearchSQL(pq parsedQuery, exhibitionID string, canSeePrivate bool) (string, []interface{}) {
-	args := []interface{}{exhibitionID, canSeePrivate}
-	argN := 2
+// Additional parameters are appended dynamically starting at $4.
+func buildSearchSQL(pq parsedQuery, exhibitionID string, canSeePrivate bool, currentUserID string) (string, []interface{}) {
+	args := []interface{}{exhibitionID, canSeePrivate, currentUserID}
+	argN := 3
 
 	// next registers a new query argument and returns its placeholder.
 	next := func(v interface{}) string {
@@ -299,7 +302,7 @@ scores(photoid, total_score) AS (
 	// ── WHERE ─────────────────────────────────────────────────────────────────
 	b.WriteString("WHERE p.deleted_at IS NULL\n")
 	b.WriteString("  AND ($1 = '' OR p.exhibitionid::text = $1)\n")
-	b.WriteString("  AND (p.is_public OR $2)\n")
+	b.WriteString("  AND (p.is_public OR $2 OR ($3 <> '' AND p.owner_userid::text = $3))\n")
 
 	for _, tt := range pq.TitleTexts {
 		ta := next(tt)
@@ -348,7 +351,7 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	userID, _ := middleware.UserID(ctx)
 	canSeePrivate, _ := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermPrivatePhotoView)
 
-	sql, args := buildSearchSQL(pq, exhibitionID, canSeePrivate)
+	sql, args := buildSearchSQL(pq, exhibitionID, canSeePrivate, userID)
 
 	rows, err := h.DB.Query(ctx, sql, args...)
 	if err != nil {

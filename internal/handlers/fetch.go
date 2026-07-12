@@ -151,8 +151,10 @@ func fetchEmojiUsers(ctx context.Context, pool *db.Pool, photoid, emojiid string
 }
 
 // fetchRelated returns all related photos for a given photo, scoped to the exhibition.
-// canSeePrivate controls whether non-public photos are included in results.
-func fetchRelated(ctx context.Context, pool *db.Pool, photoid, exhibitionID string, canSeePrivate bool) ([]models.RelatedPhoto, error) {
+// canSeePrivate controls whether non-public photos are included in results;
+// currentUserID additionally always includes the caller's own photos (see the
+// owner exception in PhotoHandler.ServeHTTP for why).
+func fetchRelated(ctx context.Context, pool *db.Pool, photoid, exhibitionID string, canSeePrivate bool, currentUserID string) ([]models.RelatedPhoto, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT rp.related_photoid::text,
 		       COALESCE(rp.scaled_image_url, p.image_url),
@@ -163,9 +165,9 @@ func fetchRelated(ctx context.Context, pool *db.Pool, photoid, exhibitionID stri
 		WHERE  rp.photoid = $1
 		  AND  p.deleted_at IS NULL
 		  AND  ($2 = '' OR p.exhibitionid::text = $2)
-		  AND  (p.is_public OR $3)
+		  AND  (p.is_public OR $3 OR ($4 <> '' AND p.owner_userid::text = $4))
 		ORDER  BY rp.sort_order
-	`, photoid, exhibitionID, canSeePrivate)
+	`, photoid, exhibitionID, canSeePrivate, currentUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -185,8 +187,10 @@ func fetchRelated(ctx context.Context, pool *db.Pool, photoid, exhibitionID stri
 
 // fetchRelatedByLabel returns up to 8 photos that share the same label name+value
 // as the given labelID, excluding the current photo, scoped to the exhibition.
-// canSeePrivate controls whether non-public photos are included in results.
-func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID, exhibitionID string, canSeePrivate bool) ([]models.RelatedPhoto, error) {
+// canSeePrivate controls whether non-public photos are included in results;
+// currentUserID additionally always includes the caller's own photos (see the
+// owner exception in PhotoHandler.ServeHTTP for why).
+func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID, exhibitionID string, canSeePrivate bool, currentUserID string) ([]models.RelatedPhoto, error) {
 	rows, err := pool.Query(ctx, `
 		WITH label_info AS (
 			SELECT name, value FROM labels WHERE labelid = $1 AND deleted_at IS NULL
@@ -200,7 +204,7 @@ func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID, e
 			  AND  p.deleted_at IS NULL
 			  AND  l.deleted_at IS NULL
 			  AND  ($3 = '' OR p.exhibitionid::text = $3)
-			  AND  (p.is_public OR $4)
+			  AND  (p.is_public OR $4 OR ($5 <> '' AND p.owner_userid::text = $5))
 		),
 		top_ten AS (
 			SELECT * FROM candidates ORDER BY view_count DESC LIMIT 10
@@ -214,7 +218,7 @@ func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID, e
 		SELECT photoid, image_url, image_width, image_height FROM random_three
 		UNION ALL
 		SELECT photoid, image_url, image_width, image_height FROM top_ten
-	`, labelID, photoid, exhibitionID, canSeePrivate)
+	`, labelID, photoid, exhibitionID, canSeePrivate, currentUserID)
 	if err != nil {
 		return nil, err
 	}

@@ -41,6 +41,22 @@ function getIsLabelAdmin() {
   return !!window._isLabelAdmin;
 }
 
+// fetchPermissionSummary — shared by photoApp and wallApp's refreshPermissions
+// methods so both the photo page and the photo wall gate the upload icon
+// (and, for photoApp, restricted-label UI) identically, from one place.
+// authHeadersFn is a zero-arg function returning the caller's current auth
+// headers (photoApp/wallApp each have their own authHeaders() bound to their
+// own loggedInUser/testUser state, so it's passed in rather than assumed).
+async function fetchPermissionSummary(authHeadersFn) {
+  try {
+    const r = await fetch('/api/v1/permissions', { headers: authHeadersFn() });
+    const d = await r.json();
+    return d.summary || [];
+  } catch {
+    return [];
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Utilities
 // ─────────────────────────────────────────────────────────────────────────────
@@ -687,6 +703,7 @@ function photoApp() {
 
     testUser: null,
     isLabelAdmin: false,
+    canUploadPhotos: false,
 
     searchQuery: '',
 
@@ -694,20 +711,21 @@ function photoApp() {
     labelColorFor(name) { return labelColorFor(name); },
     avatarSrc(user) { return avatarSrc(user); },
 
-    // Phase 5b: refreshes whether the current user (real login or test-user
-    // impersonation) holds Admin or LabelAdmin, which governs whether
-    // restricted label names can be added/edited/deleted/recolored from the
-    // photo page. window._isLabelAdmin mirrors this for labelEditor, which
-    // runs in its own Alpine scope and can't reach photoApp's `this`.
+    // Refreshes permission-gated UI state for the current user (real login or
+    // test-user impersonation):
+    //  - isLabelAdmin (Phase 5b): Admin or LabelAdmin, governs restricted
+    //    label add/edit/delete/recolor. window._isLabelAdmin mirrors this for
+    //    labelEditor, which runs in its own Alpine scope and can't reach
+    //    photoApp's `this`.
+    //  - canUploadPhotos: PhotoCreate, matching exactly what the backend's
+    //    POST /api/v1/photos/upload checks — governs whether the upload icon
+    //    is clickable at all (see index.html/photo.html), so a user without
+    //    it never even reaches the popup, rather than discovering the
+    //    rejection only after picking files (see Session 41 in SUMMARIES.md).
     async refreshPermissions() {
-      try {
-        const resp = await fetch('/api/v1/permissions', { headers: this.authHeaders() });
-        const d = await resp.json();
-        const summary = d.summary || [];
-        this.isLabelAdmin = summary.includes('Admin') || summary.includes('LabelAdmin');
-      } catch {
-        this.isLabelAdmin = false;
-      }
+      const summary = await fetchPermissionSummary(() => this.authHeaders());
+      this.isLabelAdmin = summary.includes('Admin') || summary.includes('LabelAdmin');
+      this.canUploadPhotos = summary.includes('PhotoCreate');
       window._isLabelAdmin = this.isLabelAdmin;
     },
 
@@ -1316,6 +1334,7 @@ function wallApp() {
     testUser:     null,
     authConfig:   { googleEnabled: false, appleEnabled: false, facebookEnabled: false, microsoftEnabled: false },
     toast:        { visible: false, message: '', timer: null },
+    canUploadPhotos: false,
 
     get currentUser() { return this.loggedInUser || this.testUser || null; },
 
@@ -1328,10 +1347,18 @@ function wallApp() {
       return this.testUser ? { 'X-User-ID': this.testUser.userid } : {};
     },
 
+    // Mirrors photoApp.refreshPermissions (see there for why this exists) —
+    // wallApp only needs the upload-gating half, not the label-admin one.
+    async refreshPermissions() {
+      const summary = await fetchPermissionSummary(() => this.authHeaders());
+      this.canUploadPhotos = summary.includes('PhotoCreate');
+    },
+
     selectTestUser(user) {
       this.testUser           = user;
       window._testUserID      = user ? user.userid : null;
       window._currentUser     = user;
+      this.refreshPermissions();
     },
 
     async logout() {
@@ -1340,6 +1367,7 @@ function wallApp() {
       window._testUserID  = null;
       window._loggedIn    = false;
       window._currentUser = null;
+      this.refreshPermissions();
     },
 
     showToast(message) {
@@ -1375,6 +1403,7 @@ function wallApp() {
           document.dispatchEvent(new CustomEvent('photoapp:auth-ready', { detail: me }));
         }
       } catch { /* non-fatal */ }
+      await this.refreshPermissions();
 
       document.addEventListener('photoapp:toast',        e => this.showToast(e.detail));
       document.addEventListener('photoapp:auth-success', e => {
@@ -1382,6 +1411,7 @@ function wallApp() {
         window._testUserID      = e.detail.userid;
         window._loggedIn        = true;
         window._currentUser     = e.detail;
+        this.refreshPermissions();
       });
       document.addEventListener('photoapp:profile-image', e => {
         if (this.loggedInUser) this.loggedInUser = { ...this.loggedInUser, profileImage: e.detail };

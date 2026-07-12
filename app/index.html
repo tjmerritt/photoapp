@@ -176,12 +176,17 @@
         </div>
       </template>
 
-      <!-- Upload photos -->
-      <button @click="loggedInUser && ($store.upload.open = true)"
+      <!-- Upload photos. Gated on both being logged in AND holding PhotoCreate
+           (checked via wallApp.refreshPermissions, mirroring exactly what
+           POST /api/v1/photos/upload enforces server-side) — a user without
+           it never sees a clickable icon or the popup at all, rather than
+           discovering the rejection only after picking files. -->
+      <button @click="loggedInUser && canUploadPhotos && ($store.upload.open = true)"
               @dragover.prevent
-              @drop.prevent="loggedInUser && $store.upload.addFiles($event.dataTransfer.files)"
-              :class="loggedInUser ? 'hover:bg-gray-100 cursor-pointer' : 'cursor-default opacity-40'"
-              class="p-2 rounded-lg transition" title="Upload photos">
+              @drop.prevent="loggedInUser && canUploadPhotos && $store.upload.addFiles($event.dataTransfer.files)"
+              :class="loggedInUser && canUploadPhotos ? 'hover:bg-gray-100 cursor-pointer' : 'cursor-default opacity-40'"
+              class="p-2 rounded-lg transition"
+              :title="loggedInUser && !canUploadPhotos ? 'You do not have permission to upload photos' : 'Upload photos'">
         <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
         </svg>

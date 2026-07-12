@@ -64,7 +64,7 @@ func (h *UploadPhotosHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, 
 	exhibitionID := middleware.ExhibitionID(ctx)
 
 	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermPhotoCreate); err != nil || !ok {
-		middleware.WriteError(w, http.StatusForbidden, "forbidden")
+		middleware.WriteError(w, http.StatusForbidden, "you do not have permission to upload photos")
 		return
 	}
 
