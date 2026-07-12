@@ -822,3 +822,33 @@ Since the display canvas is rendered responsively (no fixed physical size on its
 
 ### Open items
 - None known.
+
+## Session 26 — Placard Position Now Attaches to a Side of the Photo Frame
+
+### What was done
+- Replaced the old free-form `slot_positions[i].placard = { x, y }` (an absolute percent position anywhere on the 16:9 canvas, unrelated to where the photo actually ended up) with `placard = { side, align, gapIn }` — the placard now attaches to one edge of the *photo frame itself*:
+  - `side`: `"top"` | `"bottom"` | `"left"` | `"right"` — which edge of the frame the placard sits against.
+  - `align`: a continuous 0–100 value — position along that edge, from the frame's own top/left (0) to its bottom/right (100); 50 centers it. For a top/bottom placard this slides it left↔right; for left/right it slides top↔bottom.
+  - `gapIn`: physical distance in inches between the placard and the frame (same board-relative unit as the gallery's placard width/height/boardWidthIn).
+  - Per the user's decision, this fully replaces the old x/y positioning — there's no separate "custom position" mode.
+- This is a bigger computation than before because the photo frame can be smaller than (and offset within) its slot, depending on the photo's aspect ratio and the template's `presentation.align` setting — so `placardBoxStyle()` now has to work out the frame's *actual* on-screen box before it can attach anything to it:
+  1. The slot's own box, converted from percent to px using the canvas's actual measured width (`canvasWidthPx`, from Session 23/24's `layoutFrames()`).
+  2. The frame's px size within that slot — `frameSizes[i]` (`computeFrameBoxSize()`'s `{w, h}`, already measured for matte/frame rendering).
+  3. Where that frame box sits *within* the slot — from `presentation.align`, the same flexbox alignment the real `.photo-frame` element uses (`normalizeAlign()`/`photoAreaStyle()`).
+  4. From the frame's resolved px box, `side`/`align`/`gapIn` place the placard directly against an edge (gap converted to px via the canvas's actual current px-per-inch, `canvasWidthPx / boardWidthIn` — the real on-screen scale, not the fixed 96dpi reference `placardFontScale()` uses for font sizing).
+  5. Converted back to percent-of-canvas so it still renders through the existing `position: absolute; left/top: %` mechanism.
+  - Before the first `layoutFrames()` measurement pass (or if `frameSize` isn't available), falls back to roughly "below the slot" (the old default's formula) rather than flashing at a nonsensical 0%,0%.
+- `app/app.js`:
+  - `defaultSlotPositions()`/`normalizeSlotPositions()` — new `placard` shape, defaults `{ side: 'bottom', align: 50, gapIn: 0.15 }`; `align` is clamped 0–100, an invalid `side` falls back to `'bottom'`.
+  - `placardBoxStyle(gallery, slotPos, canvasPxWidth, frameSize, presentation)` — two new params, full position rewrite as described above (still also sets `--placard-hover-scale` exactly as before).
+  - `displayApp`/`displayEditApp`'s `placardBoxStyle(i)` wrapper methods now pass `this.frameSizes[i]` and the template's `presentation` through.
+- `app/template-admin.html`: updated the slot-positions JSON docs paragraph to describe the new schema; the preview's placard marker now calls a new `previewPlacardStyle(slot)` method (in `templateAdminApp`) instead of an inline `slot.placard.x/.y` expression — since this schematic preview has no real photos/frames to measure, it approximates by treating the slot's own box as a stand-in for the frame, documented clearly as an approximation (the real display resolves it against the actual measured frame).
+
+### Testing notes
+- `run30.js`: rewrote the `defaultSlotPositions`/`normalizeSlotPositions` tests for the new schema (including align-clamping and invalid-side fallback), and added a new hand-verified test block for `placardBoxStyle`'s position math — a canvas/slot/frame/gallery setup with clean round numbers (480×270px canvas, 100×80px frame, 10px/in) checked against every side (top/bottom/left/right) and multiple align values, plus the no-canvas-measurement fallback, the no-frameSize fallback, and a case showing `presentation.align` shifting the frame (and therefore the placard) as expected.
+- `run31.js`: updated the display.html end-to-end fixture to the new schema and added position assertions both before measurement (fallback path) and after (real geometry, hand-verified against the same math as run30 for two side-by-side slots).
+- `run34.js`/`run32.js`/`run35.js`: updated fixtures/assertions for the new schema.
+- Full placard suite (`run30`–`run37`, 180 checks) passes with no regressions.
+
+### Open items
+- None known.

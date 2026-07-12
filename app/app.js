@@ -1473,13 +1473,27 @@ function galleriesApp() {
 // layout for new templates and as a fallback if a template's slot_positions
 // is missing or doesn't match the display's slot count).
 // ─────────────────────────────────────────────────────────────────────────────
-// Each slot's position also carries a `placard: { x, y }` — the top-left
-// corner (percent, same 16:9 canvas coordinate space as x/y/w/h) where that
-// slot's placard is anchored. It's a separate, independently-positioned box
-// (not nested inside the slot's own x/y/w/h) since a placard's *size* is
-// fixed at the gallery level (see normalizeGalleryPlacard()) and doesn't
-// need to fit inside the photo's own slot bounds. The default below anchors
-// it just beneath the slot as a reasonable starting point.
+// Each slot's position also carries a `placard: { side, align, gapIn }` —
+// where that slot's placard attaches relative to the *photo frame* itself
+// (not the slot's own, possibly-larger x/y/w/h box), so it stays correctly
+// placed however the frame ends up sized/aligned within its slot:
+//   side  — "top" | "bottom" | "left" | "right": which edge of the frame
+//           the placard sits against.
+//   align — 0-100: where along that edge, from the frame's own top/left
+//           (0) to its bottom/right (100); 50 centers it. For side
+//           top/bottom this slides the placard left<->right; for
+//           side left/right it slides top<->bottom.
+//   gapIn — physical distance (inches, same board-relative unit as the
+//           gallery's placard widthIn/heightIn/boardWidthIn — see
+//           normalizeGalleryPlacard()) between the placard's near edge and
+//           the frame's near edge.
+// See placardBoxStyle() below for how this resolves to an actual on-screen
+// position — it needs the frame's *measured* px box (computeFrameBoxSize()),
+// not just the slot's own x/y/w/h, since the frame can be smaller than (and
+// offset within) its slot depending on the photo's aspect ratio and the
+// template's align setting.
+var DEFAULT_PLACARD_GAP_IN = 0.15;
+
 function defaultSlotPositions(n) {
   n = Math.max(1, n | 0);
   var cols  = n <= 1 ? 1 : n <= 2 ? 2 : n <= 3 ? 3 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
@@ -1494,11 +1508,13 @@ function defaultSlotPositions(n) {
     var y = +(row * (cellH + gap)).toFixed(2);
     positions.push({
       x: x, y: y, w: +cellW.toFixed(2), h: +cellH.toFixed(2),
-      placard: { x: x, y: Math.min(96, +(y + cellH + 1).toFixed(2)) },
+      placard: { side: 'bottom', align: 50, gapIn: DEFAULT_PLACARD_GAP_IN },
     });
   }
   return positions;
 }
+
+var PLACARD_SIDES = ['top', 'bottom', 'left', 'right'];
 
 // normalizeSlotPositions(raw, count) — use the template's own slot_positions
 // if it's a valid array matching the slot count, else fall back to an even
@@ -1518,8 +1534,9 @@ function normalizeSlotPositions(raw, count) {
       w: Number(p && p.w) || 0,
       h: Number(p && p.h) || 0,
       placard: {
-        x: (placard && typeof placard.x === 'number') ? placard.x : d.placard.x,
-        y: (placard && typeof placard.y === 'number') ? placard.y : d.placard.y,
+        side:  (placard && PLACARD_SIDES.indexOf(placard.side) !== -1) ? placard.side : d.placard.side,
+        align: (placard && typeof placard.align === 'number') ? Math.max(0, Math.min(100, placard.align)) : d.placard.align,
+        gapIn: (placard && typeof placard.gapIn === 'number') ? placard.gapIn : d.placard.gapIn,
       },
     };
   });
@@ -1927,22 +1944,86 @@ function resolvePlacardItemText(template, labels) {
   return { text: text, missing: missing };
 }
 
-// The placard box's own position + appearance for one slot — position comes
-// from the template (slotPos.placard), size/background from the gallery.
-// `canvasPxWidth` (the display grid's actual measured on-screen pixel
-// width — see layoutFrames() in displayApp/displayEditApp) sets the
-// `--placard-hover-scale` CSS custom property: the inverse of the item
-// font-size shrink factor (placardFontScale()), i.e. the amount a hovered
-// placard needs to visually grow by to show its text at full, un-shrunk
-// design size. The actual hover expand/collapse (delay, transition, z-index)
-// is pure CSS on `.placard-box:hover` (see display.html/display-edit.html) —
-// this just supplies the number that CSS scales by.
-function placardBoxStyle(gallery, slotPos, canvasPxWidth) {
+// The placard box's own position + appearance for one slot. Size/appearance
+// come from the gallery; position is resolved from the template's
+// slotPos.placard = { side, align, gapIn } (see the comment above
+// defaultSlotPositions()) *relative to the photo frame itself* — not the
+// slot's own, possibly larger, x/y/w/h box. That means working out where
+// the frame actually ends up on screen first:
+//   1. The slot's own box, in px, within the canvas (same math as
+//      slotBoxStyle(), just in px instead of left/top/width/height%).
+//   2. The frame's px size within that slot — `frameSize` (computeFrameBoxSize()'s
+//      { w, h }, measured by layoutFrames()) — which can be smaller than the
+//      slot if the photo's aspect ratio doesn't match it.
+//   3. Where that frame box sits *within* the slot — determined by the
+//      template's presentation.align, the same flexbox alignment
+//      photoAreaStyle() applies to the real .photo-frame element.
+// From the frame's resolved px box, side/align/gapIn place the placard
+// directly against one edge, slid along it by `align` (0 = flush with the
+// frame's own top/left, 100 = flush with its bottom/right), offset by
+// `gapIn` inches (converted to px via the canvas's actual current
+// px-per-inch, canvasPxWidth / boardWidthIn — the real on-screen scale,
+// not the fixed 96dpi reference placardFontScale() uses for font sizing).
+// The result is converted back to percent-of-canvas so it renders through
+// the same `position: absolute; left/top: %` mechanism as before.
+//
+// `canvasPxWidth` also sets `--placard-hover-scale` (see placardFontScale())
+// exactly as before — unrelated to the position math above, just piggy-backing
+// on the same style string.
+//
+// Before the first layoutFrames() measurement pass (frameSize null,
+// canvasPxWidth 0), there's nothing to compute a precise position from yet;
+// fall back to roughly where the old default position used to be (just
+// below the slot) so nothing flashes at a nonsensical 0%,0% for that one tick.
+function placardBoxStyle(gallery, slotPos, canvasPxWidth, frameSize, presentation) {
   var g          = normalizeGalleryPlacard(gallery && gallery.placard_defaults);
-  var pos        = (slotPos && slotPos.placard) || { x: 0, y: 0 };
+  var cfg        = (slotPos && slotPos.placard) || {};
+  var side       = PLACARD_SIDES.indexOf(cfg.side) !== -1 ? cfg.side : 'bottom';
+  var align      = typeof cfg.align === 'number' ? Math.max(0, Math.min(100, cfg.align)) : 50;
+  var gapIn      = typeof cfg.gapIn === 'number' ? cfg.gapIn : DEFAULT_PLACARD_GAP_IN;
   var fontScale  = placardFontScale(g.boardWidthIn, canvasPxWidth);
   var hoverScale = fontScale > 0 ? 1 / fontScale : 1;
-  return 'position: absolute; left: ' + pos.x + '%; top: ' + pos.y + '%; width: ' + g.width + '%; height: ' + g.height + '%; background: ' + g.background + '; border: 1px solid ' + g.borderColor + '; --placard-hover-scale: ' + hoverScale + ';';
+
+  var slotX = (slotPos && slotPos.x) || 0, slotY = (slotPos && slotPos.y) || 0;
+  var slotW = (slotPos && slotPos.w) || 0, slotH = (slotPos && slotPos.h) || 0;
+
+  if (!(canvasPxWidth > 0)) {
+    var fallbackY = Math.min(96, slotY + slotH + 1);
+    return 'position: absolute; left: ' + slotX + '%; top: ' + fallbackY + '%; width: ' + g.width + '%; height: ' + g.height + '%; background: ' + g.background + '; border: 1px solid ' + g.borderColor + '; --placard-hover-scale: 1;';
+  }
+
+  var canvasW = canvasPxWidth;
+  var canvasH = canvasW * 9 / 16;
+
+  var slotLeftPx   = (slotX / 100) * canvasW;
+  var slotTopPx    = (slotY / 100) * canvasH;
+  var slotWidthPx  = (slotW / 100) * canvasW;
+  var slotHeightPx = (slotH / 100) * canvasH;
+
+  var frameW = (frameSize && frameSize.w > 0) ? frameSize.w : slotWidthPx;
+  var frameH = (frameSize && frameSize.h > 0) ? frameSize.h : slotHeightPx;
+  var a = normalizeAlign(presentation);
+  var frameLeftPx = slotLeftPx + (a.horizontal === 'left' ? 0 : a.horizontal === 'right' ? (slotWidthPx - frameW) : (slotWidthPx - frameW) / 2);
+  var frameTopPx  = slotTopPx  + (a.vertical   === 'top'  ? 0 : a.vertical   === 'bottom' ? (slotHeightPx - frameH) : (slotHeightPx - frameH) / 2);
+
+  var placardWidthPx  = (g.width  / 100) * canvasW;
+  var placardHeightPx = (g.height / 100) * canvasH;
+  var pxPerIn = g.boardWidthIn > 0 ? canvasW / g.boardWidthIn : 0;
+  var gapPx   = gapIn * pxPerIn;
+
+  var placardLeftPx, placardTopPx;
+  if (side === 'top' || side === 'bottom') {
+    placardLeftPx = frameLeftPx + (align / 100) * (frameW - placardWidthPx);
+    placardTopPx  = side === 'top' ? (frameTopPx - gapPx - placardHeightPx) : (frameTopPx + frameH + gapPx);
+  } else {
+    placardTopPx  = frameTopPx + (align / 100) * (frameH - placardHeightPx);
+    placardLeftPx = side === 'left' ? (frameLeftPx - gapPx - placardWidthPx) : (frameLeftPx + frameW + gapPx);
+  }
+
+  var leftPct = (placardLeftPx / canvasW) * 100;
+  var topPct  = (placardTopPx  / canvasH) * 100;
+
+  return 'position: absolute; left: ' + leftPct + '%; top: ' + topPct + '%; width: ' + g.width + '%; height: ' + g.height + '%; background: ' + g.background + '; border: 1px solid ' + g.borderColor + '; --placard-hover-scale: ' + hoverScale + ';';
 }
 
 // Hover-to-expand's viewport clamp — how far to shift the expanded placard
@@ -2109,7 +2190,10 @@ function displayApp() {
     photoFrameSizeStyle(i, slot) { return photoFrameSizeStyle(this.frameSizes[i], slot); },
     // Gallery-level placard box (position from the template, size/appearance
     // + item content from the gallery) — see the placard helper block above.
-    placardBoxStyle(i) { return placardBoxStyle(this.gallery, this.slotPositions[i], this.canvasWidthPx); },
+    placardBoxStyle(i) {
+      const presentation = this.display && this.display.template && this.display.template.presentation;
+      return placardBoxStyle(this.gallery, this.slotPositions[i], this.canvasWidthPx, this.frameSizes[i], presentation);
+    },
     placardItemsFor(slot) { return placardItemsFor(this.gallery, slot, this.canvasWidthPx); },
     // Keeps a hovered, expanded placard within the browser window instead
     // of growing off-screen near an edge — see @mouseenter on .placard-box
@@ -2263,7 +2347,10 @@ function displayEditApp() {
     photoFrameSizeStyle(i, slot) { return photoFrameSizeStyle(this.frameSizes[i], slot); },
     // Gallery-level placard box (position from the template, size/appearance
     // + item content from the gallery) — see the placard helper block above.
-    placardBoxStyle(i) { return placardBoxStyle(this.gallery, this.slotPositions[i], this.canvasWidthPx); },
+    placardBoxStyle(i) {
+      const presentation = this.display && this.display.template && this.display.template.presentation;
+      return placardBoxStyle(this.gallery, this.slotPositions[i], this.canvasWidthPx, this.frameSizes[i], presentation);
+    },
     placardItemsFor(slot) { return placardItemsFor(this.gallery, slot, this.canvasWidthPx); },
     // Keeps a hovered, expanded placard within the browser window instead
     // of growing off-screen near an edge — see @mouseenter on .placard-box
@@ -3341,6 +3428,32 @@ function templateAdminApp() {
       } catch {
         return [];
       }
+    },
+
+    // Rough preview position for a slot's placard marker — an
+    // approximation, not the real thing: the actual display resolves
+    // side/align/gapIn against the photo frame's real *measured* box (see
+    // placardBoxStyle() in the shared helpers), which depends on the photo's
+    // aspect ratio, matte/frame width, and presentation.align — none of
+    // which this schematic preview (no real photos) has. This instead
+    // treats the slot's own box as a stand-in for the frame, and uses the
+    // marker's fixed CSS size (.preview-placard: 16% x 6%) and a small fixed
+    // gap, just to show roughly which edge/side the placard will end up on.
+    previewPlacardStyle(slot) {
+      const cfg   = (slot && slot.placard) || {};
+      const side  = ['top', 'bottom', 'left', 'right'].indexOf(cfg.side) !== -1 ? cfg.side : 'bottom';
+      const align = typeof cfg.align === 'number' ? Math.max(0, Math.min(100, cfg.align)) : 50;
+      const pw = 16, ph = 6, gap = 1; // matches .preview-placard's fixed reference size
+      const sx = slot.x || 0, sy = slot.y || 0, sw = slot.w || 0, sh = slot.h || 0;
+      let left, top;
+      if (side === 'top' || side === 'bottom') {
+        left = sx + (align / 100) * (sw - pw);
+        top  = side === 'top' ? (sy - ph - gap) : (sy + sh + gap);
+      } else {
+        top  = sy + (align / 100) * (sh - ph);
+        left = side === 'left' ? (sx - pw - gap) : (sx + sw + gap);
+      }
+      return 'left:' + left + '%; top:' + top + '%;';
     },
 
     async saveTemplate(templateid) {

@@ -314,12 +314,23 @@
                   <textarea class="input w-full mt-1" rows="10" x-model="editPresentation" spellcheck="false"></textarea>
                 </label>
                 <p class="text-xs text-[var(--muted)] -mt-2">
-                  Each slot entry also takes a <code>placard: { x, y }</code> — percent
-                  position (same coordinate space as the slot's own x/y/w/h) of that
-                  slot's placard box. Placard <em>size</em>, background, and content
-                  (items, text, fonts) are configured once for the whole gallery in
-                  Gallery Admin's Placard Settings, so every display in a gallery looks
-                  consistent — only the position is set here, per slot.<br>
+                  Each slot entry also takes a
+                  <code>placard: { side, align, gapIn }</code> — where that slot's
+                  placard attaches relative to the <em>photo frame itself</em> (not
+                  the slot's own, possibly larger, box). <code>side</code> is
+                  <code>"top"</code>, <code>"bottom"</code>, <code>"left"</code>, or
+                  <code>"right"</code> — which edge of the frame the placard sits
+                  against. <code>align</code> is 0–100: where along that edge, from
+                  the frame's own top/left (0) to its bottom/right (100) — 50 centers
+                  it; for a top/bottom placard this slides it left↔right, for a
+                  left/right placard it slides top↔bottom. <code>gapIn</code> is the
+                  physical distance, in inches, between the placard and the frame
+                  (same board-relative unit as the gallery's placard width/height —
+                  see Gallery Admin's Placard Settings). Placard <em>size</em>,
+                  background, and content (items, text, fonts) are configured once
+                  for the whole gallery in Gallery Admin's Placard Settings, so every
+                  display in a gallery looks consistent — only the position is set
+                  here, per slot.<br>
                   <code>matte</code>/<code>frame</code> each take <code>enabled</code>, <code>color</code>,
                   and <code>width</code> — a number in px, or a string like <code>"5%"</code> for a
                   percentage of the photo's own rendered width (so the matte/frame scales with
@@ -356,20 +367,26 @@
                     </div>
                   </template>
                   <!-- Rough marker for each slot's placard position — actual
-                       size comes from the gallery's Placard Settings, so this
-                       is just a fixed-size reference box. -->
+                       size comes from the gallery's Placard Settings, and the
+                       exact position depends on the photo frame's real
+                       measured box (which this schematic preview, with no
+                       real photos, can't reproduce), so previewPlacardStyle()
+                       approximates it using the slot's own box as a stand-in
+                       for the frame and a fixed reference size/gap. -->
                   <template x-for="(slot, i) in previewSlots()" :key="'placard-' + i">
                     <div x-show="slot.placard" class="preview-placard"
-                         :style="'left:' + (slot.placard && slot.placard.x) + '%; top:' + (slot.placard && slot.placard.y) + '%;'">
+                         :style="previewPlacardStyle(slot)">
                       <span x-text="'P' + (i + 1)"></span>
                     </div>
                   </template>
                 </div>
                 <p class="text-xs text-[var(--muted)] mt-1">
-                  Dashed boxes show each slot's placard <em>position</em>
-                  (<code>slot_positions[i].placard</code>). Placard size,
-                  background, and content are set once for the whole gallery
-                  in Gallery Admin's Placard Settings.
+                  Dashed boxes show roughly where each slot's placard will attach
+                  (<code>slot_positions[i].placard</code> — side/align/gap relative
+                  to the photo frame). The real display resolves this against the
+                  photo's actual measured frame box, so the exact position here is
+                  an approximation. Placard size, background, and content are set
+                  once for the whole gallery in Gallery Admin's Placard Settings.
                 </p>
               </div>
 
