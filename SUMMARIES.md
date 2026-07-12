@@ -1069,3 +1069,45 @@ Scoped to the browser upload endpoint only, not `cmd/import-photos`: the CLI imp
 
 ### Open items
 - None.
+
+## Session 37 — Fixed: Filename Label Missing on Photos With Rich EXIF
+
+### What was done
+Bug report: the `Filename` label (added in Session 36) showed up on uploads with no EXIF data, but was missing on uploads that did have EXIF data — even though the upload itself succeeded and other labels were present.
+
+Root cause: it wasn't a `MergeLabels` logic bug (that function was working exactly as designed) — it was a display-pagination issue. The photo detail page shows only the *first page* of labels (`internal/handlers/photo.go`'s `labelLimit = 10`), ordered by `created_at` (`fetchLabels` in `internal/handlers/fetch.go`). Labels are inserted in `uploadOne()` in `allLabels`' slice order, and `photoimport.MergeLabels(exifLabels, computed)` — called with EXIF as the base and `{Resolution, Filename}` as the extra — appends non-colliding extra entries *after* all base entries. So `Resolution` and `Filename` were always the last labels inserted, and therefore had the latest `created_at` of the whole set. A camera photo can easily produce 10+ EXIF labels (Camera Make, Camera Model, Lens Make, Lens Model, Shutter Speed, Aperture, ISO, Focal Length ×2, Flash, White Balance, Exposure Mode, Exposure Program, Artist, Copyright, Software, Description, Date Taken, GPS — up to 19 possible), which pushed `Filename` (and `Resolution`, same latent bug, just not yet reported) past the first page's `LIMIT 10` and out of view unless you paginate. A photo with no EXIF has only 2 labels total, so both trivially fit on page 1 — matching exactly the reported "present without EXIF, missing with EXIF" symptom.
+
+Fix, in `internal/handlers/upload.go`: added `prioritizeLabels(labels, priorityNames...)`, which reorders a label slice so labels matching the given names (in that order) come first, with everything else keeping its existing relative order afterward. `uploadOne()` now calls `allLabels = prioritizeLabels(allLabels, "Filename", "Resolution")` right before the insert loop, so both computed labels are always inserted — and therefore always land on the label list's first page — first, regardless of how many EXIF tags a given photo has. Applied the same fix to `Resolution` too since it's the identical bug, just not yet noticed; no reason to leave it half-fixed.
+
+This is a targeted fix, not a rework of label pagination generally — a photo with enough *batch* labels (user-typed, unbounded count) could still theoretically push some of those past page 1, but that's a pre-existing, separate characteristic of the label list's pagination design, not something this bug report was about.
+
+### Testing notes
+- Traced the exact insertion order by hand: confirmed `exifFields` in `internal/photoimport/exif.go` has no entry named "Resolution" or "Filename" (so there's never a same-name collision to reason about), confirmed `MergeLabels`'s append-order behavior, and confirmed `fetchLabels`'s `ORDER BY l.created_at LIMIT $2 OFFSET $3` is what the photo page uses by default (`labelLimit = 10` in `photo.go`) — this chain is what reproduces the reported symptom exactly based on EXIF tag count.
+- Re-read the edited file in full; `prioritizeLabels` is a pure, self-contained function with no new imports needed (`strings` was already imported).
+- Same caveat as prior Phase 7 sessions: no Go toolchain in this sandbox, so `go build` still hasn't been run — recommend verifying with a real photo that has a large EXIF profile (10+ tags) once built.
+
+### Open items
+- Still pending the `make build` verification called out in Sessions 34–36.
+
+## Session 38 — Infinite-Scroll Label Loading on the Photo Page
+
+### What was done
+Follow-up to Session 37's investigation: the photo detail page (`GET /api/v1/photo`) has always capped its embedded label list at the first page (`labelLimit = 10` in `internal/handlers/photo.go`), and set `photo.labelsurl` (a working, paginated `/api/v1/labels?...` URL) whenever there were more — but the frontend never consumed `labelsurl` at all, so any labels past the first 10 were silently unreachable from the photo page. Session 37 fixed *which* labels land in that first page; this session fixes the underlying "extra labels vanish" problem generally, per the request: show as many labels as fit, and load the rest on scroll instead of capping them.
+
+Implemented in `app/app.js` (`photoApp`) and `app/photo.html`, reusing the exact infinite-scroll pattern the photo wall (`wallApp`) already uses:
+- Added an invisible sentinel `<div x-ref="labelsSentinel">` right after the label chips (and the "add label" button) in the Labels card in `photo.html`.
+- `photoApp.loadPhoto()` now calls a new `_observeLabelsSentinel()` after every photo load (via `$nextTick`, since the sentinel lives inside the page's `x-if="photo && !loading"` block and is therefore destroyed and rebuilt on every photo navigation — reusing a stale `IntersectionObserver` target from a previous photo would silently stop working, so `_observeLabelsSentinel()` always disconnects any previous observer first and attaches a fresh one to the current sentinel node).
+- New `loadMoreLabels()` fetches `photo.labelsurl`, appends the returned labels to `photo.labels`, and updates `photo.labelsurl` to the response's `pages.next` (or `null` once exhausted) — so scrolling keeps loading additional pages until all of a photo's labels are loaded, then stops.
+- No backend changes were needed: `GET /api/v1/labels?photoid=...` (`LabelsHandler.List`) already supported offset/limit pagination and already returns a `pages.next` URL; the photo detail response already exposed the first `labelsurl` link. This was purely a "the frontend never wired up pagination that already existed" gap.
+
+Left `labelLimit = 10` (the initial page size) unchanged — the fix that matters is that nothing is silently lost anymore, not the exact size of the first page. Also left the near-identical `photo.emojisurl` pagination unwired, since the request was specifically about labels; that's a separate, pre-existing gap of the same shape, not something to fix as a drive-by.
+
+### Testing notes
+- `node --check app/app.js` passes.
+- Tag-balance scan: `photo.html`'s `<div>`/`</div>` count moved from 176/176 to 177/177 (exactly the one new sentinel `<div>`), confirming no other markup was accidentally left unbalanced.
+- Traced the reconnect-on-navigation logic by hand since it's the trickiest part: `x-if="photo && !loading"` unmounts the whole content block (including the sentinel) every time `loading` flips to `true` during a photo-to-photo navigation, so a one-time observer setup in `init()` alone would only work for the very first photo loaded, not subsequent ones reached via search or the related-photos sidebar — hence re-running `_observeLabelsSentinel()` at the end of every `loadPhoto()` call, not just once at startup.
+- Not able to run this in a browser in this sandbox (no running server/Postgres). Recommend manually verifying: open a photo with 15+ labels (or add enough via the label editor), confirm only the first ~10 render initially, then scroll down and confirm the rest load in automatically without needing a manual "load more" click.
+
+### Open items
+- `photo.emojisurl` has the identical un-wired-pagination shape; flagged for awareness, not fixed here (out of scope for this request).
+- Still pending the `make build` / end-to-end verification called out in prior Phase 7 sessions.

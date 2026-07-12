@@ -706,6 +706,7 @@ function photoApp() {
     toast: { visible: false, message: '', timer: null },
 
     activeLabelID: null,
+    labelsLoadingMore: false,
 
     async init() {
       try {
@@ -768,6 +769,53 @@ function photoApp() {
         window.history.replaceState(null, '', `?${qs}`);
       } catch (e) { this.error = e.message; }
       this.loading = false;
+
+      // The labels sentinel lives inside the `x-if="photo && !loading"` block,
+      // so it's destroyed and recreated on every photo load (including
+      // navigating from one photo to another) — re-observe the fresh node
+      // once Alpine has actually rendered it.
+      await this.$nextTick();
+      this._observeLabelsSentinel();
+    },
+
+    // Re-(dis)connects the IntersectionObserver that drives infinite-scroll
+    // loading of additional label pages. Safe to call repeatedly — always
+    // disconnects whatever it was previously watching first, since the
+    // sentinel element itself gets torn down and rebuilt on every photo load.
+    _observeLabelsSentinel() {
+      if (this._labelsObserver) {
+        this._labelsObserver.disconnect();
+        this._labelsObserver = null;
+      }
+      const sentinel = this.$refs.labelsSentinel;
+      if (!sentinel) return;
+      this._labelsObserver = new IntersectionObserver(([entry]) => {
+        if (entry.isIntersecting && this.photo && this.photo.labelsurl && !this.labelsLoadingMore) {
+          this.loadMoreLabels();
+        }
+      }, { rootMargin: '400px' });
+      this._labelsObserver.observe(sentinel);
+    },
+
+    // Loads the next page of labels (via photo.labelsurl, which the backend
+    // only sets when there are more labels than fit in the initial payload —
+    // see PhotoHandler.ServeHTTP) and appends them to photo.labels. Called
+    // automatically as the labels sentinel scrolls into view, so all of a
+    // photo's labels become visible by scrolling rather than being silently
+    // capped at the first page.
+    async loadMoreLabels() {
+      if (!this.photo || !this.photo.labelsurl || this.labelsLoadingMore) return;
+      this.labelsLoadingMore = true;
+      try {
+        const resp = await fetch(this.photo.labelsurl, { headers: this.authHeaders() });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        this.photo.labels.push(...(data.labels || []));
+        this.photo.labelsurl = (data.pages && data.pages.next) || null;
+      } catch (e) {
+        this.showToast(`Failed to load more labels: ${e.message}`);
+      }
+      this.labelsLoadingMore = false;
     },
 
     // ── Search ──────────────────────────────────────────────────────────────

@@ -173,6 +173,17 @@ func (h *UploadPhotosHandler) uploadOne(
 	allLabels := photoimport.MergeLabels(exifLabels, computed)
 	allLabels = photoimport.MergeLabels(allLabels, batchLabels)
 
+	// The photo detail page shows only the first page of labels (ordered by
+	// created_at — see fetchLabels in internal/handlers/fetch.go), and
+	// labels are inserted below in allLabels' slice order. A photo with a
+	// rich EXIF profile can easily produce 10+ EXIF labels (camera/lens
+	// info, exposure settings, GPS, etc.), which would otherwise push
+	// Resolution/Filename (appended after EXIF labels by MergeLabels) past
+	// that first page. Reorder so they're always inserted — and therefore
+	// always shown — first, regardless of how many EXIF tags a given photo
+	// has.
+	allLabels = prioritizeLabels(allLabels, "Filename", "Resolution")
+
 	title := titleFromFilename(fh.Filename)
 
 	tx, err := h.DB.Begin(ctx)
@@ -209,6 +220,33 @@ func (h *UploadPhotosHandler) uploadOne(
 	}
 
 	return photoID, nil
+}
+
+// prioritizeLabels reorders labels so that any label matching one of
+// priorityNames (in that order) comes first; every other label keeps its
+// existing relative order after them. A no-op for names that aren't present.
+func prioritizeLabels(labels []photoimport.Label, priorityNames ...string) []photoimport.Label {
+	byName := make(map[string]photoimport.Label, len(labels))
+	for _, l := range labels {
+		byName[strings.ToLower(l.Name)] = l
+	}
+
+	used := make(map[string]bool, len(priorityNames))
+	out := make([]photoimport.Label, 0, len(labels))
+	for _, name := range priorityNames {
+		key := strings.ToLower(name)
+		if l, ok := byName[key]; ok {
+			out = append(out, l)
+			used[key] = true
+		}
+	}
+	for _, l := range labels {
+		if used[strings.ToLower(l.Name)] {
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
 }
 
 // titleFromFilename turns an uploaded file's original name into a

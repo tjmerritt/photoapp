@@ -612,6 +612,11 @@
               </svg>
             </button>
           </template>
+          <!-- Infinite-scroll sentinel: loading more labels is triggered when
+               this scrolls into view (see loadMoreLabels()/init() in app.js).
+               Zero-size and unconditionally present; the load itself is a
+               no-op once photo.labelsurl is null (all labels loaded). -->
+          <div x-ref="labelsSentinel" class="w-full h-px"></div>
         </div>
       </div>
 
