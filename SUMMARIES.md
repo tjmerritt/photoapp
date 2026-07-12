@@ -888,3 +888,20 @@ Since the display canvas is rendered responsively (no fixed physical size on its
 
 ### Open items
 - None. Both files are static frontend assets — sync-only, no backend rebuild needed.
+
+## Session 29 — Fixed: Placard Drag Could Corrupt gapIn to null / Marker Disappearing
+
+### What was done
+- Bug report: dragging the placard marker in Template Admin's preview sometimes produced `{ "side": "right", "align": 100, "gapIn": null }` and the marker visually disappeared.
+- Root cause: `startSlotDrag()`, `startSlotResize()`, and `startPlacardDrag()` each call `canvas.getBoundingClientRect()` exactly once at mousedown and reuse that same `rect` for every subsequent `mousemove` in the drag. If that rect is ever captured as zero-size (width and/or height 0 — e.g. a layout race right as the accordion editor expands, or any other moment the preview happens to measure as 0x0), every `xPct`/`yPct` computed from it divides by zero, producing `Infinity`. That `Infinity` flows straight through `placardDragToConfig()`'s math into `gapIn`, and `JSON.stringify(Infinity)` silently writes the literal `null` — which is exactly the corrupted value reported. (Worked out and confirmed by hand: `Infinity` for the x-axis alone naturally produces `side: "right"` since `Math.abs(nx) >= Math.abs(ny)` is always true against a finite `ny`, while `align` stays a normal finite number since it only depends on the y-axis — matching the exact `side`/`align`/`gapIn` combination in the bug report.)
+- `app/app.js`:
+  - `startSlotDrag()`, `startSlotResize()`, `startPlacardDrag()`: added a guard right after measuring `rect` — `if (!(rect.width > 0) || !(rect.height > 0)) return;` — so a drag simply never starts against a degenerate rect, instead of running for its whole duration on broken math.
+  - `resizeSlotFromCorner()` and `placardDragToConfig()` (the pure geometry functions): added `isFinite()` guards on their cursor/drop-point inputs as defense-in-depth, falling back to a sane value (the box's own existing edge, or its center) so a non-finite input from any future caller can never propagate into a non-finite (and therefore `null`-after-JSON) output field.
+
+### Testing notes
+- `run30.js`: new pure-function regression checks — `placardDragToConfig()` called with `px: Infinity` and with `px: py: NaN`, confirming `gapIn`/`align`/`side` all stay finite/valid; `resizeSlotFromCorner()` called with `cursorX: Infinity, cursorY: NaN`, confirming `x/y/w/h` all stay finite.
+- `run34.js`: new DOM-level regression test — stubs `getBoundingClientRect()` to return a zero-size rect, simulates a full placard-marker drag (mousedown/mousemove/mouseup), and confirms `editSlotPositions` is completely unchanged afterward (the drag no-ops rather than writing corrupted JSON).
+- Full placard/template suite (`run30`–`run37`, 224 checks) passes with no regressions.
+
+### Open items
+- None. Both files are static frontend assets — sync-only, no backend rebuild needed.

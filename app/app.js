@@ -1560,6 +1560,12 @@ function slotBoxStyle(positions, index) {
 // nothing or flip inside-out).
 function resizeSlotFromCorner(corner, orig, cursorX, cursorY, minSize) {
   var min = minSize > 0 ? minSize : 4;
+  // isFinite guards: a non-finite cursorX/cursorY (e.g. NaN from a caller
+  // dividing by a zero-size rect) would otherwise poison every value below,
+  // since Math.min/Math.max propagate NaN — fall back to the box's own
+  // existing edge so a bad input just no-ops that axis instead of corrupting it.
+  if (!isFinite(cursorX)) cursorX = corner === 'nw' || corner === 'sw' ? orig.x : orig.x + orig.w;
+  if (!isFinite(cursorY)) cursorY = corner === 'nw' || corner === 'ne' ? orig.y : orig.y + orig.h;
   cursorX = Math.max(0, Math.min(100, cursorX));
   cursorY = Math.max(0, Math.min(100, cursorY));
   var left = orig.x, top = orig.y, right = orig.x + orig.w, bottom = orig.y + orig.h;
@@ -1597,6 +1603,13 @@ function resizeSlotFromCorner(corner, orig, cursorX, cursorY, minSize) {
 function placardDragToConfig(slot, px, py) {
   var sx = slot.x || 0, sy = slot.y || 0, sw = slot.w || 0, sh = slot.h || 0;
   var cx = sx + sw / 2, cy = sy + sh / 2;
+  // isFinite guards: a non-finite px/py (e.g. Infinity/NaN from a caller
+  // dividing by a zero-size rect) would otherwise poison every value below
+  // (gapIn especially — JSON.stringify(Infinity/NaN) silently writes `null`,
+  // which looks like corrupted data). Fall back to the slot's own center,
+  // i.e. treat a bad drop point as "no real drag data" -> gapIn 0.
+  if (!isFinite(px)) px = cx;
+  if (!isFinite(py)) py = cy;
   var nx = sw > 0 ? (px - cx) / (sw / 2) : 0;
   var ny = sh > 0 ? (py - cy) / (sh / 2) : 0;
   var side, align, gapPct;
@@ -3559,6 +3572,13 @@ function templateAdminApp() {
       const canvas = this.$refs.templatePreview;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
+      // rect is captured once here and reused for every move of this drag
+      // (re-measuring on each mousemove isn't necessary since the preview
+      // doesn't resize mid-drag) — but if it's captured as zero-size (e.g.
+      // a layout race right as the editor expands), every percent computed
+      // below divides by zero, producing Infinity/NaN that corrupts the
+      // stored slot position. Bail out rather than start a broken drag.
+      if (!(rect.width > 0) || !(rect.height > 0)) return;
       let arr;
       try { arr = JSON.parse(this.editSlotPositions || '[]'); } catch { return; }
       const slot = arr[i];
@@ -3600,6 +3620,9 @@ function templateAdminApp() {
       const canvas = this.$refs.templatePreview;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
+      // See the same guard/comment in startSlotDrag() above — a zero-size
+      // rect here would divide-by-zero into Infinity/NaN percentages.
+      if (!(rect.width > 0) || !(rect.height > 0)) return;
       let arr;
       try { arr = JSON.parse(this.editSlotPositions || '[]'); } catch { return; }
       const orig = arr[i];
@@ -3639,6 +3662,11 @@ function templateAdminApp() {
       const canvas = this.$refs.templatePreview;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
+      // See the same guard/comment in startSlotDrag() above — a zero-size
+      // rect here would divide-by-zero into Infinity, which then flows into
+      // gapIn and gets silently written as JSON `null` (JSON.stringify(Infinity)
+      // === 'null'), leaving the marker's config looking corrupted.
+      if (!(rect.width > 0) || !(rect.height > 0)) return;
       let arr;
       try { arr = JSON.parse(this.editSlotPositions || '[]'); } catch { return; }
       const slot = arr[i];
