@@ -324,7 +324,7 @@ func (c *Checker) UserPermissions(
 		        OR ($2 <> '' AND erg.resource_type IN ('Gallery', 'Display', 'Photo')
 		                     AND r.exhibitionid = $2::uuid)
 		       )
-		ORDER  BY rp.permission, erg.resource_type, erg.resource_ref
+		ORDER  BY rp.permission, COALESCE(erg.resource_type, ''), COALESCE(erg.resource_ref, '')
 	`, userID, exhibitionID)
 	if err != nil {
 		return nil, err

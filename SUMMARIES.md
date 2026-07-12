@@ -1313,3 +1313,25 @@ Bumped the `app.js` cache-bust query string again, from `?v=44` to `?v=45`, sinc
 - Need the user to reproduce the `/api/v1/permissions` 500 again after rebuilding (`make build`) and restarting the server, then share the new server-side log line (now includes the actual DB error, userid, and exhibitionid) so the real cause can be found — right now there's no way to know if it's a schema/migration gap, a bad UUID cast, or something else.
 - Given this parser silently drops *any* unparseable expression (not just template literals — Session 40 found the same silent-failure behavior for semicolon-separated statements), it's worth budgeting time for one more full pass across `app/*.html` looking for other CSP-incompatible syntax this parser doesn't support (arrow functions, are already avoided per an existing code comment; regex literals, `new`, spread/rest, destructuring, and array/object literals are all candidates worth spot-checking, since the evaluator's switch statement only explicitly implements a specific list of node types).
 - Still pending the accumulated `make build` / end-to-end verification caveat from every prior Go-touching session.
+
+## Session 46 — Fixed the /api/v1/permissions 500: SELECT DISTINCT / ORDER BY Mismatch
+
+### What was done
+The logging added in Session 45 immediately paid off — the user's server log showed the exact cause:
+
+```
+"error":"ERROR: for SELECT DISTINCT, ORDER BY expressions must appear in select list (SQLSTATE 42P10)"
+```
+
+`Checker.UserPermissions`'s query used `SELECT DISTINCT rp.permission, COALESCE(erg.resource_type, ''), COALESCE(erg.resource_ref, '')` but `ORDER BY rp.permission, erg.resource_type, erg.resource_ref` — ordering by the *raw* columns rather than the exact `COALESCE(...)` expressions that appear in the select list. Postgres requires `ORDER BY` expressions in a `SELECT DISTINCT` query to match the select list exactly (not just be derived from the same columns), so this is a hard query-planning error, not something dependent on the specific user or data — meaning this query has failed on **every single call since it was written**, regardless of who called it or what permissions existed. It just so happened that nothing in the app ever actually called `GET /api/v1/permissions` until Sessions 39/41 added `photoApp`/`wallApp`'s `refreshPermissions()` — so a latent, 100%-reproducible bug sat completely undetected until this conversation started actually exercising that endpoint.
+
+Fixed by changing the `ORDER BY` to use the same `COALESCE(...)` expressions as the `SELECT DISTINCT` list. Also swept every other `SELECT DISTINCT` query in the codebase (`internal/handlers/labels.go`, `fetch.go`, `search.go`) for the same mismatch pattern — none of the others had it; they all order by columns that appear in their select list verbatim (or don't have a same-statement `ORDER BY` at all).
+
+### Testing notes
+- Manually re-verified the fixed query's `ORDER BY` expressions now textually match the `SELECT DISTINCT` list exactly, which is what Postgres's `42P10` check requires.
+- Grepped every other `SELECT DISTINCT` in `internal/` for the same shape of bug; none found.
+- No Go toolchain in this sandbox, so — as with every Go change this conversation — this is careful manual review, not a compile or live query test. This one is a single-clause SQL text change with no Go-level type/signature implications, about as low-risk as a fix gets, but the user's rebuild-and-retest is what will actually confirm it.
+
+### Open items
+- Once rebuilt, worth confirming `/api/v1/permissions` returns 200 for both anonymous and logged-in requests, since this is now the second time in this codebase a "hasn't been exercised yet" endpoint turned out to have a bug that pure code reading missed and only a live request surfaced.
+- Still pending the accumulated `make build` / end-to-end verification caveat from every prior Go-touching session.
