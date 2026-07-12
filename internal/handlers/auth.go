@@ -221,6 +221,8 @@ func (h *AuthHandler) findOrCreateOAuthUser(ctx context.Context, provider, sub, 
 		col = "apple_id"
 	case "facebook":
 		col = "facebook_id"
+	case "microsoft":
+		col = "microsoft_id"
 	}
 
 	var userID string
@@ -321,9 +323,10 @@ func (h *AuthHandler) uniqueUsername(ctx context.Context, base string) string {
 // Public endpoint; no authentication required.
 func (h *AuthHandler) Config(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	middleware.WriteJSON(w, http.StatusOK, map[string]bool{
-		"googleEnabled":   h.Cfg.GoogleClientID != "",
-		"appleEnabled":    h.Cfg.AppleClientID != "",
-		"facebookEnabled": h.Cfg.FacebookClientID != "",
+		"googleEnabled":    h.Cfg.GoogleClientID != "",
+		"appleEnabled":     h.Cfg.AppleClientID != "",
+		"facebookEnabled":  h.Cfg.FacebookClientID != "",
+		"microsoftEnabled": h.Cfg.MicrosoftClientID != "",
 	})
 }
 
@@ -682,6 +685,109 @@ func (h *AuthHandler) FacebookCallback(w http.ResponseWriter, r *http.Request, _
 
 	if pictureURL != "" {
 		h.localizeExternalProfileImage(r.Context(), userID, pictureURL)
+	}
+
+	h.finishLogin(w, r, userID)
+}
+
+// ── Microsoft Sign-In ─────────────────────────────────────────────────────────
+//
+// golang.org/x/oauth2 has no premade "microsoft" endpoint package (unlike
+// google/facebook), so the Microsoft identity platform v2.0 endpoints are
+// built directly. The "common" tenant (the default; see
+// config.MicrosoftTenantID) accepts both personal Microsoft accounts and
+// work/school (Azure AD) accounts. Set MICROSOFT_TENANT_ID to a specific
+// tenant GUID to restrict sign-in to a single organization.
+
+func microsoftEndpoint(tenant string) oauth2.Endpoint {
+	if tenant == "" {
+		tenant = "common"
+	}
+	return oauth2.Endpoint{
+		AuthURL:  fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/authorize", tenant),
+		TokenURL: fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", tenant),
+	}
+}
+
+func (h *AuthHandler) microsoftConfig() *oauth2.Config {
+	redirectURL := h.Cfg.MicrosoftRedirectURL
+	if redirectURL == "" {
+		redirectURL = h.Cfg.BaseURL + "/auth/microsoft/callback"
+	}
+	return &oauth2.Config{
+		ClientID:     h.Cfg.MicrosoftClientID,
+		ClientSecret: h.Cfg.MicrosoftClientSecret,
+		RedirectURL:  redirectURL,
+		// openid/profile/email are the standard OIDC scopes; User.Read lets us
+		// call Microsoft Graph's /me endpoint for the user's name and email.
+		Scopes:   []string{"openid", "profile", "email", "User.Read"},
+		Endpoint: microsoftEndpoint(h.Cfg.MicrosoftTenantID),
+	}
+}
+
+// GET /auth/microsoft
+func (h *AuthHandler) MicrosoftLogin(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	if h.Cfg.MicrosoftClientID == "" {
+		http.Error(w, "Microsoft login not configured", http.StatusNotImplemented)
+		return
+	}
+	state := uuid.New().String()
+	http.SetCookie(w, &http.Cookie{Name: "oauth_state", Value: state, Path: "/", HttpOnly: true, MaxAge: 600})
+	http.Redirect(w, r, h.microsoftConfig().AuthCodeURL(state, oauth2.AccessTypeOnline), http.StatusTemporaryRedirect)
+}
+
+// GET /auth/microsoft/callback
+func (h *AuthHandler) MicrosoftCallback(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	stateCookie, err := r.Cookie("oauth_state")
+	if err != nil || stateCookie.Value != r.URL.Query().Get("state") {
+		http.Error(w, "Invalid OAuth state", http.StatusBadRequest)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: "oauth_state", Value: "", MaxAge: -1, Path: "/"})
+
+	token, err := h.microsoftConfig().Exchange(r.Context(), r.URL.Query().Get("code"))
+	if err != nil {
+		slog.Error("Microsoft token exchange failed", "error", err)
+		http.Error(w, "Token exchange failed", http.StatusInternalServerError)
+		return
+	}
+
+	resp, err := h.microsoftConfig().Client(r.Context(), token).
+		Get("https://graph.microsoft.com/v1.0/me")
+	if err != nil {
+		http.Error(w, "Failed to fetch user info", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	var info struct {
+		ID                string `json:"id"`
+		DisplayName       string `json:"displayName"`
+		Mail              string `json:"mail"`
+		UserPrincipalName string `json:"userPrincipalName"`
+	}
+	if err := json.Unmarshal(body, &info); err != nil || info.ID == "" {
+		http.Error(w, "Invalid user info from Microsoft", http.StatusInternalServerError)
+		return
+	}
+
+	// Personal Microsoft accounts (and some tenants) leave "mail" null; fall
+	// back to the sign-in identifier (userPrincipalName) in that case.
+	email := info.Mail
+	if email == "" {
+		email = info.UserPrincipalName
+	}
+
+	// Microsoft Graph does not expose the profile photo as a plain URL (it's
+	// a binary endpoint requiring the user's access token), so unlike
+	// Google/Facebook we don't pass a picture here — findOrCreateOAuthUser
+	// falls back to a generated avatar, same as local/email accounts.
+	userID, err := h.findOrCreateOAuthUser(r.Context(), "microsoft", info.ID, email, info.DisplayName, "")
+	if err != nil {
+		slog.Error("findOrCreateOAuthUser failed", "error", err)
+		http.Error(w, "User creation failed", http.StatusInternalServerError)
+		return
 	}
 
 	h.finishLogin(w, r, userID)

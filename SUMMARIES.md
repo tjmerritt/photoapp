@@ -921,3 +921,60 @@ Since the display canvas is rendered responsively (no fixed physical size on its
 
 ### Open items
 - None. Both files are static frontend assets — sync-only, no backend rebuild needed.
+
+## Session 31 — PLAN.md Completion Audit & Remaining Work Sequence
+
+### What was done
+Reviewed the repo against every phase in `PLAN.md` (read-only audit, no code changes) to determine what's actually built versus still pending, and recommended an order for the rest.
+
+**Phase 1 — Permissions: done.** `migrations/012_permissions.sql` (teams/roles/role_permissions/entity_role_grants) and `013_remove_authorized_non_public.sql` are in place; `internal/permissions/permissions.go` implements `Checker.Check`/`UserPermissions`/`HasAny`; every handler (`admin.go`, `comments.go`, `displays.go`, `emojis.go`, `galleries.go`, `labels.go`, `photo.go`, `search.go`, `templates.go`) calls the checker; `GET /api/v1/permissions` is wired in `router.go`.
+
+**Phase 2 — Gallery & Display: done except 2g.** `migrations/014_galleries_displays.sql` covers `display_templates`, `galleries`, `placard_defaults`, `displays`, `display_slots`. Full CRUD for galleries/displays/templates exists in `galleries.go`/`displays.go`/`templates.go` and is routed. Frontend has `galleries.html`, `gallery-admin.html`, `display.html`, `display-edit.html`, `template-admin.html`, plus hamburger-menu integration (`galleriesNav()` in `app.js`) and an extensive drag/resize/placard editor (Sessions 18–30). **Missing: 2g, a per-gallery permissions UI** — grepped for any grant/revoke page and found none.
+
+**Phase 3 — Photo Wall: done.** `app/index.html` is now the wall (`wallApp`), the old viewer moved to `app/photo.html`, and the row-layout algorithm (`packRows`, `rowScale`, `nominalWidth`, `photoScale`) is implemented in `app.js`.
+
+**Phase 4 — Microsoft Sign-in: not started.** No `Microsoft*` config vars in `internal/config/config.go`, no `MicrosoftLogin`/`MicrosoftCallback` in `auth.go`, no `/auth/microsoft*` routes. Only Google/Apple/Facebook exist.
+
+**Phase 5 — Attributes: partially done.**
+- 5a (label colors): only a client-side hash-based fallback (`labelColorFor` in `app.js`); no `label_name_colors` table and no color-picker override UI.
+- 5b (restricted labels): not implemented — no `restricted` column, no CLI flag, no 403 enforcement.
+- 5c (emoji improvements): search/pagination/upload UI exist (`ListTypes` supports `search`/`group`/paging), but sorting by `usage_count DESC` isn't implemented (no such column anywhere) and the reaction tooltip only shows "Click to react/remove," not the emoji name.
+- 5d (rich text comments): not implemented — no Markdown library in `package.json` or frontend, no sanitization in `comments.go`.
+
+**Phase 6 — Admin Pages: not started (beyond pre-existing baseline).** Only `app/admin.html` and its three endpoints (`ListExhibitions`, `ListPhotos`, `SetPublic`) exist, which predate this plan. No `admin-master.html`, `admin-users.html`, `admin-emojis.html`, or `admin-labels.html`; no `user_flags` table; no admin endpoints for users/emoji/label-name toggles; 6c's planned search/filter enhancement to the existing admin page also hasn't been added.
+
+**Phase 7 — Photo Uploads: not started.** No upload icon/popup, no drag-and-drop queue, no batch-label editor, and no `POST /api/v1/photos/upload` endpoint. The only "upload" code in the frontend/backend is the unrelated profile-avatar upload.
+
+### Recommended sequence for remaining work
+`Phase 4 → Phase 7 → Phase 5 (5a/5b/5c/5d) → Phase 6 → Phase 2g`
+
+Reasoning: Phase 4 (Microsoft sign-in) is small, independent, and mirrors the existing Facebook pattern — a quick win. Phase 7 (photo uploads) is independent and high-value, and doesn't strictly need 5a first. Phase 5's remainder should land next, with 5b (restricted labels) completed before Phase 6 since the planned label-admin page (6e) exposes the restrict/unrestrict toggle. Phase 6 (admin pages) depends on Phase 1 (done) and benefits from 5b/5c/5d existing so there's something for the toggles to control. Phase 2g (gallery permissions UI) is left for last since it's small and self-contained, and can reuse UI patterns established while building Phase 6's admin pages.
+
+### Open items
+- None — this was an audit only; no code was written.
+
+## Session 32 — Phase 4: Microsoft Sign-In
+
+### What was done
+Implemented PLAN.md Phase 4, following the existing Facebook Login pattern (Session 1 baseline / `auth.go`) as the template.
+
+- **`migrations/015_microsoft_auth.sql`** (new): adds `microsoft_id TEXT` to `users` plus a partial unique index, mirroring `011_facebook_auth.sql`. The codebase identifies OAuth accounts via one dedicated column per provider rather than a generic `auth_providers` table, so PLAN.md's assumption that migration 006 already covered this wasn't quite right — a real migration was needed, same as Facebook got in 011.
+- **`internal/config/config.go`**: added `MicrosoftClientID`, `MicrosoftClientSecret`, `MicrosoftRedirectURL`, and `MicrosoftTenantID` (env vars `MICROSOFT_CLIENT_ID`/`_SECRET`/`_REDIRECT_URL`/`_TENANT_ID`, the last defaulting to `"common"` so both personal and work/school Microsoft accounts can sign in unless the operator pins it to one tenant).
+- **`internal/handlers/auth.go`**:
+  - `findOrCreateOAuthUser`: added a `"microsoft"` case mapping to the new `microsoft_id` column.
+  - New `microsoftEndpoint(tenant)` — `golang.org/x/oauth2` has no premade Microsoft/Azure endpoint (unlike its `google`/`facebook` sub-packages), so the v2.0 authorize/token URLs are built directly from the tenant.
+  - New `microsoftConfig()`, `MicrosoftLogin` (`GET /auth/microsoft`), `MicrosoftCallback` (`GET /auth/microsoft/callback`) — same state-cookie CSRF check, token exchange, and `finishLogin` flow as Google/Facebook.
+  - Callback calls Microsoft Graph's `/v1.0/me` for `id`/`displayName`/`mail`, falling back to `userPrincipalName` when `mail` is null (common for personal Microsoft accounts). No profile picture is passed to `findOrCreateOAuthUser` — Graph only exposes the photo via a separate authenticated binary endpoint, not a plain URL like Google/Facebook provide, so Microsoft sign-ins get the same generated-avatar fallback as local accounts. This is called out as a known, intentional limitation, not a bug.
+  - `Config()` (`GET /auth/config`): added `"microsoftEnabled": h.Cfg.MicrosoftClientID != ""`.
+- **`internal/handlers/router.go`**: registered `GET /auth/microsoft` and `GET /auth/microsoft/callback`.
+- **Frontend** (`app/index.html`, `app/photo.html`, `app/app.js`): added a "Sign in with Microsoft" button (four-square Microsoft logo) next to the existing Google/Apple buttons, gated on `authConfig.microsoftEnabled`; extended the OAuth-divider's `x-show` condition to include it; added `microsoftEnabled: false` to all six `authConfig` default objects in `app.js`. `GET /auth/config`'s response is assigned to `authConfig` wholesale in `init()`, so no other frontend wiring was needed. Note: Facebook itself has no frontend button despite a working backend (a pre-existing gap from before this plan, left untouched — out of scope for this session).
+- **`README.md`**: added a full "Microsoft Sign-In Setup" section (Azure AD app registration, client secret, `User.Read` Graph permission, credential table) mirroring the Facebook section, updated the "four login methods" intro to five, and added the four `MICROSOFT_*` variables to the "Full auth environment variables" table.
+
+### Testing notes
+- No Go toolchain is available in this sandbox (no `go` binary, and no network egress to `go.dev` to install one), so `go build ./...` / `make build` could not be run to confirm compilation.
+- Verified by manual read-through instead: all braces/blocks in the new `auth.go` code close correctly; every identifier used (`oauth2`, `fmt`, `json`, `io`, `slog`, `uuid`, `http`, `httprouter`) is already imported at the top of the file — no new imports were required since Microsoft's endpoint is built from `oauth2.Endpoint{AuthURL, TokenURL}` directly rather than a provider sub-package.
+- **Recommended follow-up**: run `make build` (or `go build ./...`) locally before deploying, since this couldn't be verified in-session.
+
+### Open items
+- Facebook Login has a working backend but no frontend button — noticed while wiring up Microsoft's button, but it predates this plan and wasn't part of the Phase 4 scope.
+- Build not verified locally (see Testing notes) — please run `make build` before deploying.
