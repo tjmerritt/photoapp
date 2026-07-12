@@ -1335,3 +1335,25 @@ Fixed by changing the `ORDER BY` to use the same `COALESCE(...)` expressions as 
 ### Open items
 - Once rebuilt, worth confirming `/api/v1/permissions` returns 200 for both anonymous and logged-in requests, since this is now the second time in this codebase a "hasn't been exercised yet" endpoint turned out to have a bug that pure code reading missed and only a live request surfaced.
 - Still pending the accumulated `make build` / end-to-end verification caveat from every prior Go-touching session.
+
+## Session 47 — Fixed: My Own Session 45 Edit Broke the Wall's `<img>` Tag
+
+### What was done
+Follow-up to Session 46: the user reported the wall now showed *no* images at all — every photo tile rendered blank, but was still clickable and correctly positioned/sized (navigating through to the right photo), which is an important clue: the anchor boxes were fine, so this wasn't the aspect-ratio/sizing bug again — something about the `<img>` itself had gone missing.
+
+Asked for the actual rendered outer HTML of one tile from DevTools, and it revealed the exact problem immediately: `<a ... :style="..." <img="" :src="..." ... width="528" height="356" ...></a>` — a single element with the `<img>`'s attributes merged directly onto the `<a>` tag, and a garbage `img=""` attribute. That shape only happens when an opening tag never closes with `>` before the next `<` appears — the browser then parses everything up to the *next* real `>` as one giant tag's attribute list, so `<img` gets swallowed as an attribute name (`img=""`) rather than starting a new element, and no `<img>` node is ever created. No image, but the anchor itself (still a single valid, correctly-styled `<a>` element) renders and links just fine — exactly matching what was reported.
+
+Traced this back to my own Session 45 edit: when rewriting the wall photo's `:style` attribute from a template literal to string concatenation, I dropped the trailing `>` that used to close the `<a ...>` opening tag right after that attribute, in `app/index.html` only (the equivalent line in `photo.html` doesn't exist — that file has no wall). Notably, my own verification *did* flag this at the time — a quick tag-balance script I ran after the Session 45 edit reported `app/index.html a opens=13 closes=13+selfclosed=1 CHECK` (an actual imbalance once self-closing tags are correctly excluded from the "closes" side), and I wrote it off as a script artifact instead of investigating. That was a mistake worth noting: a "CHECK"/ambiguous result from a hand-rolled verification script should be treated as a real signal to dig into, not dismissed because a *different*, simpler balance check happened to pass.
+
+Fixed by restoring the missing `>`. Re-ran the plain open/close `<a>` tag count (the same check style used throughout this whole conversation) on both `index.html` and `photo.html`: both now balanced (13/13 and 14/14). Also went back and manually re-inspected all 6 *other* backtick-to-concatenation fixes from Session 45 for the same kind of slip — none of them had it; this was an isolated one-line mistake.
+
+### Testing notes
+- `node --check app/app.js` passes (no `.js` changes this session).
+- `<a>` (along with `div`/`template`/`span`) tag-balance counts now clean on both `index.html` and `photo.html`.
+- Manually re-read the other 6 Session 45 edits line-by-line to confirm each element still closes properly — confirmed clean.
+- Bumped the `app.js` cache-bust query string to `?v=46` since `index.html` changed again.
+- Still no live browser available in this sandbox to visually confirm — but this fix is about as mechanically verifiable as an HTML fix gets (a literal missing character, now restored, confirmed via tag-count parity), so confidence here is high. Recommend the user reload and confirm both that images now render *and* that the aspect-ratio sizing from Session 43 finally looks right, since this bug had been masking any visual confirmation of that fix too.
+
+### Open items
+- This is a good argument for treating any "ambiguous"/non-green result from my own verification scripts as worth a follow-up look rather than a dismissible artifact, especially right before telling the user a fix is ready to test.
+- Still pending the accumulated `make build` / end-to-end verification caveat from every prior Go-touching session (unaffected by this particular fix, which is pure HTML markup).
