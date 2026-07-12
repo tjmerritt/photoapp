@@ -1032,3 +1032,40 @@ Implemented PLAN.md Phase 7 (title bar upload icon, upload popup, backend upload
 ### Open items
 - Build not verified locally — please run `make build` before deploying (same caveat as Sessions 32/33).
 - Face-detection-based is_public and WebP support are known, intentional gaps — flagged above, not oversights.
+
+## Session 35 — Fixed: Batch Labels Didn't Reach Photos Already Uploaded
+
+### What was done
+Bug report following Session 34: the upload popup's helper text said "Applied to every photo not yet uploaded," which was accurate but not what was wanted — labels added (or removed) after some photos in the batch had already finished uploading never reached those already-done photos at all, since the original design only attached the batch label snapshot to a photo's own upload request at the moment it was sent.
+
+Reworked `uploadStore` in `app/app.js` so batch labels are no longer sent as part of the initial `POST /api/v1/photos/upload` request at all. Instead:
+- The moment a file's upload finishes, `_syncItemLabels(item)` reconciles that photo's labels against whatever the batch label list currently shows — POSTing anything missing, via the same `/api/v1/labels` endpoint the regular per-photo label editor uses.
+- `addLabel()` and `removeLabel()` now call `_syncAllDone()`, which re-runs that same reconciliation against every photo already marked `done` in the queue — so editing the batch label list after photos have uploaded pushes the change out to them immediately, not just to whatever's still pending.
+- Each queue item tracks its own `appliedLabels` map (`"name value" -> labelid`) — the record of which labels this code has actually applied to that specific photo. This is what makes label *removal* possible after the fact: since we're the ones who POSTed each label (not the upload endpoint's own atomic insert), we always know the exact `labelid` to `DELETE` when a batch label is taken back out, without needing to guess or re-fetch and match by name/value.
+- Label sync is best-effort and fire-and-forget: a failed add/remove simply isn't recorded in `appliedLabels`, so the very next label edit retries it automatically. It doesn't block the upload from being marked `done`, and it keeps running in the background even if the popup is closed (the store persists independent of the popup's visibility), so it isn't strictly limited to "while the popup is open."
+- Updated the helper text under the label editor in both `app/index.html` and `app/photo.html` from "Applied to every photo not yet uploaded" to "Applied to every photo in this batch, including ones already uploaded."
+
+No backend changes were needed — this reuses the existing `POST /api/v1/labels?photoid=` and `DELETE /api/v1/labels/:labelid` endpoints exactly as the rest of the app already does. Permission-wise this works with no extra grants: the same logged-in user who uploaded the photo is also the one whose session POSTs each label, so `added_by_userid` matches the caller and they can delete their own labels later without needing `PermLabelAdmin` (see `labels.go`'s existing ownership check).
+
+### Testing notes
+- `node --check app/app.js` passes.
+- Re-ran the `<div>`/`<template>` tag-balance scan on both HTML files — unchanged counts (only the helper-text copy changed, no markup structure).
+- Not able to run an end-to-end upload test in this sandbox (no Go toolchain, no running Postgres instance) — same caveat as Session 34. Recommend manually verifying: upload a photo, wait for it to show "Done," then add a label and confirm it appears on that photo (via the normal photo page) without needing to re-upload; then remove the label from the batch editor and confirm it disappears from that same already-uploaded photo.
+
+### Open items
+- Label sync failures are silent (logged nowhere, just retried on the next edit) — acceptable for a best-effort background sync, but if labels seem to lag behind what's shown, that's the mechanism to check first.
+- Still pending the same `make build` verification called out in Session 34.
+
+## Session 36 — Add Filename Label to Uploaded Photos
+
+### What was done
+Small follow-up: `internal/handlers/upload.go`'s `uploadOne()` now adds a `Filename` computed label (alongside the existing `Resolution` one) holding the original uploaded file's name (`fh.Filename`, the browser-supplied filename from the multipart part) — merged in via the same `photoimport.MergeLabels` call already used for `Resolution`, so it takes precedence over any same-named EXIF tag exactly the way `Resolution` already does (moot in practice — EXIF has no standard "Filename" field — but keeps the precedence consistent).
+
+Scoped to the browser upload endpoint only, not `cmd/import-photos`: the CLI imports from URLs, not local files, so it has no equivalent "filename" (it derives a *title* from the URL basename, which is a different, pre-existing thing). If a similar label is wanted there too, that's a separate, explicit change.
+
+### Testing notes
+- Read through the edit in place; it's a two-line addition to an existing, already-reviewed slice literal — no new imports, no signature changes, no other call site depends on the exact label set (confirmed via grep for any other reference to the `"Resolution"` label name).
+- Same build-verification caveat as Sessions 34/35 — no Go toolchain available in this sandbox.
+
+### Open items
+- None.

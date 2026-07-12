@@ -3774,15 +3774,25 @@ function templateAdminApp() {
 // One XHR per file (not one multipart POST for the whole batch) so each
 // queue row gets its own real upload-progress percentage from the browser;
 // the backend endpoint (POST /api/v1/photos/upload) accepts either.
-// Batch labels are read fresh at the moment each file's upload actually
-// starts, not when the file is queued — so labels added/edited/removed while
-// other files are mid-upload still apply correctly to anything not yet sent.
+//
+// Label sync model: the initial per-file upload does NOT send batch labels
+// at all. Instead, the moment a photo finishes uploading, and again any time
+// the batch label list is edited, _syncItemLabels() reconciles that photo's
+// labels against whatever is currently shown in the popup — adding labels
+// that are missing and removing ones that were taken back out — via the
+// regular POST/DELETE /api/v1/labels API (the same one the label editor
+// elsewhere in the app uses). This is what guarantees every photo already
+// uploaded in this batch ends up matching the labels shown, not just photos
+// that happened to still be queued when a label was added or removed.
+// Each item's appliedLabels map (name value -> labelid) is the source
+// of truth for which labels this code has actually applied to that photo,
+// so a later removal always knows exactly which labelid to delete.
 // ─────────────────────────────────────────────────────────────────────────────
 function uploadStore() {
   return {
     open: false,
-    queue: [],           // { id, file, filename, status, progress, error, photoid }
-    labels: [],          // { name, value } — applied to every not-yet-sent file
+    queue: [],           // { id, file, filename, status, progress, error, photoid, appliedLabels }
+    labels: [],          // { name, value } — kept in sync onto every photo in this batch
     newLabelName: '',
     newLabelValue: '',
     activeCount: 0,
@@ -3800,6 +3810,7 @@ function uploadStore() {
           progress: 0,
           error: '',
           photoid: null,
+          appliedLabels: new Map(), // name value -> labelid, for photos already uploaded
         });
       }
       if (files.length) this.open = true;
@@ -3813,10 +3824,12 @@ function uploadStore() {
       this.labels.push({ name, value });
       this.newLabelName = '';
       this.newLabelValue = '';
+      this._syncAllDone();
     },
 
     removeLabel(idx) {
       this.labels.splice(idx, 1);
+      this._syncAllDone();
     },
 
     retry(item) {
@@ -3849,9 +3862,6 @@ function uploadStore() {
 
       const form = new FormData();
       form.append('files', item.file, item.file.name);
-      if (this.labels.length) {
-        form.append('labels', JSON.stringify(this.labels));
-      }
 
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/v1/photos/upload');
@@ -3874,13 +3884,18 @@ function uploadStore() {
         try { data = JSON.parse(xhr.responseText); } catch { /* fall through to error below */ }
         const result = data && Array.isArray(data.results) ? data.results[0] : null;
         if (xhr.status >= 200 && xhr.status < 300 && result && result.status === 'ok') {
-          item.status = 'done';
           item.progress = 100;
           item.photoid = result.photoid;
-        } else {
-          item.status = 'error';
-          item.error = (result && result.error) || (data && data.error) || ('Upload failed (HTTP ' + xhr.status + ')');
+          // Apply whatever labels are shown right now (not necessarily what
+          // was shown when this file was queued) before marking it done.
+          this._syncItemLabels(item).finally(() => {
+            item.status = 'done';
+            finish();
+          });
+          return;
         }
+        item.status = 'error';
+        item.error = (result && result.error) || (data && data.error) || ('Upload failed (HTTP ' + xhr.status + ')');
         finish();
       };
       xhr.onerror = () => {
@@ -3890,6 +3905,52 @@ function uploadStore() {
       };
 
       xhr.send(form);
+    },
+
+    // Reconciles one uploaded photo's labels against the current batch
+    // label list: adds whatever is missing, removes whatever this code
+    // previously applied but is no longer in the list. Best-effort — a
+    // failed add/remove is left out of appliedLabels so the next sync
+    // (triggered by the next label edit) retries it.
+    async _syncItemLabels(item) {
+      if (!item.photoid) return;
+      const authHeaders = getAuthHeaders();
+      const wanted = new Map(this.labels.map((l) => [l.name + ' ' + l.value, l]));
+
+      for (const [key, l] of wanted) {
+        if (item.appliedLabels.has(key)) continue;
+        try {
+          const resp = await fetch('/api/v1/labels?photoid=' + encodeURIComponent(item.photoid), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders },
+            body: JSON.stringify({ name: l.name, value: l.value }),
+          });
+          if (resp.ok) {
+            const created = await resp.json();
+            item.appliedLabels.set(key, created.labelid);
+          }
+        } catch { /* left unsynced; retried on the next label edit */ }
+      }
+
+      for (const [key, labelid] of Array.from(item.appliedLabels.entries())) {
+        if (wanted.has(key)) continue;
+        try {
+          const resp = await fetch('/api/v1/labels/' + encodeURIComponent(labelid), {
+            method: 'DELETE',
+            headers: authHeaders,
+          });
+          if (resp.ok || resp.status === 404) item.appliedLabels.delete(key);
+        } catch { /* left applied; retried on the next label edit */ }
+      }
+    },
+
+    // Re-applies the current batch label list to every photo already
+    // uploaded in this batch. Called whenever a label is added or removed,
+    // so photos uploaded before the edit still match what the popup shows.
+    _syncAllDone() {
+      for (const item of this.queue) {
+        if (item.status === 'done' && item.photoid) this._syncItemLabels(item);
+      }
     },
   };
 }

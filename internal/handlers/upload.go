@@ -168,6 +168,7 @@ func (h *UploadPhotosHandler) uploadOne(
 	exifLabels := photoimport.ExtractEXIF(data)
 	computed := []photoimport.Label{
 		{Name: "Resolution", Value: fmt.Sprintf("%dx%d", width, height)},
+		{Name: "Filename", Value: fh.Filename},
 	}
 	allLabels := photoimport.MergeLabels(exifLabels, computed)
 	allLabels = photoimport.MergeLabels(allLabels, batchLabels)
