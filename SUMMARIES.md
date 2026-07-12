@@ -978,3 +978,18 @@ Implemented PLAN.md Phase 4, following the existing Facebook Login pattern (Sess
 ### Open items
 - Facebook Login has a working backend but no frontend button — noticed while wiring up Microsoft's button, but it predates this plan and wasn't part of the Phase 4 scope.
 - Build not verified locally (see Testing notes) — please run `make build` before deploying.
+
+## Session 33 — Facebook Sign-In Frontend Button
+
+### What was done
+Follow-up to Session 32: confirmed (by reading the "Added Facebook signin." commit's diff directly) that the Facebook backend work touched only `README.md`, `config.go`, `auth.go`, `router.go`, and the migration — no frontend file was part of that commit, so this was a full omission of the UI piece rather than a one-line miss. Closed that gap now, mirroring the Google/Apple/Microsoft buttons already in place:
+
+- **`app/index.html`** and **`app/photo.html`**: added a "Sign in with Facebook" button, gated on `authConfig.facebookEnabled`, positioned between Apple and Microsoft (matching the provider order used in `README.md`'s "five login methods" list). Styled as a solid Facebook-blue (`#1877F2`) button with a white "f" glyph, matching the pattern of Apple's solid-black button rather than Google/Microsoft's bordered-white style. Extended both files' OAuth-divider `x-show` condition to include `authConfig.facebookEnabled`.
+- **`app/app.js`**: added `facebookEnabled: false` to all six `authConfig` default objects (same six spots updated for Microsoft in Session 32). No other JS changes needed — `GET /auth/config`'s response (which already includes `facebookEnabled` server-side, added back when Facebook's backend was built) is assigned to `authConfig` wholesale in each page's `init()`.
+
+### Testing notes
+- Verified via `grep`/Python HTML scan that both `index.html` and `photo.html` now reference `authConfig.facebookEnabled` exactly twice each (button `x-show` + divider `x-show`), with no stray/unclosed tags introduced.
+- Same caveat as Session 32: no Go changes were made here (frontend-only), so no build verification was needed.
+
+### Open items
+- None.

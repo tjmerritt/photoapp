@@ -309,6 +309,14 @@
                 Sign in with Apple
               </a>
 
+              <!-- Facebook -->
+              <a x-show="authConfig.facebookEnabled"
+                 href="/auth/facebook"
+                 class="flex items-center justify-center gap-3 w-full bg-[#1877F2] text-white rounded-xl py-2.5 mb-4 hover:bg-[#166fe0] transition text-sm font-medium">
+                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="#fff"><path d="M14.5 8.5c0-1 .6-1.6 1.7-1.6h1.3V4.4s-.9-.1-1.9-.1c-2.2 0-3.6 1.3-3.6 3.7v2.1H9.6v2.9h2.4V21h3v-8h2.2l.4-2.9h-2.6z"/></svg>
+                Sign in with Facebook
+              </a>
+
               <!-- Microsoft -->
               <a x-show="authConfig.microsoftEnabled"
                  href="/auth/microsoft"
@@ -318,7 +326,7 @@
               </a>
 
               <!-- Divider — only shown when at least one OAuth provider is available -->
-              <div x-show="authConfig.googleEnabled || authConfig.appleEnabled || authConfig.microsoftEnabled" class="flex items-center gap-2 mb-4">
+              <div x-show="authConfig.googleEnabled || authConfig.appleEnabled || authConfig.facebookEnabled || authConfig.microsoftEnabled" class="flex items-center gap-2 mb-4">
                 <div class="flex-1 border-t border-[var(--border)]"></div>
                 <span class="text-xs text-muted">or</span>
                 <div class="flex-1 border-t border-[var(--border)]"></div>

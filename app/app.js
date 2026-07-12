@@ -665,7 +665,7 @@ function photoApp() {
     error: null,
 
     loggedInUser: null,
-    authConfig: { googleEnabled: false, appleEnabled: false, microsoftEnabled: false },
+    authConfig: { googleEnabled: false, appleEnabled: false, facebookEnabled: false, microsoftEnabled: false },
 
     testUser: null,
 
@@ -1203,7 +1203,7 @@ function wallApp() {
     // ── Auth / navbar state (mirrors photoApp) ────────────────────────────────
     loggedInUser: null,
     testUser:     null,
-    authConfig:   { googleEnabled: false, appleEnabled: false, microsoftEnabled: false },
+    authConfig:   { googleEnabled: false, appleEnabled: false, facebookEnabled: false, microsoftEnabled: false },
     toast:        { visible: false, message: '', timer: null },
 
     get currentUser() { return this.loggedInUser || this.testUser || null; },
@@ -1364,7 +1364,7 @@ function galleriesNav() {
 function galleriesApp() {
   return {
     loggedInUser: null,
-    authConfig:   { googleEnabled: false, appleEnabled: false, microsoftEnabled: false },
+    authConfig:   { googleEnabled: false, appleEnabled: false, facebookEnabled: false, microsoftEnabled: false },
     toast:        { visible: false, message: '', timer: null },
 
     galleries: [],
@@ -2368,7 +2368,7 @@ function displayApp() {
 function displayEditApp() {
   return {
     loggedInUser: null,
-    authConfig:   { googleEnabled: false, appleEnabled: false, microsoftEnabled: false },
+    authConfig:   { googleEnabled: false, appleEnabled: false, facebookEnabled: false, microsoftEnabled: false },
     toast:        { visible: false, message: '', timer: null },
 
     display:         null,
@@ -2739,7 +2739,7 @@ function displayEditApp() {
 function galleryAdminApp() {
   return {
     loggedInUser: null,
-    authConfig:   { googleEnabled: false, appleEnabled: false, microsoftEnabled: false },
+    authConfig:   { googleEnabled: false, appleEnabled: false, facebookEnabled: false, microsoftEnabled: false },
     toast:        { visible: false, message: '', timer: null },
 
     galleries:    [],
@@ -3353,7 +3353,7 @@ function galleryAdminApp() {
 function templateAdminApp() {
   return {
     loggedInUser: null,
-    authConfig:   { googleEnabled: false, appleEnabled: false, microsoftEnabled: false },
+    authConfig:   { googleEnabled: false, appleEnabled: false, facebookEnabled: false, microsoftEnabled: false },
     toast:        { visible: false, message: '', timer: null },
 
     templates: [],
