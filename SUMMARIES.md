@@ -1253,3 +1253,63 @@ Fixed by removing the independent height clamp entirely for full rows — `rowHe
 ### Open items
 - Removing the height clamp means a row's height is now purely a function of its photos' aspect ratios and the container width — a pathological input (e.g. several extreme-aspect-ratio portrait photos landing in the same row on a narrow viewport) could in theory produce an unusually tall row. This is an accepted tradeoff of restoring the original algorithm's exact aspect-preservation guarantee, per the user's explicit request, rather than a new bug — but worth knowing if an oddly tall row ever gets reported.
 - Still pending the accumulated `make build` / end-to-end verification caveat from every prior Go-touching session (this particular fix is pure frontend, so it's actually testable without Go — just no browser available here).
+
+## Session 44 — Confirmed Session 43's Fix Is Correct; Added Cache-Busting for app.js
+
+### What was done
+The user retested with four specific photos (1948×2310, 3688×2452, 1948×2310, 344×418) and reported sizes (145×183, 275×183, 145×183, 26×183) that still looked wrong, with expected sizes (124×147, 221×147, 124×147, 121×147).
+
+Rather than re-guessing, extracted the *actual* `packRows` function straight out of the current `app/app.js` (via a small Node script that `eval`s the live source, not a hand reimplementation) and ran it against exactly those four photo dimensions at the container width implied by the user's own numbers (591px usable + 3×4px gaps = 603px). Result: `height: 147`, `displayWidth: [124, 221, 124, 121]` — an exact match for what the user says the sizes *should* be, not what they reported seeing. Separately, back-computing what algorithm *would* produce the reported (wrong) numbers showed they match dropping the aspect-ratio height-normalization step entirely — i.e. treating `flexGrow` as each photo's raw pixel width with no `maxNatH/height` correction at all, which is exactly the shape of bug Session 43 already fixed.
+
+Conclusion: the fix in the repository is correct and already produces the right output for this exact case — the numbers the user saw match the *pre-fix* behavior byte-for-byte, which is a strong signal their browser was still running a cached copy of `app.js` from before Session 43 landed, not the current file.
+
+To stop this class of confusion from recurring across future rounds of frontend changes (this is now the second report that turned out to be a stale-cache artifact), added a cache-busting version query string to every page's `app.js` script tag: `<script src="/app.js?v=44">` across all seven HTML files that load it (`index.html`, `photo.html`, `galleries.html`, `gallery-admin.html`, `template-admin.html`, `display.html`, `display-edit.html`). The Go server serves these as plain static files (`http.FileServer`) with no explicit `Cache-Control` header, so browsers can and do cache them somewhat aggressively across page navigations within a session without necessarily revalidating — a version-query bump forces a fresh fetch. This number should be bumped again (e.g. to match the next session number) any time `app.js` changes going forward.
+
+### Testing notes
+- Confirmed via direct execution (not just static reading) that current `packRows`, fed the user's exact four photo dimensions, produces their exact expected output.
+- `grep`-verified all seven `app.js` script tags now carry `?v=44`, and that no other file references were accidentally touched (the two doc-comment mentions of "app.js" in prose were correctly left alone).
+- No live browser available in this sandbox — recommend the user do one hard refresh (or fully close and reopen the tab) to make sure the cache-busted URL is picked up, then re-verify the same four-photo row.
+
+### Open items
+- If the wall still shows the wrong sizes after a hard refresh with the new `?v=44` URL, that would mean this isn't a caching issue after all and the bug is somewhere not yet found (e.g. in how `wallApp` measures `containerWidth`, or a difference between what's actually being fed into `packRows` versus these four dimensions) — worth a fresh look with actual browser dev tools network/console output at that point, since static analysis has now twice confirmed the algorithm itself is correct.
+- The version-bump-on-every-change convention is manual/easy to forget; if this keeps being a problem, worth considering a small build step or server-side cache-control header instead.
+
+## Session 45 — Real Root Cause Found: CSP Build Doesn't Support Template Literals At All
+
+### What was done
+The user ruled out caching definitively (confirmed the served `app.js` byte-for-byte identical to the source) and then pasted the actual browser console output, which contained the real answer:
+
+```
+alpinejs.min.js:1 Alpine Expression Error: CSP Parser Error: Unexpected token: OPERATOR "`"
+Expression: "`height:${row.height}px`"
+alpinejs.min.js:1 Alpine Expression Error: CSP Parser Error: Unexpected token: OPERATOR "`"
+Expression: "row.stretch ? `flex:${p.flexGrow} 1 0px` : `flex:0 0 ${p.widthPx}px`"
+```
+
+Decompiling `alpinejs.min.js`'s tokenizer in Session 40 already established this is Alpine's CSP-restricted build with a hand-written expression parser, and that session's fix was for a *different* limitation of that same parser (no multi-statement/semicolon support). This is a second, entirely separate limitation of the same parser: its tokenizer's `readString()` only recognizes `"` and `'` as string delimiters — backticks aren't handled as a string type at all, so any expression using a template literal (`` `...${...}...` ``) fails to *parse*, not just to evaluate, and the whole `:style`/`:src`/etc. binding is abandoned (logged to console, silently never applied — this is why nothing about Session 43's `packRows` fix ever showed up on screen: the computed values were correct, but the `:style` attribute that was supposed to carry them to the DOM never got set at all, on any of these three sessions' testing rounds).
+
+Crucially, `:style="`flex:${p.flexGrow} 1 0px`"` (using a template literal) was **already broken this way before Session 43** — it's not something introduced by this conversation's changes; it's been silently non-functional since whenever the wall layout feature was first built. Session 43's `stretch`/`widthPx` addition just added a second broken template-literal expression alongside the pre-existing one, in the same spot.
+
+Grepped every `.html` file in `app/` for backticks inside directive-like attributes (`@`, `:`, `x-`-prefixed) and found 7 total, all previously undiscovered:
+- `app/index.html`: the upload-progress-bar width (`:style`), the wall row height (`:style`), and the wall photo flex (`:style`).
+- `app/photo.html`: the same upload-progress-bar width (a separate copy of the upload popup lives on this page too), a comment author's pravatar fallback avatar URL (`:src`), a comment body's `-webkit-line-clamp` truncation style (`:style`), and an emoji reaction's skin-tone swatch background color (`:style`).
+
+Fixed all 7 by rewriting them as plain string concatenation with `+` instead of template literals — e.g. `` `height:${row.height}px` `` → `'height:' + row.height + 'px'`. The CSP evaluator's `BinaryExpression` case for `+` just uses native JS `+`, so numeric/string coercion still works exactly the same as it would in a template literal; only the *syntax* needed to change, not the runtime behavior. Re-grepped afterward and confirmed zero backticks remain in any `.html` file's attributes.
+
+This also means two more real, previously-unknown bugs are now fixed as a side effect, not just the wall sizing: comment authors with no profile image (`c.author.tn` falsy) were rendering with a completely unset `<img src>` instead of the intended pravatar fallback, and long comments' "show more" line-clamp truncation was never actually applying its computed line count.
+
+Separately, the user's pasted console log also showed `GET /api/v1/permissions 500 (Internal Server Error)` — the very endpoint Sessions 39/41 added new frontend callers for (`canUploadPhotos`/`isLabelAdmin`). This fails safe (defaults to `false`, so it doesn't grant anything it shouldn't), but it's a real bug worth chasing. `PermissionsHandler.ServeHTTP` was swallowing the underlying error without logging it, so there was no way to tell *why* it 500'd from server logs alone. Added `slog.Error` logging there (with userid/exhibitionid context) so the next occurrence will actually show the root cause in the server's log output.
+
+Bumped the `app.js` cache-bust query string again, from `?v=44` to `?v=45`, since these were `.html` file changes (the query string is on the `<script>` tag itself, so it needed bumping even though `app.js` itself wasn't touched this session).
+
+### Testing notes
+- `node --check app/app.js` passes (no `.js` file changes this session — only `.html` attribute rewrites and the one Go handler).
+- Re-ran the backtick grep across all of `app/*.html` after the fixes: zero remaining.
+- Tag-balance scans (`div`/`template`/`span`) on both edited HTML files unchanged and balanced.
+- Could not verify the Go change compiles via a real build (no Go toolchain in this sandbox, as in every prior Go-touching session) — it's a two-line, low-risk addition (one import, one `slog.Error` call) matching the exact pattern used in every other handler in this codebase.
+- Cannot run a real browser here to confirm the wall now renders correctly — this is the first time in this whole multi-session investigation that a plausible, *provable* root cause (a parser error visible directly in the console) has been found, rather than a plausible-sounding theory. Strongly recommend the user retest the same four-photo row now.
+
+### Open items
+- Need the user to reproduce the `/api/v1/permissions` 500 again after rebuilding (`make build`) and restarting the server, then share the new server-side log line (now includes the actual DB error, userid, and exhibitionid) so the real cause can be found — right now there's no way to know if it's a schema/migration gap, a bad UUID cast, or something else.
+- Given this parser silently drops *any* unparseable expression (not just template literals — Session 40 found the same silent-failure behavior for semicolon-separated statements), it's worth budgeting time for one more full pass across `app/*.html` looking for other CSP-incompatible syntax this parser doesn't support (arrow functions, are already avoided per an existing code comment; regex literals, `new`, spread/rest, destructuring, and array/object literals are all candidates worth spot-checking, since the evaluator's switch statement only explicitly implements a specific list of node types).
+- Still pending the accumulated `make build` / end-to-end verification caveat from every prior Go-touching session.

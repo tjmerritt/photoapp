@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/julienschmidt/httprouter"
@@ -36,6 +37,7 @@ func (h *PermissionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, _
 
 	grants, err := h.Checker.UserPermissions(ctx, userID, exhibitionID)
 	if err != nil {
+		slog.Error("GET /api/v1/permissions", "error", err, "userid", userID, "exhibitionid", exhibitionID)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
