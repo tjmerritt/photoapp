@@ -135,13 +135,18 @@
          the mouse away collapses it again immediately (no delay on the
          un-hovered transition). Doesn't affect layout of surrounding slots
          since transform doesn't reflow an absolutely-positioned element's
-         siblings — it only changes how this box itself is painted. */
-      transform: scale(1);
+         siblings — it only changes how this box itself is painted.
+         --placard-hover-shift-x/-y (set on @mouseenter, see
+         handlePlacardHover()/applyPlacardHoverShift() in app.js) nudge the
+         expanded box back within the browser window if it would otherwise
+         grow off-screen near an edge — translate() composes with scale()
+         in the same transform rather than needing a second element. */
+      transform: translate(0, 0) scale(1);
       transform-origin: center center;
       transition: transform 0.12s ease-out;
     }
     .placard-box:hover {
-      transform: scale(var(--placard-hover-scale, 1));
+      transform: translate(var(--placard-hover-shift-x, 0px), var(--placard-hover-shift-y, 0px)) scale(var(--placard-hover-scale, 1));
       transition: transform 0.18s ease-out 0.35s; /* 0.35s hover delay before expanding */
       z-index: 40;
       box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
@@ -333,7 +338,7 @@
              than nested in .slot-card since a placard isn't confined to its
              slot's own bounds. -->
         <template x-for="(slot, i) in (display && display.slots || [])" :key="'placard-' + slot.slotid">
-          <div class="placard-box" :style="placardBoxStyle(i)">
+          <div class="placard-box" :style="placardBoxStyle(i)" @mouseenter="handlePlacardHover($event)">
             <template x-for="item in placardItemsFor(slot)" :key="item.id">
               <div class="placard-item" :style="item.style" x-text="item.text"></div>
             </template>

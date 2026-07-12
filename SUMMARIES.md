@@ -803,3 +803,22 @@ Since the display canvas is rendered responsively (no fixed physical size on its
 ### Open items
 - The 0.35s hover delay and un-hover snap-back speed (0.12s) are reasonable defaults, not something the user specified an exact value for — easy to tune if they feel off in practice.
 - No cap on the expansion magnitude — a placard on a heavily-compressed canvas (e.g. a wide board viewed on a narrow phone) could expand quite dramatically on hover. This matches the literal request ("full size for the font") but is worth watching for if it ever looks excessive.
+
+## Session 25 — Fixed: Hover-Expanded Placards Could Grow Off-Screen Near an Edge
+
+### What was done
+- Fixed a nit on the Session 24 hover-to-expand feature: a placard positioned near the edge of the window would expand (via `transform: scale()`, anchored at its own center) partly or entirely off-screen, since pure CSS has no way to know how close an element actually sits to the *viewport's* edge and adjust for it.
+- Added a small JS-computed clamp that runs once on `mouseenter` (before the CSS hover-delay transition becomes visible, so there's no visible jump): it measures the box's real screen position, computes how far the *expanded* box would extend past each edge, and — if any edge would be crossed — writes a pixel offset into two new CSS custom properties (`--placard-hover-shift-x/-y`). The `:hover` transform now composes `translate(shift) scale(hoverScale)`, so the box shifts back into view by exactly enough to stay fully on-screen (plus a small margin, and extra clearance at the top to also stay clear of the sticky navbar) while still expanding by the same amount.
+- `app/app.js`:
+  - New `clampPlacardHoverShift(rect, scale, viewportW, viewportH, margin, topMargin)` — pure math, given the box's un-scaled `getBoundingClientRect()` and its hover scale, returns the `{shiftX, shiftY}` needed to keep the *expanded* box within `[margin, viewport - margin]` (or `[topMargin, ...]` vertically). Returns `{0, 0}` whenever `scale <= 1` (hover wouldn't actually grow the box, so nothing needs correcting, even if the box already happens to sit near the edge on its own).
+  - New `applyPlacardHoverShift(el)` — the DOM-facing wrapper: reads the element's live `--placard-hover-scale` (via `getComputedStyle`) and its `getBoundingClientRect()`/the window's `innerWidth`/`innerHeight`, calls `clampPlacardHoverShift()`, and writes the result back as `el.style.setProperty('--placard-hover-shift-x'/'-y', ...)`.
+  - `displayApp`/`displayEditApp`: added `handlePlacardHover(event) { applyPlacardHoverShift(event.currentTarget); }`.
+- `app/display.html` / `app/display-edit.html`: added `@mouseenter="handlePlacardHover($event)"` to `.placard-box`; the `:hover` rule's `transform` now reads `translate(var(--placard-hover-shift-x, 0px), var(--placard-hover-shift-y, 0px)) scale(var(--placard-hover-scale, 1))` (translate composed *outside* scale in the CSS transform list, so the shift is applied in real screen pixels, not itself scaled up).
+
+### Testing notes
+- `run30.js`: added pure-function tests for `clampPlacardHoverShift` (no shift needed when there's room to grow; shifts right/left near the left/right edge; shifts down past the taller top margin near the top; `topMargin` falling back to `margin` when omitted; `scale <= 1` always yielding no shift even right at an edge) and for `applyPlacardHoverShift` (wired up against a faked element — plain objects shaped like the DOM APIs it touches, no real DOM needed — confirming it reads the scale, writes both shift properties in px, and is a safe no-op for a missing/invalid element).
+- `run31.js`: extended the existing DOM-level test — with the canvas already compressed to half its design width (hover-scale 2 from Session 24's test), stubbed the placard box's `getBoundingClientRect()` near the left edge of the JSDOM viewport, dispatched a real `mouseenter` event, and confirmed `handlePlacardHover()` actually ran through Alpine's event binding and wrote non-zero `--placard-hover-shift-x/-y` onto the box's live inline style — full wiring confirmed, not just the underlying helper functions.
+- Full placard suite (`run30`–`run37`, 157 checks) passes with no regressions.
+
+### Open items
+- None known.

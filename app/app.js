@@ -1945,6 +1945,67 @@ function placardBoxStyle(gallery, slotPos, canvasPxWidth) {
   return 'position: absolute; left: ' + pos.x + '%; top: ' + pos.y + '%; width: ' + g.width + '%; height: ' + g.height + '%; background: ' + g.background + '; border: 1px solid ' + g.borderColor + '; --placard-hover-scale: ' + hoverScale + ';';
 }
 
+// Hover-to-expand's viewport clamp — how far to shift the expanded placard
+// box (via a `translate()` composed into the same CSS transform that scales
+// it — see .placard-box:hover in display.html/display-edit.html) so it
+// stays fully within the browser window instead of growing off-screen when
+// the placard sits near an edge. `rect` is the box's normal, un-scaled
+// getBoundingClientRect(); `scale` is --placard-hover-scale (see
+// placardBoxStyle() above). Growth is symmetric around the box's own center
+// (matches transform-origin: center center on .placard-box), so half the
+// size increase extends past each edge — that's what has to be checked
+// against the viewport, not the box's original (unscaled) bounds.
+// `topMargin` defaults to `margin` but can be set larger to also clear a
+// fixed/sticky header that a plain viewport-edge check wouldn't know about.
+var PLACARD_HOVER_MARGIN     = 12; // breathing room from the viewport edges
+var PLACARD_HOVER_TOP_MARGIN = 68; // clears the 56px sticky navbar + margin
+
+function clampPlacardHoverShift(rect, scale, viewportW, viewportH, margin, topMargin) {
+  // scale <= 1 means the box isn't actually growing on hover (e.g. the
+  // canvas is already at its full design size, so hover is a cosmetic
+  // no-op) — nothing to correct for, even if the box already happens to sit
+  // near the window edge on its own. Shifting a non-expanding box would
+  // just be a spurious jump with no size change to justify it.
+  if (!(scale > 1)) return { shiftX: 0, shiftY: 0 };
+  var m   = typeof margin === 'number' ? margin : 0;
+  var top = typeof topMargin === 'number' ? topMargin : m;
+  var growW = rect.width  * (scale - 1);
+  var growH = rect.height * (scale - 1);
+  var expLeft   = rect.left   - growW / 2;
+  var expRight  = rect.right  + growW / 2;
+  var expTop    = rect.top    - growH / 2;
+  var expBottom = rect.bottom + growH / 2;
+
+  var shiftX = 0;
+  if (expLeft < m)                        shiftX = m - expLeft;
+  else if (expRight > viewportW - m)      shiftX = (viewportW - m) - expRight;
+
+  var shiftY = 0;
+  if (expTop < top)                       shiftY = top - expTop;
+  else if (expBottom > viewportH - m)     shiftY = (viewportH - m) - expBottom;
+
+  return { shiftX: shiftX, shiftY: shiftY };
+}
+
+// Wires clampPlacardHoverShift() up to a real DOM element: reads the
+// current --placard-hover-scale custom property (set inline by
+// placardBoxStyle()) and the element's live position/size, computes the
+// clamp, and writes the result back as --placard-hover-shift-x/-y — which
+// the CSS :hover transform reads. Called on mouseenter (see @mouseenter on
+// .placard-box), synchronously, so the shift is already correct by the time
+// the CSS hover-delay transition actually becomes visible.
+function applyPlacardHoverShift(el) {
+  if (!el || typeof el.getBoundingClientRect !== 'function') return;
+  var win = el.ownerDocument && el.ownerDocument.defaultView;
+  if (!win) return;
+  var cs    = win.getComputedStyle(el);
+  var scale = parseFloat(cs.getPropertyValue('--placard-hover-scale')) || 1;
+  var rect  = el.getBoundingClientRect();
+  var shift = clampPlacardHoverShift(rect, scale, win.innerWidth, win.innerHeight, PLACARD_HOVER_MARGIN, PLACARD_HOVER_TOP_MARGIN);
+  el.style.setProperty('--placard-hover-shift-x', shift.shiftX + 'px');
+  el.style.setProperty('--placard-hover-shift-y', shift.shiftY + 'px');
+}
+
 // Converts an item's absolute inches-from-top-left position into the
 // percent CSS actually needs, against the placard's *current* physical
 // size — this is where "fixed physical position, not repositioned when the
@@ -2050,6 +2111,10 @@ function displayApp() {
     // + item content from the gallery) — see the placard helper block above.
     placardBoxStyle(i) { return placardBoxStyle(this.gallery, this.slotPositions[i], this.canvasWidthPx); },
     placardItemsFor(slot) { return placardItemsFor(this.gallery, slot, this.canvasWidthPx); },
+    // Keeps a hovered, expanded placard within the browser window instead
+    // of growing off-screen near an edge — see @mouseenter on .placard-box
+    // and applyPlacardHoverShift()/clampPlacardHoverShift() above.
+    handlePlacardHover(event) { applyPlacardHoverShift(event.currentTarget); },
 
     // Measures each slot's rendered .photo-area and computes its exact
     // frame box size (see computeFrameBoxSize()). Re-run whenever the grid
@@ -2200,6 +2265,10 @@ function displayEditApp() {
     // + item content from the gallery) — see the placard helper block above.
     placardBoxStyle(i) { return placardBoxStyle(this.gallery, this.slotPositions[i], this.canvasWidthPx); },
     placardItemsFor(slot) { return placardItemsFor(this.gallery, slot, this.canvasWidthPx); },
+    // Keeps a hovered, expanded placard within the browser window instead
+    // of growing off-screen near an edge — see @mouseenter on .placard-box
+    // and applyPlacardHoverShift()/clampPlacardHoverShift() above.
+    handlePlacardHover(event) { applyPlacardHoverShift(event.currentTarget); },
     avatarSrc(user)  { return avatarSrc(user);  },
 
     // Label text for a slot's guide overlay — the raw x/y/w/h (percent) from
