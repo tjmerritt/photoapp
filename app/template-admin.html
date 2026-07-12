@@ -136,6 +136,7 @@
       justify-content: center;
       font-size: 0.7rem;
       color: var(--muted);
+      box-sizing: border-box;
     }
     .template-preview.mini {
       aspect-ratio: 16 / 9;
@@ -143,10 +144,37 @@
     }
     .template-preview.mini .preview-slot { font-size: 0; }
 
+    /* Drag-to-position/resize (editor preview only — the mini thumbnail in
+       each template's row header is read-only, no handlers are attached
+       there, and font-size:0 already hides its own numbering). */
+    .template-preview:not(.mini) .preview-slot {
+      cursor: move;
+      user-select: none;
+    }
+    /* Small square handles at each corner of a slot — drag one to resize,
+       the opposite corner stays fixed (see resizeSlotFromCorner() in
+       app.js). Sized/positioned to straddle the slot's own border so
+       they're easy to grab right at the corner. */
+    .resize-handle {
+      position: absolute;
+      width: 10px;
+      height: 10px;
+      background: #fff;
+      border: 1.5px solid var(--accent);
+      border-radius: 2px;
+      z-index: 3;
+    }
+    .resize-handle.nw { top: -5px;    left: -5px;   cursor: nwse-resize; }
+    .resize-handle.ne { top: -5px;    right: -5px;  cursor: nesw-resize; }
+    .resize-handle.sw { bottom: -5px; left: -5px;   cursor: nesw-resize; }
+    .resize-handle.se { bottom: -5px; right: -5px;  cursor: nwse-resize; }
+
     /* Rough marker for each slot's placard position (slot_positions[i].
        placard). Its real size is set at the gallery level (Gallery Admin's
        Placard Settings), so this preview uses a fixed guess just to show
-       roughly where it'll sit relative to the slot. */
+       roughly where it'll sit relative to the slot. Draggable in the editor
+       preview (see startPlacardDrag() in app.js) — dropping it near an edge
+       re-attaches the placard to that side (placardDragToConfig()). */
     .preview-placard {
       position: absolute;
       width: 16%;
@@ -161,6 +189,12 @@
       justify-content: center;
       pointer-events: none;
     }
+    .template-preview:not(.mini) .preview-placard {
+      pointer-events: auto;
+      cursor: grab;
+      user-select: none;
+    }
+    .template-preview:not(.mini) .preview-placard:active { cursor: grabbing; }
     .template-preview.mini .preview-placard { display: none; }
   </style>
 </head>
@@ -358,12 +392,21 @@
 
               <!-- Right: live preview -->
               <div>
-                <p class="text-xs font-medium text-[var(--muted)] mb-1">Preview</p>
-                <div class="template-preview">
+                <p class="text-xs font-medium text-[var(--muted)] mb-1">
+                  Preview — drag a slot to move it, its corners to resize it,
+                  or a dashed placard marker to re-attach it to a different
+                  side of the slot.
+                </p>
+                <div class="template-preview" x-ref="templatePreview">
                   <template x-for="(slot, i) in previewSlots()" :key="i">
                     <div class="preview-slot"
-                         :style="'left:' + slot.x + '%; top:' + slot.y + '%; width:' + slot.w + '%; height:' + slot.h + '%;'">
+                         :style="'left:' + slot.x + '%; top:' + slot.y + '%; width:' + slot.w + '%; height:' + slot.h + '%;'"
+                         @mousedown="startSlotDrag(i, $event)" @touchstart="startSlotDrag(i, $event)">
                       <span x-text="i + 1"></span>
+                      <div class="resize-handle nw" @mousedown.stop="startSlotResize(i, 'nw', $event)" @touchstart.stop="startSlotResize(i, 'nw', $event)"></div>
+                      <div class="resize-handle ne" @mousedown.stop="startSlotResize(i, 'ne', $event)" @touchstart.stop="startSlotResize(i, 'ne', $event)"></div>
+                      <div class="resize-handle sw" @mousedown.stop="startSlotResize(i, 'sw', $event)" @touchstart.stop="startSlotResize(i, 'sw', $event)"></div>
+                      <div class="resize-handle se" @mousedown.stop="startSlotResize(i, 'se', $event)" @touchstart.stop="startSlotResize(i, 'se', $event)"></div>
                     </div>
                   </template>
                   <!-- Rough marker for each slot's placard position — actual
@@ -372,10 +415,12 @@
                        measured box (which this schematic preview, with no
                        real photos, can't reproduce), so previewPlacardStyle()
                        approximates it using the slot's own box as a stand-in
-                       for the frame and a fixed reference size/gap. -->
+                       for the frame and a fixed reference size/gap. Draggable —
+                       see startPlacardDrag()/placardDragToConfig() in app.js. -->
                   <template x-for="(slot, i) in previewSlots()" :key="'placard-' + i">
                     <div x-show="slot.placard" class="preview-placard"
-                         :style="previewPlacardStyle(slot)">
+                         :style="previewPlacardStyle(slot)"
+                         @mousedown="startPlacardDrag(i, $event)" @touchstart="startPlacardDrag(i, $event)">
                       <span x-text="'P' + (i + 1)"></span>
                     </div>
                   </template>
@@ -385,8 +430,12 @@
                   (<code>slot_positions[i].placard</code> — side/align/gap relative
                   to the photo frame). The real display resolves this against the
                   photo's actual measured frame box, so the exact position here is
-                  an approximation. Placard size, background, and content are set
-                  once for the whole gallery in Gallery Admin's Placard Settings.
+                  an approximation — as is the placard drag's <code>gapIn</code>
+                  (it assumes a default board width, since this template isn't
+                  tied to any one gallery). Placard size, background, and content
+                  are set once for the whole gallery in Gallery Admin's Placard
+                  Settings. Dragging updates the JSON on the left live, so you can
+                  fine-tune numbers by hand afterward if needed.
                 </p>
               </div>
 

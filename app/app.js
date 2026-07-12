@@ -1547,6 +1547,77 @@ function slotBoxStyle(positions, index) {
   return 'position: absolute; left: ' + p.x + '%; top: ' + p.y + '%; width: ' + p.w + '%; height: ' + p.h + '%;';
 }
 
+// ── Template Admin preview drag helpers ─────────────────────────────────────
+// Pure geometry for the Template Admin preview's drag interactions (slot
+// move, slot corner-resize, placard drag-to-attach) — kept separate from the
+// mousedown/mousemove event wiring (in templateAdminApp) so the math itself
+// is unit-testable without a real DOM. Percent-of-canvas in, percent-of-canvas
+// out throughout, same coordinate space as x/y/w/h everywhere else.
+
+// Resizing a slot by dragging one of its 4 corner handles: the OPPOSITE
+// corner stays fixed in place, and the dragged corner follows the cursor
+// (clamped to the canvas and a minimum size so a slot can't be dragged to
+// nothing or flip inside-out).
+function resizeSlotFromCorner(corner, orig, cursorX, cursorY, minSize) {
+  var min = minSize > 0 ? minSize : 4;
+  cursorX = Math.max(0, Math.min(100, cursorX));
+  cursorY = Math.max(0, Math.min(100, cursorY));
+  var left = orig.x, top = orig.y, right = orig.x + orig.w, bottom = orig.y + orig.h;
+  if (corner === 'nw')      { left  = cursorX; top    = cursorY; }
+  else if (corner === 'ne') { right = cursorX; top    = cursorY; }
+  else if (corner === 'sw') { left  = cursorX; bottom = cursorY; }
+  else if (corner === 'se') { right = cursorX; bottom = cursorY; }
+  // nw/sw drag the left edge; ne/se drag the right edge — whichever one's
+  // being dragged is the one pulled back if the box got too narrow/short.
+  if (right - left < min) { if (corner === 'nw' || corner === 'sw') left = right - min; else right = left + min; }
+  if (bottom - top < min) { if (corner === 'nw' || corner === 'ne') top  = bottom - min; else bottom = top + min; }
+  return {
+    x: Math.round(left * 100) / 100,
+    y: Math.round(top  * 100) / 100,
+    w: Math.round((right  - left) * 100) / 100,
+    h: Math.round((bottom - top)  * 100) / 100,
+  };
+}
+
+// Dragging the placard marker in the preview: pick whichever side of the
+// slot's own box (used as a stand-in for the photo frame — Template Admin
+// has no real photo/frame geometry to drag against, see the comment above
+// previewPlacardStyle()) the drop point is nearest to — determined by
+// normalizing the point's offset from the slot's center by the slot's own
+// half-width/half-height, so a wide short slot doesn't bias every drop
+// toward top/bottom (or a narrow tall one toward left/right). Once a side
+// is picked, the point's position along that edge becomes `align` (0-100),
+// and its perpendicular distance past that edge becomes `gapIn` — converted
+// from percent-of-canvas using DEFAULT_BOARD_WIDTH_IN as a reference (the
+// real gallery's boardWidthIn isn't known here; a template can be reused
+// across galleries with different board widths, so this is necessarily an
+// approximation — the real display resolves gapIn precisely against
+// whichever gallery it's actually shown in). Points inside the slot (e.g.
+// dragged onto the frame itself) clamp gapIn to 0 rather than going negative.
+function placardDragToConfig(slot, px, py) {
+  var sx = slot.x || 0, sy = slot.y || 0, sw = slot.w || 0, sh = slot.h || 0;
+  var cx = sx + sw / 2, cy = sy + sh / 2;
+  var nx = sw > 0 ? (px - cx) / (sw / 2) : 0;
+  var ny = sh > 0 ? (py - cy) / (sh / 2) : 0;
+  var side, align, gapPct;
+  if (Math.abs(nx) >= Math.abs(ny)) {
+    side   = nx >= 0 ? 'right' : 'left';
+    align  = sh > 0 ? ((py - sy) / sh) * 100 : 50;
+    gapPct = side === 'right' ? (px - (sx + sw)) : (sx - px);
+  } else {
+    side   = ny >= 0 ? 'bottom' : 'top';
+    align  = sw > 0 ? ((px - sx) / sw) * 100 : 50;
+    gapPct = side === 'bottom' ? (py - (sy + sh)) : (sy - py);
+  }
+  align = Math.max(0, Math.min(100, align));
+  var boardHeightIn = DEFAULT_BOARD_WIDTH_IN * 9 / 16;
+  var gapIn = (side === 'top' || side === 'bottom')
+    ? (gapPct / 100) * boardHeightIn
+    : (gapPct / 100) * DEFAULT_BOARD_WIDTH_IN;
+  gapIn = Math.max(0, Math.round(gapIn * 100) / 100);
+  return { side: side, align: Math.round(align), gapIn: gapIn };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Matte + frame presentation helpers — shared by displayApp and displayEditApp.
 // A display template's `presentation` JSON (set in Template Admin) controls
@@ -3454,6 +3525,131 @@ function templateAdminApp() {
         left = side === 'left' ? (sx - pw - gap) : (sx + sw + gap);
       }
       return 'left:' + left + '%; top:' + top + '%;';
+    },
+
+    // ── Preview drag interactions ────────────────────────────────────────────
+    // All three handlers below share the same shape: parse editSlotPositions
+    // fresh at drag start (previewSlots() already re-parses fresh JSON on
+    // every call — see its comment — so a live object grabbed from it would
+    // just be thrown away on the next render; mutating a locally-held parsed
+    // array and writing it straight back into editSlotPositions after every
+    // move keeps the textarea and the live preview in sync, the same way
+    // regenerateLayout() already replaces editSlotPositions wholesale), then
+    // listen on window (not the dragged element) so a drag that outpaces the
+    // cursor past the element's own bounds doesn't get dropped.
+
+    // Drag a slot to reposition it. Preserves the offset between the grab
+    // point and the slot's own top-left corner (same technique as
+    // galleryAdminApp's startItemDrag() — see its comment) so the box
+    // doesn't jump to the cursor on the first move. Clamped to stay fully
+    // within the canvas — unlike a placard item, a photo slot hanging off
+    // the edge isn't a supported look.
+    startSlotDrag(i, event) {
+      event.preventDefault();
+      const canvas = this.$refs.templatePreview;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      let arr;
+      try { arr = JSON.parse(this.editSlotPositions || '[]'); } catch { return; }
+      const slot = arr[i];
+      if (!slot) return;
+      const startPt = event.touches ? event.touches[0] : event;
+      const slotPxX = (slot.x / 100) * rect.width;
+      const slotPxY = (slot.y / 100) * rect.height;
+      const offsetX = startPt.clientX - rect.left - slotPxX;
+      const offsetY = startPt.clientY - rect.top  - slotPxY;
+      const move = (e) => {
+        const pt = e.touches ? e.touches[0] : e;
+        let xPct = ((pt.clientX - rect.left - offsetX) / rect.width)  * 100;
+        let yPct = ((pt.clientY - rect.top  - offsetY) / rect.height) * 100;
+        xPct = Math.max(0, Math.min(100 - slot.w, xPct));
+        yPct = Math.max(0, Math.min(100 - slot.h, yPct));
+        arr[i].x = Math.round(xPct * 100) / 100;
+        arr[i].y = Math.round(yPct * 100) / 100;
+        this.editSlotPositions = JSON.stringify(arr, null, 2);
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        window.removeEventListener('touchmove', move);
+        window.removeEventListener('touchend', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      window.addEventListener('touchmove', move, { passive: false });
+      window.addEventListener('touchend', up);
+    },
+
+    // Drag one of a slot's 4 corner handles to resize it — the opposite
+    // corner stays fixed (see resizeSlotFromCorner()). event.stopPropagation
+    // via the @mousedown.stop/@touchstart.stop modifiers on the handle
+    // elements themselves keeps this from also triggering startSlotDrag on
+    // the parent slot.
+    startSlotResize(i, corner, event) {
+      event.preventDefault();
+      const canvas = this.$refs.templatePreview;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      let arr;
+      try { arr = JSON.parse(this.editSlotPositions || '[]'); } catch { return; }
+      const orig = arr[i];
+      if (!orig) return;
+      const origBox = { x: orig.x, y: orig.y, w: orig.w, h: orig.h };
+      const move = (e) => {
+        const pt = e.touches ? e.touches[0] : e;
+        const xPct = ((pt.clientX - rect.left) / rect.width)  * 100;
+        const yPct = ((pt.clientY - rect.top)  / rect.height) * 100;
+        const next = resizeSlotFromCorner(corner, origBox, xPct, yPct, 4);
+        arr[i].x = next.x; arr[i].y = next.y; arr[i].w = next.w; arr[i].h = next.h;
+        this.editSlotPositions = JSON.stringify(arr, null, 2);
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        window.removeEventListener('touchmove', move);
+        window.removeEventListener('touchend', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      window.addEventListener('touchmove', move, { passive: false });
+      window.addEventListener('touchend', up);
+    },
+
+    // Drag the placard marker to re-attach it — computes the nearest side of
+    // the slot's own box (used as a stand-in for the frame — see
+    // previewPlacardStyle()'s comment) and expresses the drop point as
+    // { side, align, gapIn } (see placardDragToConfig()). Tracks the raw
+    // cursor position directly (no grab-offset preservation, unlike
+    // startSlotDrag()) since this is fundamentally a "where's my cursor
+    // relative to the frame" snap-to-edge interaction, not moving a fixed
+    // point — matching how snapping/alignment guides typically work in
+    // design tools.
+    startPlacardDrag(i, event) {
+      event.preventDefault();
+      const canvas = this.$refs.templatePreview;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      let arr;
+      try { arr = JSON.parse(this.editSlotPositions || '[]'); } catch { return; }
+      const slot = arr[i];
+      if (!slot) return;
+      const move = (e) => {
+        const pt = e.touches ? e.touches[0] : e;
+        const xPct = ((pt.clientX - rect.left) / rect.width)  * 100;
+        const yPct = ((pt.clientY - rect.top)  / rect.height) * 100;
+        arr[i].placard = placardDragToConfig(slot, xPct, yPct);
+        this.editSlotPositions = JSON.stringify(arr, null, 2);
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        window.removeEventListener('touchmove', move);
+        window.removeEventListener('touchend', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      window.addEventListener('touchmove', move, { passive: false });
+      window.addEventListener('touchend', up);
     },
 
     async saveTemplate(templateid) {

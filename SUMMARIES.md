@@ -852,3 +852,24 @@ Since the display canvas is rendered responsively (no fixed physical size on its
 
 ### Open items
 - None known.
+
+## Session 27 — Drag-to-Position/Resize in Template Admin's Preview
+
+### What was done
+- Template Admin's slot geometry was previously JSON-only (hand-editing the `slot_positions` textarea, with a read-only preview marker). Added three drag interactions directly on the live preview:
+  - **Move a slot**: drag anywhere on a `.preview-slot` box to reposition it. Clamped to stay fully within the canvas.
+  - **Resize a slot**: drag one of 4 small corner handles (nw/ne/sw/se) that appear on each slot box; the opposite corner stays fixed while the dragged one follows the cursor, with a minimum size so it can't be dragged to nothing or flipped inside-out.
+  - **Re-attach the placard**: drag the dashed placard marker anywhere in the preview; it picks whichever side of the slot (used as a stand-in for the frame, same approximation `previewPlacardStyle()` already made) the drop point is nearest to, and derives `align`/`gapIn` from the drop position — same underlying `{ side, align, gapIn }` schema from Session 26, just settable by drag instead of only by typing JSON.
+- All three write straight back into `editSlotPositions` (the JSON string) after every move, so the hand-editable textarea and the live preview always agree — dragging is just a faster way to produce the same JSON, not a separate system. The raw-JSON textarea is still there for precise numeric tweaks afterward.
+- `app/app.js`:
+  - New pure functions: `resizeSlotFromCorner(corner, orig, cursorX, cursorY, minSize)` (corner-resize geometry) and `placardDragToConfig(slot, px, py)` (nearest-side detection + align/gapIn derivation — gapIn is necessarily approximate here, converted using `DEFAULT_BOARD_WIDTH_IN` as a reference since Template Admin has no gallery context to know the real `boardWidthIn`; the actual display resolves it precisely against whichever gallery it's shown in).
+  - `templateAdminApp`: `startSlotDrag(i, event)`, `startSlotResize(i, corner, event)`, `startPlacardDrag(i, event)` — mousedown/touchstart handlers following the same pattern as `galleryAdminApp`'s existing `startItemDrag()` (window-level mousemove/mouseup listeners, touch support). Slot drag preserves the grab-point offset (same "no jump on first move" fix from Session 18); the placard drag tracks the cursor directly since it's a snap-to-edge interaction, not a fixed-point translation.
+- `app/template-admin.html`: added `x-ref="templatePreview"` to the editor's live preview, `@mousedown`/`@touchstart` handlers on `.preview-slot` and `.preview-placard`, 4 `.resize-handle` corner divs per slot (with `.stop` modifiers so grabbing a handle doesn't also trigger the parent slot's move), and matching CSS (cursor hints, handle appearance). The read-only mini thumbnail in each template's collapsed row header (`.template-preview.mini`) intentionally has none of this — only the expanded editor's preview is interactive.
+
+### Testing notes
+- `run30.js`: pure-function tests for `resizeSlotFromCorner` (all 4 corners keep the correct opposite corner fixed, minimum-size clamping, cursor-overshoot clamping) and `placardDragToConfig` (nearest-side detection from all 4 directions, align derivation, gapIn from drop distance, gapIn clamped to 0 for a drop inside the slot, align always clamped 0-100).
+- `run34.js`: extended the existing template-admin.html DOM test with real drag simulations (stubbed `getBoundingClientRect()` on the preview canvas, dispatched `mousedown`/`mousemove`/`mouseup`) for all three interactions, confirming `editSlotPositions` updates live and correctly. Caught and fixed two real test-authoring issues: (1) `.preview-slot` matches both the interactive editor preview *and* the read-only mini thumbnail — every query now scopes to the non-mini preview specifically; (2) the original 2-slot test fixture was full-height (h=100%), leaving no vertical room to actually exercise y-axis drag/resize — switched to a 4-slot (2×2) fixture.
+- Full placard/template suite (`run30`–`run37`, 214 checks) passes with no regressions.
+
+### Open items
+- Placard drag's `gapIn` is an approximation (assumes a default board width, since a template isn't tied to any one gallery) — same caveat already noted for the marker's rendered position in Session 26, now also applying to what dragging produces.
