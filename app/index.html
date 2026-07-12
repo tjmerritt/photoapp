@@ -176,6 +176,17 @@
         </div>
       </template>
 
+      <!-- Upload photos -->
+      <button @click="loggedInUser && ($store.upload.open = true)"
+              @dragover.prevent
+              @drop.prevent="loggedInUser && $store.upload.addFiles($event.dataTransfer.files)"
+              :class="loggedInUser ? 'hover:bg-gray-100 cursor-pointer' : 'cursor-default opacity-40'"
+              class="p-2 rounded-lg transition" title="Upload photos">
+        <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+        </svg>
+      </button>
+
       <!-- Settings -->
       <div class="relative">
         <button @click="loggedInUser && ($store.ui.settingsOpen = !$store.ui.settingsOpen)"
@@ -345,6 +356,89 @@
     </div>
   </div>
 </nav>
+
+<!-- ══ UPLOAD PHOTOS MODAL ══════════════════════════════════════════════════ -->
+<template x-if="$store.upload.open">
+  <div class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
+       @click.self="$store.upload.open = false"
+       @dragover.prevent
+       @drop.prevent="$store.upload.addFiles($event.dataTransfer.files)">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 animate-scalein max-h-[85vh] flex flex-col">
+      <div class="flex items-center justify-between mb-4 shrink-0">
+        <h2 class="font-serif text-xl">Upload Photos</h2>
+        <button @click="$store.upload.open = false" class="text-muted hover:text-brand text-2xl leading-none">&times;</button>
+      </div>
+
+      <div class="overflow-y-auto flex-1 -mx-1 px-1">
+        <!-- Drop zone / file picker -->
+        <label class="flex flex-col items-center justify-center gap-2 w-full border-2 border-dashed border-[var(--border)] rounded-2xl py-8 cursor-pointer hover:bg-gray-50 hover:border-accent/50 transition text-center mb-5">
+          <svg class="w-8 h-8 text-muted" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+          </svg>
+          <span class="text-sm font-medium">Drop photos here or click to browse</span>
+          <span class="text-xs text-muted">JPEG, PNG, or GIF</span>
+          <input type="file" accept="image/jpeg,image/png,image/gif" multiple class="hidden"
+                 @change="$store.upload.addFiles($event.target.files); $event.target.value = ''" />
+        </label>
+
+        <!-- Batch labels -->
+        <div class="mb-5">
+          <p class="text-xs font-semibold text-muted uppercase tracking-widest mb-2">Labels for this batch</p>
+          <div class="flex flex-wrap gap-1.5 mb-2" x-show="$store.upload.labels.length">
+            <template x-for="(l, idx) in $store.upload.labels" :key="l.name + ':' + l.value">
+              <span class="inline-flex items-center gap-1.5 bg-gray-100 rounded-full pl-3 pr-1.5 py-1 text-xs">
+                <span><span class="font-medium" x-text="l.name"></span>: <span x-text="l.value"></span></span>
+                <button @click="$store.upload.removeLabel(idx)" class="text-muted hover:text-brand leading-none text-sm">&times;</button>
+              </span>
+            </template>
+          </div>
+          <div class="flex gap-2">
+            <input x-model="$store.upload.newLabelName" @keydown.enter="$store.upload.addLabel()" type="text" placeholder="Name"
+                   class="flex-1 min-w-0 border border-[var(--border)] rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-accent/30" />
+            <input x-model="$store.upload.newLabelValue" @keydown.enter="$store.upload.addLabel()" type="text" placeholder="Value"
+                   class="flex-1 min-w-0 border border-[var(--border)] rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-accent/30" />
+            <button @click="$store.upload.addLabel()"
+                    class="bg-gray-100 hover:bg-gray-200 text-brand text-xs font-medium px-3 py-1.5 rounded-lg transition shrink-0">Add</button>
+          </div>
+          <p class="text-xs text-muted mt-1.5">Applied to every photo not yet uploaded — add or remove labels any time.</p>
+        </div>
+
+        <!-- Upload queue -->
+        <div x-show="$store.upload.queue.length" class="space-y-2">
+          <div class="flex items-center justify-between">
+            <p class="text-xs font-semibold text-muted uppercase tracking-widest">Queue</p>
+            <button @click="$store.upload.clearFinished()"
+                    x-show="$store.upload.queue.some(it => it.status === 'done')"
+                    class="text-xs text-muted hover:text-brand underline underline-offset-2">Clear finished</button>
+          </div>
+          <template x-for="item in $store.upload.queue" :key="item.id">
+            <div class="border border-[var(--border)] rounded-xl px-3 py-2">
+              <div class="flex items-center justify-between gap-2 mb-1">
+                <span class="text-xs font-medium truncate" x-text="item.filename"></span>
+                <div class="flex items-center gap-2 shrink-0">
+                  <span x-show="item.status === 'done'" class="text-xs text-green-600 font-medium">Done</span>
+                  <span x-show="item.status === 'error'" class="text-xs text-red-500 font-medium">Error</span>
+                  <span x-show="item.status === 'uploading'" class="text-xs text-muted" x-text="item.progress + '%'"></span>
+                  <span x-show="item.status === 'pending'" class="text-xs text-muted">Waiting…</span>
+                  <button @click="$store.upload.retry(item)" x-show="item.status === 'error'"
+                          class="text-xs text-accent hover:underline">Retry</button>
+                  <button @click="$store.upload.removeItem(item.id)" x-show="item.status !== 'uploading'"
+                          class="text-muted hover:text-brand leading-none text-sm">&times;</button>
+                </div>
+              </div>
+              <div class="h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                <div class="h-full rounded-full transition-all"
+                     :class="item.status === 'error' ? 'bg-red-400' : (item.status === 'done' ? 'bg-green-500' : 'bg-accent')"
+                     :style="`width:${item.status === 'done' ? 100 : item.progress}%`"></div>
+              </div>
+              <p x-show="item.error" class="text-xs text-red-500 mt-1" x-text="item.error"></p>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
 
 <!-- ══ MAIN ═════════════════════════════════════════════════════════════════ -->
 <main class="flex-1 max-w-7xl w-full mx-auto px-4 py-6" x-cloak>

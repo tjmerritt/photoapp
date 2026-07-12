@@ -35,6 +35,7 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	galleries   := &GalleriesHandler{DB: pool, Cfg: cfg, Checker: checker}
 	displays    := &DisplaysHandler{DB: pool, Cfg: cfg, Checker: checker}
 	templates   := &TemplatesHandler{DB: pool, Checker: checker}
+	uploads     := &UploadPhotosHandler{DB: pool, Cfg: cfg, Checker: checker}
 
 	// Convenience: wrap a httprouter.Handle with RequireAuth
 	auth := func(h httprouter.Handle) httprouter.Handle {
@@ -105,6 +106,9 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	r.POST("/api/v1/display-templates",                   auth(templates.Create))
 	r.PATCH("/api/v1/display-templates/:templateid",      auth(templates.Update))
 	r.DELETE("/api/v1/display-templates/:templateid",     auth(templates.Delete))
+
+	// Photo uploads (write — auth required; PermPhotoCreate enforced in handler)
+	r.POST("/api/v1/photos/upload",                       auth(uploads.ServeHTTP))
 
 	// ── Admin endpoints (auth + PermAdmin enforced in handler) ───────────────────
 	r.GET("/api/v1/admin/exhibitions", auth(admin.ListExhibitions))

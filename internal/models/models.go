@@ -362,6 +362,23 @@ type PhotoListResponse struct {
 	Photos []PhotoListItem `json:"photos"`
 }
 
+// ── Photo upload ──────────────────────────────────────────────────────────────
+
+// UploadResult is the per-file outcome of a POST /api/v1/photos/upload request.
+// Status is "ok" or "error"; Error is populated only when Status is "error".
+type UploadResult struct {
+	Filename string `json:"filename"`
+	PhotoID  string `json:"photoid,omitempty"`
+	Status   string `json:"status"`
+	Error    string `json:"error,omitempty"`
+}
+
+// UploadPhotosResponse is returned by POST /api/v1/photos/upload. Each input
+// file gets its own result — one file failing does not fail the batch.
+type UploadPhotosResponse struct {
+	Results []UploadResult `json:"results"`
+}
+
 // ── EmojiTypeResponse ────────────────────────────────────────────────────────
 
 // EmojiTypeResponse is returned after uploading a new emoji type.

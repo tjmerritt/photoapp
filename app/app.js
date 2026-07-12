@@ -3765,6 +3765,136 @@ function templateAdminApp() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// uploadStore — global Alpine store backing the title-bar upload icon and its
+// popup (Phase 7). A store (rather than a per-component Alpine.data) because
+// the queue must be reachable both from the nav icon's drag-and-drop handler
+// and from the popup itself, and should keep tracking uploads if the popup is
+// closed and reopened.
+//
+// One XHR per file (not one multipart POST for the whole batch) so each
+// queue row gets its own real upload-progress percentage from the browser;
+// the backend endpoint (POST /api/v1/photos/upload) accepts either.
+// Batch labels are read fresh at the moment each file's upload actually
+// starts, not when the file is queued — so labels added/edited/removed while
+// other files are mid-upload still apply correctly to anything not yet sent.
+// ─────────────────────────────────────────────────────────────────────────────
+function uploadStore() {
+  return {
+    open: false,
+    queue: [],           // { id, file, filename, status, progress, error, photoid }
+    labels: [],          // { name, value } — applied to every not-yet-sent file
+    newLabelName: '',
+    newLabelValue: '',
+    activeCount: 0,
+    maxConcurrent: 3,
+
+    addFiles(fileList) {
+      const files = Array.from(fileList || []);
+      for (const file of files) {
+        if (!file.type || !file.type.startsWith('image/')) continue;
+        this.queue.push({
+          id: (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Math.random()),
+          file,
+          filename: file.name,
+          status: 'pending', // pending | uploading | done | error
+          progress: 0,
+          error: '',
+          photoid: null,
+        });
+      }
+      if (files.length) this.open = true;
+      this._pump();
+    },
+
+    addLabel() {
+      const name = this.newLabelName.trim();
+      const value = this.newLabelValue.trim();
+      if (!name || !value) return;
+      this.labels.push({ name, value });
+      this.newLabelName = '';
+      this.newLabelValue = '';
+    },
+
+    removeLabel(idx) {
+      this.labels.splice(idx, 1);
+    },
+
+    retry(item) {
+      item.status = 'pending';
+      item.progress = 0;
+      item.error = '';
+      this._pump();
+    },
+
+    removeItem(id) {
+      const idx = this.queue.findIndex((it) => it.id === id);
+      if (idx >= 0) this.queue.splice(idx, 1);
+    },
+
+    clearFinished() {
+      this.queue = this.queue.filter((it) => it.status !== 'done');
+    },
+
+    _pump() {
+      while (this.activeCount < this.maxConcurrent) {
+        const next = this.queue.find((it) => it.status === 'pending');
+        if (!next) break;
+        this._upload(next);
+      }
+    },
+
+    _upload(item) {
+      item.status = 'uploading';
+      this.activeCount++;
+
+      const form = new FormData();
+      form.append('files', item.file, item.file.name);
+      if (this.labels.length) {
+        form.append('labels', JSON.stringify(this.labels));
+      }
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/v1/photos/upload');
+      const authHeaders = getAuthHeaders();
+      for (const key in authHeaders) xhr.setRequestHeader(key, authHeaders[key]);
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          item.progress = Math.round((e.loaded / e.total) * 100);
+        }
+      };
+
+      const finish = () => {
+        this.activeCount--;
+        this._pump();
+      };
+
+      xhr.onload = () => {
+        let data = null;
+        try { data = JSON.parse(xhr.responseText); } catch { /* fall through to error below */ }
+        const result = data && Array.isArray(data.results) ? data.results[0] : null;
+        if (xhr.status >= 200 && xhr.status < 300 && result && result.status === 'ok') {
+          item.status = 'done';
+          item.progress = 100;
+          item.photoid = result.photoid;
+        } else {
+          item.status = 'error';
+          item.error = (result && result.error) || (data && data.error) || ('Upload failed (HTTP ' + xhr.status + ')');
+        }
+        finish();
+      };
+      xhr.onerror = () => {
+        item.status = 'error';
+        item.error = 'Network error';
+        finish();
+      };
+
+      xhr.send(form);
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Alpine init — store + component registration.
 // Must run before Alpine initializes (alpine:init fires before Alpine walks DOM).
 // app.js is loaded with defer, same as alpinejs.min.js, so order matters:
@@ -3776,6 +3906,7 @@ document.addEventListener('alpine:init', () => {
     labelModal: false,
     settingsOpen: false,
   });
+  Alpine.store('upload', uploadStore());
 
   Alpine.data('photoApp',        photoApp);
   Alpine.data('wallApp',         wallApp);

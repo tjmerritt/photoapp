@@ -993,3 +993,42 @@ Follow-up to Session 32: confirmed (by reading the "Added Facebook signin." comm
 
 ### Open items
 - None.
+
+## Session 34 — Phase 7: Photo Uploads
+
+### What was done
+Implemented PLAN.md Phase 7 (title bar upload icon, upload popup, backend upload endpoint) end to end.
+
+**New shared package `internal/photoimport/exif.go`** — pulls the EXIF-field list, `ExtractEXIF`, `ImageDimensions`, and `MergeLabels` out of `cmd/import-photos/main.go` into their own package (exported `Label{Name, Value}` type) so the CLI importer and the new browser upload endpoint use the exact same metadata logic instead of two copies drifting apart. Deliberately excludes `cmd/import-photos`'s face-detection code (`detectIsPublic`) — that depends on `gocv` (OpenCV cgo bindings), a heavy native dependency intentionally not linked into the main server binary. This is documented in the package doc comment.
+
+**`cmd/import-photos/main.go`** — refactored to delegate to the shared package: `imageDimensions`, `extractEXIF`, and `mergeLabels` are now thin wrappers converting between the CLI's local lowercase-field `label` type and `photoimport.Label`. Removed the now-redundant `exifFields` var and the blank `image/gif`, `image/jpeg`, `image/png`, and `bytes`/`exif` imports (decoding now happens inside `internal/photoimport`). Behavior is unchanged — this was a pure refactor, verified by reading through the diff line by line since there's no Go toolchain available to run the CLI's own tests here.
+
+**`internal/handlers/upload.go`** (new) — `UploadPhotosHandler` serving `POST /api/v1/photos/upload`:
+- Requires auth + `PermPhotoCreate` (already granted to the `Contributor` role → `LoggedIn` by `scripts/seed-exhibition.sh`, so this works for any logged-in user out of the box, no new seed/migration needed).
+- Parses a multipart form: one or more files under a `files` field, plus an optional `labels` field (JSON array of `{"name","value"}`, reusing `models.AddLabelRequest`) applied to every photo in the request.
+- Per file: sniffs content type (JPEG/PNG/GIF only — deliberately narrower than the emoji/avatar upload endpoints, since photos need real pixel dimensions and Go's standard library has no WebP decoder, and `photos.image_width/image_height` are `NOT NULL`), decodes dimensions and EXIF via `internal/photoimport`, saves the file under `Cfg.UploadDir` with a UUID filename (same convention as avatar/emoji uploads), then inserts the `photos` row plus all labels (EXIF-derived + a computed `Resolution` label + batch labels) inside one DB transaction so a photo is never left committed without its labels or vice versa. New photos are always `is_public=false` — no face-detection reuse (see above), matching the safe default `cmd/import-photos` itself falls back to without `--cascade`.
+- Every file is independent: one file's failure (bad format, decode error, DB error) doesn't abort the rest of the batch. Response is `{"results": [{"filename","photoid","status","error"}, ...]}` per PLAN.md's spec.
+- Failed inserts clean up their saved file so errors don't leave orphaned uploads on disk.
+- New models in `internal/models/models.go`: `UploadResult`, `UploadPhotosResponse`.
+- Registered in `internal/handlers/router.go` as `POST /api/v1/photos/upload` behind the existing `auth()` wrapper.
+
+**Frontend** (`app/app.js`, `app/index.html`, `app/photo.html`):
+- New `Alpine.store('upload', uploadStore())` in `app.js` — a global store (not a per-component `Alpine.data`) because the queue needs to be reachable both from the nav icon's drag-and-drop handler and the popup itself, and should keep tracking uploads if the popup is closed and reopened. Holds `open`, `queue` (`{id, file, filename, status, progress, error, photoid}`), and batch `labels`, plus `addFiles`, `addLabel`, `removeLabel`, `retry`, `removeItem`, `clearFinished`.
+- Uploads go out as one `XMLHttpRequest` per file (not one multipart POST for the whole batch) specifically so each queue row gets a real per-file progress percentage from `xhr.upload.onprogress`, per PLAN.md 7b's requirement — `fetch()` has no upload-progress event. Up to 3 files upload concurrently (`maxConcurrent`); the rest wait as `pending` until a slot frees.
+- Batch labels are read fresh at the moment each file's XHR actually fires, not when the file was queued — so adding/editing/removing a label while other files are mid-upload correctly still applies to anything not yet sent, per spec. Auth headers (`getAuthHeaders()`, the existing test-user-switcher `X-User-ID` mechanism) are attached to each XHR the same way regular `fetch()` calls already do.
+- Nav icon (both `index.html` and `photo.html`, same upload-arrow glyph already used for avatar uploads): click opens the popup; dragging files directly onto the icon also opens it and immediately starts uploading, per PLAN.md 7a.
+- Popup (added to both pages, following the exact `<template x-if="$store.ui.labelModal">` backdrop-modal pattern already used elsewhere): drop zone + click-to-browse file input, a batch label editor (add/remove chips), and the queue list with a progress bar per file, status text (waiting/uploading %/done/error), and a retry button on failures.
+
+### Scope decisions (called out explicitly, not hidden)
+- **No face-detection/is_public automation** for uploads — new photos default to private (`is_public=false`); the operator can flip individual photos public via the existing admin panel. Reusing `cmd/import-photos`'s OpenCV-based detection would mean linking `gocv` into the main server binary, a real native-dependency/build-size tradeoff PLAN.md's Phase 7 text didn't ask for (it only specified reusing EXIF extraction).
+- **No WebP uploads** — Go's standard library can't decode WebP dimensions, and `photos.image_width/height` are `NOT NULL`. JPEG/PNG/GIF only, matching what `cmd/import-photos` has always supported.
+- **Label-on-upload colors**: PLAN.md notes this feature "benefits from Phase 5a (label colors) but is not blocked by it" — 5a (DB-backed label color overrides) still isn't built (see Session 31's audit), so batch labels render with the existing client-side hash-based color fallback, same as labels added anywhere else in the app today. Nothing extra needed here; will automatically pick up real colors once 5a lands.
+
+### Testing notes
+- No Go toolchain is available in this sandbox (confirmed again: no `go` binary, no network egress to install one), so `go build ./...` could not be run. Reviewed every changed/new Go file by hand instead: `internal/photoimport/exif.go`, the `cmd/import-photos/main.go` diff, `internal/handlers/upload.go`, `internal/models/models.go`, and the `router.go`/handler-wiring changes — checked import lists against actual usage, confirmed the transaction/permission-check pattern matches `galleries.Create` exactly, and confirmed no naming collisions with existing package-level identifiers in `internal/handlers`.
+- Frontend changes were checked programmatically: `node --check app/app.js` passes (valid JS syntax), and a tag-balance scan confirmed `<div>`/`</div>` and `<template>`/`</template>` counts match in both `index.html` (63/63, 17/17) and `photo.html` (176/176, 96/96) after the edits.
+- **Recommended follow-up**: run `make build` (or `go build ./...`) locally, then a real end-to-end upload test (drag a JPEG with EXIF data onto the nav icon, confirm the photo, its EXIF labels, and the Resolution label all show up correctly) before relying on this in production.
+
+### Open items
+- Build not verified locally — please run `make build` before deploying (same caveat as Sessions 32/33).
+- Face-detection-based is_public and WebP support are known, intentional gaps — flagged above, not oversights.
