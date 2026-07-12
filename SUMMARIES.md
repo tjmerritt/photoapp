@@ -1145,3 +1145,41 @@ Implemented both remaining Phase 5 sub-phases together, since PLAN.md's two draf
 - `make build` / `go vet` still needs to be run in an environment with the Go toolchain before deploying — this is the accumulated caveat across every Go-touching session so far.
 - No UI was added for manually toggling a label name's `restricted` flag on/off (only for setting color) — 5b's requirements describe restriction as applied automatically (EXIF import, `--restrict-labels`), not as something admins toggle by hand, so this was left out as out of scope. `PATCH /api/v1/label-names` supports a `restricted` field already if that's wanted later — it would just need a small UI affordance.
 - End-to-end verification (upload a photo with EXIF, confirm its labels show as restricted and locked to non-admins; run `import-photos --restrict-labels`, confirm `--label`-supplied names get restricted too; confirm the color picker round-trips) still needs a real Postgres + running server, unavailable in this sandbox.
+
+## Session 40 — Fixed: Label Edit/Delete Buttons Did Nothing
+
+### What was done
+Bug report: clicking the Edit or Delete icons in a label chip's popup had no visible effect at all — not even closing the popup.
+
+Root cause: `app/alpinejs.min.js` is Alpine's CSP-restricted build (confirmed by decompiling its bundled expression evaluator — a hand-written tokenizer/parser/interpreter with no `new Function` anywhere, matching the existing comment in `app.js` about "the Alpine CSP evaluator"). That evaluator's `Parser.parse()` parses exactly *one* expression, optionally swallows a single trailing `;`, and then throws `Unexpected token: ...` if anything else follows. It has no support for a semicolon-separated sequence of statements (no `Program`/`ExpressionStatement`/`SequenceExpression` node types exist in the evaluator at all). Both label buttons were written as two statements joined by `;`:
+```
+@click.stop="open = false; openLabelModal(label)"
+@click.stop="open = false; deleteLabel(label)"
+```
+Since the whole expression fails to *parse* (not just to run), Alpine's expression-builder throws before either statement executes — so neither `open = false` nor the actual edit/delete call ever ran. This is a pre-existing bug, not something introduced by the Phase 5a/5b work (confirmed via `git diff` against the pre-Phase-5 commit — the two lines were byte-for-byte identical before and after that change) — it simply had never been exercised end to end before, since every session so far lacked a live Postgres/browser to test against.
+
+Grepped the entire `app/*.html` set for the same shape (`@directive="...;..."`) and found two more, identical-cause instances: the hidden file `<input type="file" @change="...">` used to feed dropped/selected files into the upload queue, in both `app/index.html` and `app/photo.html`:
+```
+@change="$store.upload.addFiles($event.target.files); $event.target.value = ''"
+```
+This means **file-picker-based photo uploads have likely never worked either** — `addFiles()` (which actually queues the files) never ran, only ever failing to parse silently. (Drag-and-drop uploads, if wired to a separate `@drop` handler rather than this `<input>`'s `@change`, would not be affected — worth confirming separately.)
+
+Fixed all four using the exact idiom already established elsewhere in this same codebase for exactly this constraint (e.g. `authModal`'s `(userModal = false) || showToast(...)` and `labelEditor`'s `(nameIsOther = false) || (selectedName = '')`): replace the `;`-joined statements with a single expression using `||`, relying on the first statement's result being reliably falsy (an assignment evaluates to the assigned value; `false` is falsy, and `addFiles()` has no explicit `return` so it's always `undefined`, also falsy) so the right-hand side is guaranteed to run:
+```
+@click.stop="(open = false) || openLabelModal(label)"
+@click.stop="(open = false) || deleteLabel(label)"
+@change="$store.upload.addFiles($event.target.files) || ($event.target.value = '')"
+```
+Verified via the decompiled parser that parenthesized assignment expressions are valid grouped primaries in this evaluator, so `(open = false)` parses correctly as the left operand of `||`.
+
+### Testing notes
+- Decompiled and read the relevant sections of the minified `alpinejs.min.js` bundle (Tokenizer, Parser, and evaluator classes) directly to confirm the exact failure mode rather than guessing — confirmed `parse()`'s single-trailing-semicolon-then-EOF-or-throw behavior and confirmed the evaluator's `AssignmentExpression`/`BinaryExpression` (`&&`/`||`) node handling, which is what makes the `(x = v) || sideEffect()` idiom work.
+- Grepped all of `app/*.html` for the pattern `@directive="...;..."` both before and after the fix — found exactly these 4 instances before, 0 after.
+- `node --check app/app.js` passes (unaffected — no `.js` file changes this time, only the two `.html` files).
+- Tag-balance scan on both edited HTML files (`div`/`template`/`span`) unchanged and balanced (`photo.html` 177/177, 98/98, 74/74; `index.html` 63/63, 17/17, 22/22) — these were pure attribute-value edits, no markup structure changed.
+- Still unable to click-test in an actual browser in this sandbox (no running server/Postgres) — recommend the user retest Edit/Delete on the photo page, and also retest that clicking to browse/select files for upload (not just drag-and-drop, if that's wired separately) now actually queues them.
+
+### Open items
+- Confirm whether drag-and-drop upload (if it has its own separate `@drop` handler elsewhere) was affected by the same bug or is unrelated — not checked this session, only the `<input type="file">` `@change` path.
+- Given this exact class of bug (silently-failing multi-statement CSP expressions) has now been found three additional times beyond the two pre-existing correct examples, it may be worth a one-time full audit of every `@`-prefixed directive in `app/*.html` for stray semicolons whenever there's next a lull — this session's grep only searched for the literal `;` character inside quoted directive values, which should catch all remaining cases, but wasn't cross-checked against every possible directive prefix (e.g. `x-on:`-spelled-out equivalents, of which there don't currently appear to be any in this codebase).
+- Still pending the accumulated `make build` / end-to-end verification caveat from every prior Go-touching session.

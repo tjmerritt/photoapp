@@ -378,7 +378,7 @@
           <span class="text-sm font-medium">Drop photos here or click to browse</span>
           <span class="text-xs text-muted">JPEG, PNG, or GIF</span>
           <input type="file" accept="image/jpeg,image/png,image/gif" multiple class="hidden"
-                 @change="$store.upload.addFiles($event.target.files); $event.target.value = ''" />
+                 @change="$store.upload.addFiles($event.target.files) || ($event.target.value = '')" />
         </label>
 
         <!-- Batch labels -->
