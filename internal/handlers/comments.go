@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/julienschmidt/httprouter"
@@ -84,6 +85,11 @@ func (h *CommentsHandler) Create(w http.ResponseWriter, r *http.Request, _ httpr
 		middleware.WriteError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
+	// Phase 5d: comments are Markdown source text (rendered client-side), but
+	// still just TEXT in storage — trim so a whitespace-only body (which the
+	// frontend's own .trim() checks would normally catch) can't sneak past a
+	// direct API call and produce an empty-looking comment.
+	req.Comment = strings.TrimSpace(req.Comment)
 	if req.Comment == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "comment is required")
 		return
@@ -175,6 +181,7 @@ func (h *CommentsHandler) Update(w http.ResponseWriter, r *http.Request, ps http
 		middleware.WriteError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
+	req.Comment = strings.TrimSpace(req.Comment)
 	if req.Comment == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "comment is required")
 		return

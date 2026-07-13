@@ -85,6 +85,218 @@ function avatarSrc(user) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Phase 5d — rich-text (Markdown) comments.
+//
+// Comments are stored as plain Markdown source (comment_text stays TEXT in
+// Postgres; only the validation changed — see comments.go). Rendering to
+// HTML happens entirely client-side via vendored `marked` + `DOMPurify`
+// (app/vendor/*.min.js, loaded before app.js in photo.html): marked converts
+// the Markdown (and any raw HTML the "Font" toolbar inserts) to HTML, and
+// DOMPurify strips anything not on the allow-list before it's ever assigned
+// via x-html. This is the point where "sanitize HTML on output" (PLAN.md
+// 5d) actually happens, since rendering — and therefore HTML generation —
+// only happens in the browser in this architecture.
+//
+// Emoji shorthand (:name:) is resolved via a small client-side cache keyed
+// by a normalized shortcode, backed by the existing GET /api/v1/emoji/types
+// search endpoint. Rendering is synchronous (needed for Alpine bindings), so
+// unresolved shortcodes render as literal text on first pass; resolving them
+// updates the cache and re-renders once via a callback, which is why
+// renderedComment/*PreviewHtml are plain reactive data fields refreshed
+// imperatively rather than getters.
+// ─────────────────────────────────────────────────────────────────────────────
+const _emojiShortcodeCache = {};
+function normalizeShortcode(name) {
+  return (name || '').trim().toLowerCase().replace(/\s+/g, '_');
+}
+function emojiShortcodeHtml(em) {
+  if (!em) return null;
+  if (em.imageurl) return '<img src="' + em.imageurl + '" alt=":' + em.alttext + ':" class="inline-emoji" />';
+  if (em.emoji) return em.emoji;
+  return null;
+}
+// Replaces any :shortcode: already present in the cache; anything not yet
+// cached is left untouched (as literal ":name:" text) for this render pass.
+function substituteCachedShortcodes(text) {
+  return text.replace(/:([a-z0-9_+-]+):/gi, function (match, name) {
+    const key = normalizeShortcode(name);
+    if (!(key in _emojiShortcodeCache)) return match;
+    return emojiShortcodeHtml(_emojiShortcodeCache[key]) || match;
+  });
+}
+// Finds any :shortcode: in text not yet cached, looks each up via the emoji
+// search endpoint (exact match on alt_text, case/space-insensitive), and
+// calls onDone() once — but only if something new was actually resolved, so
+// callers that re-invoke this from inside a refresh callback don't loop.
+async function resolveShortcodes(text, onDone) {
+  const names = new Set();
+  const re = /:([a-z0-9_+-]+):/gi;
+  let m;
+  while ((m = re.exec(text))) {
+    const key = normalizeShortcode(m[1]);
+    if (!(key in _emojiShortcodeCache)) names.add(key);
+  }
+  if (names.size === 0) return;
+  await Promise.all([...names].map(async (key) => {
+    try {
+      const r = await fetch(`/api/v1/emoji/types?search=${encodeURIComponent(key.replace(/_/g, ' '))}&limit=10`);
+      const d = await r.json();
+      const match = (d.emojis || []).find(e => normalizeShortcode(e.alttext) === key);
+      _emojiShortcodeCache[key] = match || null;
+    } catch { _emojiShortcodeCache[key] = null; }
+  }));
+  onDone();
+}
+// Allow-list mirrors what the "Font" toolbar and Markdown together can
+// produce: basic formatting, links, lists, and <span style="..."> for the
+// font-family/weight/size feature (PLAN.md 5d: "stored as Markdown with HTML
+// spans"). Nothing script-capable (script, iframe, event handlers, etc.) is
+// on the list, and DOMPurify strips anything not listed regardless.
+const _COMMENT_SANITIZE_OPTS = {
+  ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'del', 'a', 'ul', 'ol', 'li', 'blockquote', 'code', 'pre', 'span', 'img'],
+  ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'style', 'class', 'target', 'rel'],
+};
+function renderMarkdown(text) {
+  if (!text) return '';
+  const withEmoji = substituteCachedShortcodes(text);
+  const raw = marked.parse(withEmoji, { breaks: true });
+  return DOMPurify.sanitize(raw, _COMMENT_SANITIZE_OPTS);
+}
+
+function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+// markdownComposerMixin(field, refName) — adds Bold/Italic/Strikethrough,
+// a Font (family/weight/size) popover, :emoji: shortcode insertion, and a
+// Preview toggle for a single textarea-backed field (e.g. 'newText') to
+// whichever Alpine component spreads the result into its own returned
+// object. `field` is the reactive property holding raw Markdown source;
+// `refName` is that field's <textarea>'s x-ref name.
+//
+// This exists as a mixin factory — rather than a nested reusable
+// sub-component — because this app's Alpine build is the CSP-restricted
+// evaluator (see labelEditor/emojiPicker comments elsewhere in this file):
+// it can't parse arrow-function expressions inside directive attributes, so
+// there's no way to hand a nested component getter/setter closures from
+// x-data="...". Each composer (new comment, edit, reply) therefore gets its
+// own statically-named copies of these fields/methods instead.
+function markdownComposerMixin(field, refName) {
+  const Field          = capitalize(field);
+  const previewKey     = field + 'Preview';
+  const previewHtmlKey = field + 'PreviewHtml';
+  const fontOpenKey    = field + 'FontOpen';
+  const fontFamilyKey  = field + 'FontFamily';
+  const fontWeightKey  = field + 'FontWeight';
+  const fontSizeKey    = field + 'FontSize';
+
+  const mixin = {
+    [previewKey]:     false,
+    [previewHtmlKey]: '',
+    [fontOpenKey]:    false,
+    [fontFamilyKey]:  '',
+    [fontWeightKey]:  '',
+    [fontSizeKey]:    '',
+  };
+
+  mixin['wrap' + Field] = function (before, after) {
+    const el = this.$refs[refName];
+    const current = this[field] || '';
+    const start = el ? (el.selectionStart ?? current.length) : current.length;
+    const end   = el ? (el.selectionEnd   ?? current.length) : current.length;
+    const selected = current.slice(start, end);
+    this[field] = current.slice(0, start) + before + selected + after + current.slice(end);
+    if (el) {
+      const selStart = start + before.length;
+      const selEnd   = selStart + selected.length;
+      this.$nextTick(() => { el.focus(); el.setSelectionRange(selStart, selEnd); });
+    }
+  };
+
+  mixin['insertShortcode' + Field] = function (name) {
+    const shortcode = ':' + normalizeShortcode(name) + ':';
+    const el = this.$refs[refName];
+    const current = this[field] || '';
+    const start = el ? (el.selectionStart ?? current.length) : current.length;
+    const end   = el ? (el.selectionEnd   ?? current.length) : current.length;
+    this[field] = current.slice(0, start) + shortcode + current.slice(end);
+    if (el) {
+      const pos = start + shortcode.length;
+      this.$nextTick(() => { el.focus(); el.setSelectionRange(pos, pos); });
+    }
+  };
+
+  mixin['applyFont' + Field] = function () {
+    const family = this[fontFamilyKey], weight = this[fontWeightKey], size = this[fontSizeKey];
+    const parts = [];
+    if (family) parts.push('font-family:' + family);
+    if (weight) parts.push('font-weight:' + weight);
+    if (size)   parts.push('font-size:' + size);
+    this[fontOpenKey] = false;
+    if (parts.length === 0) return;
+    this['wrap' + Field]('<span style="' + parts.join(';') + '">', '</span>');
+  };
+
+  mixin['refreshPreview' + Field] = function () {
+    const text = this[field] || '';
+    this[previewHtmlKey] = renderMarkdown(text);
+    resolveShortcodes(text, () => { this[previewHtmlKey] = renderMarkdown(this[field] || ''); });
+  };
+
+  mixin['togglePreview' + Field] = function () {
+    this[previewKey] = !this[previewKey];
+    if (this[previewKey]) this['refreshPreview' + Field]();
+  };
+
+  return mixin;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// emojiShortcodePicker — a small search/browse popover (no reactions, no
+// skintone variants — just picking a name) used by the comment toolbar to
+// insert ":name:" shorthand. Dispatches 'insert-emoji-shortcode' with the
+// emoji's alt_text, which the composer's own @insert-emoji-shortcode
+// listener (an ancestor of this component in the DOM, so the event bubbles
+// up to it) turns into the actual shortcode insertion.
+// ─────────────────────────────────────────────────────────────────────────────
+function emojiShortcodePicker() {
+  return {
+    open: false,
+    search: '',
+    emojis: [],
+    loading: false,
+    offset: 0,
+    limit: 30,
+    total: 0,
+
+    async load() {
+      this.loading = true;
+      try {
+        const params = new URLSearchParams({ limit: this.limit, offset: this.offset });
+        if (this.search) params.set('search', this.search);
+        const resp = await fetch(`/api/v1/emoji/types?${params}`);
+        const data = await resp.json();
+        this.emojis = data.emojis || [];
+        this.total  = data.total  || 0;
+      } catch { this.emojis = []; }
+      this.loading = false;
+    },
+
+    toggle() {
+      this.open = !this.open;
+      if (this.open && this.emojis.length === 0) this.load();
+    },
+
+    doSearch() { this.offset = 0; this.load(); },
+    nextPage()  { this.offset += this.limit; this.load(); },
+    prevPage()  { this.offset = Math.max(0, this.offset - this.limit); this.load(); },
+
+    pick(em) {
+      this.$dispatch('insert-emoji-shortcode', em.alttext);
+      this.open = false;
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // commentsPanel — top-level comment list + new comment posting.
 // Takes only `photo`; auth is handled via globals.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -94,6 +306,7 @@ function commentsPanel(photo) {
     newText:     '',
     posting:     false,
     loadingMore: false,
+    ...markdownComposerMixin('newText', 'newTextarea'),
 
     init() {
       document.addEventListener('photoapp:comment-deleted', (e) => {
@@ -118,6 +331,8 @@ function commentsPanel(photo) {
         const c = await resp.json();
         this.comments.unshift(c);
         this.newText = '';
+        this.newTextPreview = false;
+        this.newTextFontOpen = false;
       } catch(e) {
         document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Failed to post: ${e.message}` }));
       }
@@ -162,6 +377,13 @@ function commentItem(c, photoid, depth = 0) {
     replyText:    '',
     postingReply: false,
     replies:      [],
+    ...markdownComposerMixin('editText', 'editTextarea'),
+    ...markdownComposerMixin('replyText', 'replyTextarea'),
+
+    // Rendered (Markdown → sanitized HTML) view of commentBody, refreshed
+    // imperatively via refreshRenderedComment() rather than a live getter —
+    // see the "Phase 5d" block comment above commentsPanel for why.
+    renderedComment: '',
 
     get canReply() { return !!getCurrentUser() && this.depth < 5; },
 
@@ -169,7 +391,14 @@ function commentItem(c, photoid, depth = 0) {
     // doesn't need per-level conditional logic around c.comment.
     get commentBody() { return this.c.deleted ? '[deleted]' : (this.c.comment || ''); },
 
+    refreshRenderedComment() {
+      const text = this.commentBody;
+      this.renderedComment = renderMarkdown(text);
+      resolveShortcodes(text, () => { this.renderedComment = renderMarkdown(this.commentBody); });
+    },
+
     init() {
+      this.refreshRenderedComment();
       // When a reply inside this comment's thread is deleted, mark it in the
       // replies array so it shows '[deleted]' rather than disappearing.
       document.addEventListener('photoapp:comment-deleted', (e) => {
@@ -202,6 +431,8 @@ function commentItem(c, photoid, depth = 0) {
     startEdit() {
       this.editText = this.c.comment;
       this.editing  = true;
+      this.editTextPreview = false;
+      this.editTextFontOpen = false;
     },
     cancelEdit() { this.editing = false; },
 
@@ -219,6 +450,7 @@ function commentItem(c, photoid, depth = 0) {
         const updated = await resp.json();
         this.c.comment = updated.comment;
         this.editing = false;
+        this.refreshRenderedComment();
       } catch(e) {
         document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Edit failed: ${e.message}` }));
       }
@@ -237,6 +469,7 @@ function commentItem(c, photoid, depth = 0) {
         // immediately and the replies beneath it remain visible.
         this.c = { ...this.c, deleted: true };
         this.editing = false;
+        this.refreshRenderedComment();
         document.dispatchEvent(new CustomEvent('photoapp:comment-deleted', { detail: commentid }));
       } catch(e) {
         document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Delete failed: ${e.message}` }));
@@ -272,6 +505,8 @@ function commentItem(c, photoid, depth = 0) {
         this.replies.push(reply);
         this.c.replycount = (this.c.replycount || 0) + 1;
         this.replyText    = '';
+        this.replyTextPreview = false;
+        this.replyTextFontOpen = false;
         this.replyOpen    = false;
         this.showingReplies = true;
       } catch(e) {
