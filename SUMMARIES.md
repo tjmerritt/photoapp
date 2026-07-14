@@ -1492,3 +1492,55 @@ While building the jsdom harness, also found and fixed a second, separate gap: t
 - This is the second time in this conversation that a change looked correct under static review and `node --check`/tag-balance but was actually broken by an Alpine-CSP-build-specific runtime restriction (the first being the template-literal/semicolon/escape findings in Sessions 40/45/48) — worth treating *any* new Alpine directive usage in this app as something to check against the real `alpinejs.min.js` (via a jsdom harness like the one built this session, now easy to reuse) rather than trusting it by analogy to how "normal" Alpine behaves.
 - Recommend the user do a fresh manual pass now that this is fixed: confirm existing posted comments at all depths still render (they were silently blank/broken since Session 52, this fixes that), confirm the new-comment Preview toggle now shows the typed draft's rendered Markdown instead of appearing empty, and confirm the emoji-shortcode insert button in the toolbar now actually opens/works.
 - No live browser in this sandbox — the jsdom harness is a strong proxy for Alpine-level behavior (it's driving the real shipped Alpine build) but isn't a full substitute for an actual browser click-through.
+
+## Session 54 — Actually Fixed It: Vendor Scripts Were 404ing, Not Just x-html
+
+### What was done
+The user reported Session 53's fix "didn't fix it" — Preview still made the draft vanish with nothing shown. Rather than keep reasoning from the jsdom harness alone, asked the user to check the browser console, which immediately showed the real, complete picture:
+
+```
+GET http://.../vendor/marked.min.js net::ERR_ABORTED 404 (Not Found)
+Refused to execute script from '.../vendor/marked.min.js' because its MIME type ('text/plain') is not executable
+GET http://.../vendor/purify.min.js net::ERR_ABORTED 404 (Not Found)
+Refused to execute script from '.../vendor/purify.min.js' ...
+```
+
+Both vendored library files were **never reaching the browser at all** — the `<script src="/vendor/marked.min.js">` tags added in Session 52 404'd every time. Since `marked`/`DOMPurify` were consequently always `undefined`, every single call to `renderMarkdown()` had been throwing a `ReferenceError` since Session 52 — a strictly bigger and more fundamental problem than the `x-html`-prohibited finding from Session 53 (that fix was real and necessary, just not sufficient, since the expression it was evaluating never had valid content to render in the first place).
+
+Investigated why `/vendor/*.min.js` 404s when `/photo.html`, `/app.js`, `/alpinejs.min.js`, and `/tailwind.css` all serve fine from the exact same `AppDir` via the exact same `http.FileServer(http.Dir(cfg.AppDir))` mechanism (confirmed in `router.go` — no per-path special-casing that would explain a subdirectory being treated differently). Confirmed the files do exist on disk in this project's `app/vendor/` directory and are syntactically valid. The most likely explanation is some difference between how this workspace's file writes reach the actual machine serving requests at `192.168.64.2:8080` (a VM-like address) versus how already-tracked files get there — `git status` shows `app/vendor/` as untracked, so if there's any git-mediated step between editing here and the server actually seeing the files, a brand-new untracked directory could plausibly be the one thing that doesn't make the trip, unlike edits to already-existing tracked files. This wasn't fully confirmed (no visibility into that machine from here), and going forward isn't worth chasing further given the fix below sidesteps it entirely.
+
+**Fix:** stopped depending on a separate static-file request for the vendor libraries altogether. Read both `app/vendor/marked.min.js` (42,616 bytes) and `app/vendor/purify.min.js` (28,979 bytes) and inlined their full contents directly as `<script>...</script>` blocks in `photo.html`'s `<head>`, replacing the two `<script src="/vendor/...">` tags. This has no dependency on any additional HTTP request, route, or directory — it's part of `photo.html` itself, which is unambiguously already serving correctly. Also stripped a `//# sourceMappingURL=purify.min.js.map` trailer comment left over from the vendored file (would have caused one more harmless-but-noisy 404 for a dev-tools-only source map).
+
+The `x-rich-html` custom directive and `emojiShortcodePicker` registration from Session 53 are both still correct and still needed — those fixed real, separate bugs. This session's fix addresses the actual root cause underneath them.
+
+### Testing notes
+- Verified the two library files extracted back out of the inlined `<script>` blocks are byte-for-byte identical to the originals (`node --check` passes on both the file-based originals and the values extracted from the rewritten `photo.html`).
+- Ran a jsdom test loading the *inlined* content exactly as a browser would (via `createElement('script'); .textContent = ...; appendChild`, no `require`/CommonJS involved) and confirmed `window.marked`/`window.DOMPurify` both initialize correctly and `marked.parse()` / `DOMPurify.sanitize()` both work — this specifically rules out the "UMD wrapper behaves differently when there's no separate module system" class of concern.
+- Re-ran the tag-balance sweep across all of `photo.html`, this time explicitly excluding the two now-giant inlined-script lines from the regex scan (since 40KB+29KB of arbitrary minified JS could otherwise produce false `<...>`-shaped matches) — everything else in the file still balances correctly, and script-tag count (4 opens / 4 closes) is correct once a false-positive match against my own explanatory code comment's prose (which literally contains the substring "`<script src>`") is accounted for.
+- `node --check app/app.js` still passes (unchanged this session).
+- Grepped for any remaining reference to `/vendor/` in `photo.html` — none; the two script tags are gone, replaced by inline content.
+
+### Open items
+- `app/vendor/marked.min.js` and `app/vendor/purify.min.js` are now unused/orphaned (nothing references them anymore) — left in place rather than deleted, since files in the user's connected folder require explicit permission to remove; happy to delete them on request.
+- Still don't have a confirmed root cause for *why* the static file route 404'd — only a plausible git/untracked-file theory. If another brand-new file/directory 404s the same way in the future, that's worth investigating properly (e.g., checking whatever process syncs this folder to the actual serving host) rather than working around it again.
+- This is now the second consecutive session where the fix required actual browser console output to find the real bug (Session 45 also cracked a stuck investigation this same way) — reinforcing that asking for live evidence early, rather than iterating on static analysis, is the fastest path when something "should" work but doesn't.
+
+## Session 55 — Corrected Course: Vendor Files Stay as Files, Not Inlined
+
+### What was done
+The user corrected Session 54's diagnosis: the vendor files 404'd because **they were genuinely never created** on the machine that matters, not because of some deploy/sync quirk between a tracked-vs-untracked git state. Direction given: keep `marked.min.js`/`purify.min.js` as real separate vendor files (don't inline them into `photo.html`), and add a script that (re)generates them, to be run before release testing.
+
+Reverted Session 54's inlining: removed the two ~40KB/~29KB inline `<script>` blocks from `photo.html`'s `<head>` and restored the plain `<script src="/vendor/marked.min.js"></script>` / `<script src="/vendor/purify.min.js"></script>` tags (now with a comment pointing at the new script). Along the way, cleaned up a duplicated leftover HTML comment and a stray `</script>` tag that Session 54's text-replacement had left behind from the original (pre-inlining) comment block.
+
+Added `scripts/update-vendor-js.sh`, matching the existing `scripts/build-tailwind.sh` pattern in this repo (installs into the project's own `node_modules`, not a temp directory; same `set -euo pipefail` / progress-echo style): it runs `npm install marked dompurify terser`, minifies marked's UMD build with `terser` (marked's npm package doesn't ship a pre-minified dist), copies DOMPurify's pre-minified `purify.min.js` directly, and writes both into `app/vendor/`. Ran it end-to-end in this sandbox to confirm it actually works — it reproduced byte-identical files to what was already in `app/vendor/` (42,616 and 29,209 bytes), so the script is a validated, repeatable substitute for however these two files need to get onto the machine that serves the app before release testing.
+
+### Testing notes
+- Ran `bash scripts/update-vendor-js.sh` for real in this sandbox — completed successfully (one harmless `npm` cleanup warning about an optional macOS-only native dependency, irrelevant on Linux and not a real error) and regenerated both files at their expected sizes.
+- `node --check` on `app/app.js`, `app/vendor/marked.min.js`, and `app/vendor/purify.min.js` all pass.
+- Re-ran the tag-balance sweep on `photo.html` post-revert — all tags balanced, including a clean 4-open/4-close `<script>` count (2 vendor + app.js + alpinejs.min.js).
+- Re-confirmed the actual Phase 5d bug fixes from Sessions 52/53 are untouched by this revert: all 10 `x-rich-html="..."` bindings, the `Alpine.directive('rich-html', ...)` registration, and the `Alpine.data('emojiShortcodePicker', ...)` registration are all still exactly in place — only the `<head>`'s two script tags changed.
+- CSP-hazard grep (backticks/`\u` escapes in directive attributes) on `photo.html` — clean.
+
+### Open items
+- The user still needs to actually run `scripts/update-vendor-js.sh` (or otherwise get `app/vendor/marked.min.js`/`purify.min.js` onto the real serving host) and confirm both URLs return 200 before this feature can be considered working end-to-end — this session fixes the *mechanism* for getting the files there, not the fact of them being there on their machine right now.
+- Worth deciding whether `scripts/update-vendor-js.sh` should be wired into `make build` as a hard dependency (like `tailwind.css` is) or stay a manual pre-release step as asked for here — left as manual per the user's explicit request ("prior to release testing"), but flagging in case that decision should be revisited later.

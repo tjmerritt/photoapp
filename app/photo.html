@@ -9,7 +9,8 @@
   <link rel="stylesheet" href="/tailwind.css">
   <!-- Markdown render + sanitize (Phase 5d rich-text comments). Vendored
        locally rather than pulled from a CDN, matching alpinejs.min.js below
-       and the rest of this app's self-hosted-assets convention. -->
+       and the rest of this app's self-hosted-assets convention. Regenerate
+       via scripts/update-vendor-js.sh before release testing. -->
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/purify.min.js"></script>
   <!-- App logic — registers alpine:init listener before alpinejs.min.js fires it. -->
