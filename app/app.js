@@ -4463,6 +4463,26 @@ document.addEventListener('alpine:init', () => {
   });
   Alpine.store('upload', uploadStore());
 
+  // Phase 5d: the CSP build hard-disables the built-in x-html directive
+  // ("Using the x-html directive is prohibited in the CSP build") and also
+  // forbids any directive *expression* that assigns to a DOM property
+  // (so "$el.innerHTML = x" inside x-effect is blocked too) — both
+  // confirmed by exercising the actual alpinejs.min.js shipped in this app.
+  // Neither restriction applies to a *registered* directive's own handler
+  // code, though, since that's real JS executed outside the expression
+  // parser — only the bound expression string ("renderedComment" etc.,
+  // just a plain identifier) goes through the CSP evaluator. This is the
+  // one place in the whole app that needs raw HTML injection (the rest of
+  // the sanitization already happened in renderMarkdown() via DOMPurify),
+  // so x-rich-html="expr" is used everywhere a plain x-html would otherwise
+  // be needed for rendered Markdown comments.
+  Alpine.directive('rich-html', (el, { expression }, { effect, evaluateLater }) => {
+    const getValue = evaluateLater(expression);
+    effect(() => {
+      getValue((value) => { el.innerHTML = value || ''; });
+    });
+  });
+
   Alpine.data('photoApp',        photoApp);
   Alpine.data('wallApp',         wallApp);
   Alpine.data('galleriesNav',    galleriesNav);
@@ -4477,6 +4497,7 @@ document.addEventListener('alpine:init', () => {
   Alpine.data('commentItem',     commentItem);
   Alpine.data('labelEditor',     labelEditor);
   Alpine.data('emojiPicker',     emojiPicker);
+  Alpine.data('emojiShortcodePicker', emojiShortcodePicker);
   Alpine.data('emojiHover',      emojiHover);
   Alpine.data('avatarSettings',  avatarSettings);
   Alpine.data('authModal',       authModal);

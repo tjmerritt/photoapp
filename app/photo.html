@@ -807,7 +807,7 @@
                         class="w-full text-sm resize-none focus:outline-none bg-transparent text-brand placeholder-muted"></textarea>
             </template>
             <template x-if="newTextPreview">
-              <div class="text-sm text-brand leading-relaxed min-h-[4.5rem] rich-content" x-html="newTextPreviewHtml"></div>
+              <div class="text-sm text-brand leading-relaxed min-h-[4.5rem] rich-content" x-rich-html="newTextPreviewHtml"></div>
             </template>
 
             <div class="flex justify-end mt-2">
@@ -848,7 +848,7 @@
                            :style="expanded ? '' : ('-webkit-line-clamp: ' + clampLines)"
                            x-ref="commentBody"
                            x-init="checkClamp()"
-                           x-html="renderedComment" class="rich-content"></div>
+                           x-rich-html="renderedComment" class="rich-content"></div>
                       <template x-if="!expanded && needsClamp">
                         <button @click="showMore()" class="text-accent text-xs mt-1 hover:underline">more</button>
                       </template>
@@ -924,7 +924,7 @@
                                   class="w-full text-sm border border-[var(--border)] rounded-xl p-2 resize-none focus:outline-none focus:ring-2 focus:ring-accent/30"></textarea>
                       </template>
                       <template x-if="editTextPreview">
-                        <div class="text-sm border border-[var(--border)] rounded-xl p-2 min-h-[4.5rem] leading-relaxed rich-content" x-html="editTextPreviewHtml"></div>
+                        <div class="text-sm border border-[var(--border)] rounded-xl p-2 min-h-[4.5rem] leading-relaxed rich-content" x-rich-html="editTextPreviewHtml"></div>
                       </template>
                       <div class="flex gap-2 justify-end mt-1">
                         <button @click="cancelEdit()" class="text-xs text-muted hover:text-brand">Cancel</button>
@@ -992,7 +992,7 @@
                                   class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea>
                       </template>
                       <template x-if="replyTextPreview">
-                        <div class="text-sm leading-relaxed min-h-[3rem] rich-content" x-html="replyTextPreviewHtml"></div>
+                        <div class="text-sm leading-relaxed min-h-[3rem] rich-content" x-rich-html="replyTextPreviewHtml"></div>
                       </template>
                       <div class="flex justify-end mt-1">
                         <button @click="postReply()" :disabled="postingReply || !replyText.trim()"
@@ -1044,7 +1044,7 @@
                             <textarea x-model="replyText" x-ref="replyTextarea" rows="2" placeholder="Write a reply…" class="w-full text-sm resize-none focus:outline-none bg-transparent placeholder-muted"></textarea>
                           </template>
                           <template x-if="replyTextPreview">
-                            <div class="text-sm leading-relaxed min-h-[3rem] rich-content" x-html="replyTextPreviewHtml"></div>
+                            <div class="text-sm leading-relaxed min-h-[3rem] rich-content" x-rich-html="replyTextPreviewHtml"></div>
                           </template>
                           <div class="flex justify-end mt-1">
                             <button @click="postReply()" :disabled="postingReply || !replyText.trim()" class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition disabled:opacity-40">
@@ -1068,7 +1068,7 @@
                                   <span class="flex gap-2 ml-auto"><button @click="startEdit()" class="text-xs text-muted hover:text-brand">Edit</button><button @click="deleteComment()" class="text-xs text-muted hover:text-red-500">Delete</button></span>
                                 </template>
                               </div>
-                              <template x-if="!editing"><p class="text-sm mt-0.5 leading-relaxed rich-content" x-html="renderedComment"></p></template>
+                              <template x-if="!editing"><p class="text-sm mt-0.5 leading-relaxed rich-content" x-rich-html="renderedComment"></p></template>
                               <template x-if="editing && !c.deleted">
                                 <div class="mt-1"><textarea x-model="editText" rows="2" @keydown.escape="cancelEdit()" class="w-full text-sm border border-[var(--border)] rounded-xl p-2 resize-none focus:outline-none focus:ring-2 focus:ring-accent/30"></textarea>
                                   <div class="flex gap-2 justify-end mt-1"><button @click="cancelEdit()" class="text-xs text-muted hover:text-brand">Cancel</button><button @click="saveEdit()" :disabled="saving||!editText.trim()" class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="saving?'Saving…':'Save'"></span></button></div>
@@ -1096,7 +1096,7 @@
                                             <span class="text-xs text-muted" x-text="formatDate(c.date)"></span>
                                             <template x-if="currentUser && currentUser.userid ===c.author.userid && !c.deleted"><span class="flex gap-2 ml-auto"><button @click="startEdit()" class="text-xs text-muted hover:text-brand">Edit</button><button @click="deleteComment()" class="text-xs text-muted hover:text-red-500">Delete</button></span></template>
                                           </div>
-                                          <template x-if="!editing"><p class="text-sm mt-0.5 leading-relaxed rich-content" x-html="renderedComment"></p></template>
+                                          <template x-if="!editing"><p class="text-sm mt-0.5 leading-relaxed rich-content" x-rich-html="renderedComment"></p></template>
                                           <template x-if="editing && !c.deleted"><div class="mt-1"><textarea x-model="editText" rows="2" @keydown.escape="cancelEdit()" class="w-full text-sm border border-[var(--border)] rounded-xl p-2 resize-none focus:outline-none focus:ring-2 focus:ring-accent/30"></textarea><div class="flex gap-2 justify-end mt-1"><button @click="cancelEdit()" class="text-xs text-muted hover:text-brand">Cancel</button><button @click="saveEdit()" :disabled="saving||!editText.trim()" class="bg-brand text-white text-xs px-3 py-1 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="saving?'Saving…':'Save'"></span></button></div></div></template>
                                           <div class="flex items-center gap-3 mt-1">
                                             <template x-if="c.replycount > 0 && !showingReplies"><button @click="loadReplies()" class="text-xs text-accent hover:underline font-medium">Replies (<span x-text="c.replycount"></span>)</button></template>
@@ -1115,7 +1115,7 @@
                                                     <div class="flex-1 min-w-0">
                                                       <span class="font-semibold text-xs" x-text="c.author.username"></span>
                                                       <span class="text-xs text-muted ml-1" x-text="formatDate(c.date)"></span>
-                                                      <template x-if="!editing"><p class="text-xs mt-0.5 leading-relaxed rich-content" x-html="renderedComment"></p></template>
+                                                      <template x-if="!editing"><p class="text-xs mt-0.5 leading-relaxed rich-content" x-rich-html="renderedComment"></p></template>
                                                       <template x-if="editing && !c.deleted"><div class="mt-1"><textarea x-model="editText" rows="2" @keydown.escape="cancelEdit()" class="w-full text-xs border border-[var(--border)] rounded-xl p-2 resize-none focus:outline-none"></textarea><div class="flex gap-2 justify-end mt-1"><button @click="cancelEdit()" class="text-xs text-muted hover:text-brand">Cancel</button><button @click="saveEdit()" :disabled="saving||!editText.trim()" class="bg-brand text-white text-xs px-2 py-0.5 rounded-full hover:bg-accent transition disabled:opacity-40"><span x-text="saving?'Saving…':'Save'"></span></button></div></div></template>
                                                       <div class="flex items-center gap-3 mt-0.5">
                                                         <template x-if="c.replycount > 0 && !showingReplies"><button @click="loadReplies()" class="text-xs text-accent hover:underline">Replies (<span x-text="c.replycount"></span>)</button></template>
@@ -1134,7 +1134,7 @@
                                                                 <div class="flex-1 min-w-0">
                                                                   <span class="font-semibold text-xs" x-text="c.author.username"></span>
                                                                   <span class="text-xs text-muted ml-1" x-text="formatDate(c.date)"></span>
-                                                                  <p class="text-xs leading-relaxed rich-content" x-html="renderedComment"></p>
+                                                                  <p class="text-xs leading-relaxed rich-content" x-rich-html="renderedComment"></p>
                                                                   <div class="flex items-center gap-2 mt-0.5">
                                                                     <template x-if="c.replycount > 0 && !showingReplies"><button @click="loadReplies()" class="text-xs text-accent hover:underline">Replies (<span x-text="c.replycount"></span>)</button></template>
                                                                     <template x-if="showingReplies"><button @click="(showingReplies = false) || (replyOpen = false)" class="text-xs text-muted hover:text-brand">Hide</button></template>
@@ -1150,7 +1150,7 @@
                                                                           <div class="flex-1 min-w-0">
                                                                             <span class="font-semibold text-xs" x-text="c.author.username"></span>
                                                                             <span class="text-xs text-muted ml-1" x-text="formatDate(c.date)"></span>
-                                                                            <p class="text-xs leading-relaxed rich-content" x-html="renderedComment"></p>
+                                                                            <p class="text-xs leading-relaxed rich-content" x-rich-html="renderedComment"></p>
                                                                           </div>
                                                                         </div>
                                                                       </template>
