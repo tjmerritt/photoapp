@@ -1544,3 +1544,19 @@ Added `scripts/update-vendor-js.sh`, matching the existing `scripts/build-tailwi
 ### Open items
 - The user still needs to actually run `scripts/update-vendor-js.sh` (or otherwise get `app/vendor/marked.min.js`/`purify.min.js` onto the real serving host) and confirm both URLs return 200 before this feature can be considered working end-to-end — this session fixes the *mechanism* for getting the files there, not the fact of them being there on their machine right now.
 - Worth deciding whether `scripts/update-vendor-js.sh` should be wired into `make build` as a hard dependency (like `tailwind.css` is) or stay a manual pre-release step as asked for here — left as manual per the user's explicit request ("prior to release testing"), but flagging in case that decision should be revisited later.
+
+## Session 56 — Added a Favicon
+
+### What was done
+Browser console showed `GET /favicon.ico 404`. Generated a simple on-brand icon programmatically (Pillow): a rounded navy square (`--brand: #1a1a2e`) with a white camera body and an accent-colored (`--accent: #e94560`) lens, rendered at 256×256 and downsampled into a multi-resolution `app/favicon.ico` (16/32/48/64px) plus a 256×256 `app/apple-touch-icon.png` for iOS/home-screen use. Added `<link rel="icon" href="/favicon.ico">` and `<link rel="apple-touch-icon" href="/apple-touch-icon.png">` right after the `<title>` tag in all 9 HTML pages (`index`, `photo`, `admin`, `galleries`, `gallery-admin`, `display`, `display-edit`, `template-admin`, `newdomain`) — explicit link tags rather than relying solely on the browser's default `/favicon.ico` guess, so it's unambiguous even if a page is embedded or the default lookup behaves inconsistently across browsers.
+
+Given last session's lesson that newly-created files don't reliably reach wherever `192.168.64.2:8080` actually serves from, explicitly confirmed both new binary files are visible through the same file-access path the user's folder view uses (not just the bash sandbox) before calling this done.
+
+### Testing notes
+- Regenerated the icon at each target size directly (not just resized from one bitmap) so the small 16×16/32×32 renders stay legible rather than a downscaled blur.
+- Visually inspected the 256×256 source render before finalizing — clean rounded-square camera glyph, matches the app's existing brand/accent colors.
+- Confirmed via the file-sharing path (not bash) that `app/favicon.ico` and `app/apple-touch-icon.png` are visible in the user's actual connected folder.
+- Re-ran the `<head>/<html>/<body>` tag-balance check across all 9 modified HTML files — all balanced.
+
+### Open items
+- Same as Session 55: still recommend the user confirm `/favicon.ico` actually returns 200 (not 404) after their next deploy/restart, given the standing question about whether newly-added files make it to the serving host automatically.
