@@ -1560,3 +1560,32 @@ Given last session's lesson that newly-created files don't reliably reach wherev
 
 ### Open items
 - Same as Session 55: still recommend the user confirm `/favicon.ico` actually returns 200 (not 404) after their next deploy/restart, given the standing question about whether newly-added files make it to the serving host automatically.
+
+## Session 57 — Phase 6: Admin Pages
+
+### What was done
+Implemented all five sub-phases of PLAN.md's Phase 6.
+
+**Migration** (`migrations/017_admin_phase6.sql`): added `account_enabled`, `can_manage_own_labels`, `can_manage_own_emoji`, `can_manage_own_comments` to `users`, and `enabled` to `label_names`.
+
+**Design call worth flagging**: 6b asks for per-user toggles including things like "label adding/editing own" — but the seeded `Contributor` role already grants `PhotoLabelCreate`/`PhotoEmojiCreate`/`PhotoEmojiDelete`/`PhotoCommentCreate` to *every* logged-in user via a single `LoggedIn`-entity grant, and the permission checker only ever ORs grants together (no negative/deny grants exist). That means an admin can't revoke one troublemaking user's access to something everyone else has using the existing role-grant model alone — so those three toggles are real boolean columns, checked as a hard AND on top of the normal permission check inside `labels.Create`, `emojis.React`/`Unreact`, and `comments.Create`. The fourth toggle (private-photo access) is the opposite case — nobody gets it by default, so it only ever needs to be *added* for one user — and reuses the existing `entity_role_grants` machinery via a new auto-created "singleton role" per permission (`permissions.Checker.GrantUserPermission`/`RevokeUserPermission`/`HasDirectUserGrant`), rather than a fifth column. `account_enabled` is enforced at the session layer: `AuthHandler.LookupSession` now joins `users.account_enabled`, so flipping the toggle invalidates a disabled user's existing sessions on their very next request without needing to hunt down and revoke tokens; `Login` also checks it up front for a clearer error message.
+
+**6a** — `GET /api/v1/admin/stats` (user/photo count for the selected exhibition; label/emoji "active" counts are site-wide since those tables have no `exhibitionid`). New `app/admin-master.html`: quick-stats tiles + link cards to every other admin page.
+
+**6b** — `GET /api/v1/admin/users` (single query, no N+1, including an `EXISTS` subquery against the singleton-role mechanism for `can_view_private`) and `PATCH /api/v1/admin/users/:userid`. New `app/admin-users.html`: per-user checkbox row for all five toggles, with a self-lockout guard (can't disable your own account).
+
+**6c** — added a `search` param to the existing `GET /api/v1/admin/photos` (matches title or photoid), plus a search box in `admin.html`/`admin.js`.
+
+**6d** — `GET /api/v1/admin/emoji-types` (include_disabled + search + pagination) and `PATCH /api/v1/admin/emoji-types/:emojiid` (`is_active` toggle). New `app/admin-emojis.html`.
+
+**6e** — extended the existing `PATCH /api/v1/label-names` with an `enabled` field (parallel to the Phase 5b `restricted` field), and added `GET /api/v1/admin/label-names` (paginated, with usage counts). Disabled is a stronger version of restricted: it hides the name from the add-label suggestion dropdown *and* blocks create/update/delete for non-admins, same enforcement shape as restricted but with its own error message; both checks now run together in `labels.go`'s `Create`/`Update`/`Delete`. New `app/admin-labels.html`: color swatch (native `<input type="color">`), restricted/enabled toggles, usage count, "show disabled" filter.
+
+All four new admin pages share `app/admin.js` (not `app/app.js`) — matching the pre-existing precedent that `admin.html` is a standalone bundle — and a consistent header/cross-nav bar linking Overview/Photos/Users/Emojis/Labels/Galleries/Templates. Added an "Admin" hamburger-menu link (pointing at `/admin-master.html`) to all 7 pages that already had "Gallery Admin"/"Template Admin" links (`index.html`, `photo.html`, `galleries.html`, `gallery-admin.html`, `template-admin.html`, `display.html`, `display-edit.html`), matching the existing unconditional-link/backend-enforced convention rather than introducing new frontend permission-gating for nav visibility.
+
+### Testing notes
+No Go toolchain or browser available in this sandbox (same constraint as every prior session). Verified via: brace/paren-balance counts on every modified/new Go file; `node --check` on `app.js` and `admin.js`; HTML open/close tag-balance counts on all 12 touched/new HTML files; a grep sweep for CSP-incompatible patterns (semicolon-separated multi-statement directive expressions, template literals) across all admin pages — caught and fixed two semicolon-chained `@click` handlers in `admin-users.html`'s pagination buttons (`offset = ...; loadUsers()`), replaced with proper `prevPage()`/`nextPage()` methods matching the pattern already used in `admin-emojis.html`/`admin-labels.html`. Manually re-read every modified handler function end-to-end for parameter-count/placeholder-numbering correctness on the hand-built `fmt.Sprintf` SQL (several endpoints use a variable number of optional WHERE clauses).
+
+### Open items
+- Still no way to actually run this against a live Postgres/Go build in this environment — the user should run `migrations/017_admin_phase6.sql`, rebuild, and click through all four new admin pages (especially the per-user toggles and the emoji/label enable-disable flows) before trusting this in production.
+- 6a's "active label/emoji" counts are intentionally site-wide, not per-exhibition — flagging in case that's surprising when multiple exhibitions are in play.
+- No UI yet for granting `UserAdmin`/`EmojiAdmin`/`LabelAdmin`/`GalleryAdmin` themselves (i.e. an admin-of-admins page) — Phase 6 as specified only covers using those permissions, not managing who holds them; that would need to go through Phase 2g (gallery permissions UI) or a future extension of this work.

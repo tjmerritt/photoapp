@@ -781,31 +781,33 @@ function labelEditor(data, photo) {
     get isLabelAdmin()   { return getIsLabelAdmin(); },
 
     // True when the manually-typed "Other…" name exactly matches a name
-    // that's restricted and the current user isn't an Admin/LabelAdmin —
-    // lets the modal show an error immediately as the user types, rather
-    // than waiting for the 403 that would come back after clicking Add Label.
+    // that's restricted OR disabled (Phase 6e) and the current user isn't an
+    // Admin/LabelAdmin — lets the modal show an error immediately as the user
+    // types, rather than waiting for the 403 that would come back after
+    // clicking Add Label.
     get customNameRestricted() {
       if (!this.nameIsOther) return false;
       const trimmed = this.customName.trim();
       if (!trimmed) return false;
       const info = this.allNameInfos.find(n => n.name === trimmed);
-      return !!(info && info.restricted && !this.isLabelAdmin);
+      return !!(info && (info.restricted || info.enabled === false) && !this.isLabelAdmin);
     },
 
     async init() {
       try {
         const r = await fetch('/api/v1/label-names');
         const d = await r.json();
-        // Phase 5b: each entry is {name, color, restricted}. Non-admins never
-        // even see restricted names as options — they may view labels that
-        // already exist with a restricted name, but shouldn't be offered them
-        // when adding a new one. allNameInfos keeps the full list around so a
-        // manually-typed "Other…" name can still be checked against it.
+        // Phase 5b/6e: each entry is {name, color, restricted, enabled}.
+        // Non-admins never even see restricted or disabled names as options —
+        // they may view labels that already exist with such a name, but
+        // shouldn't be offered them when adding a new one. allNameInfos keeps
+        // the full list around so a manually-typed "Other…" name can still be
+        // checked against it.
         this.allNameInfos = d.names || [];
       } catch { this.allNameInfos = []; }
       this.knownNames = this.isLabelAdmin
         ? this.allNameInfos
-        : this.allNameInfos.filter(n => !n.restricted);
+        : this.allNameInfos.filter(n => !n.restricted && n.enabled !== false);
 
       if (this.editingLabel) {
         if (!this.knownNames.some(n => n.name === this.editingLabel.name)) {
@@ -851,11 +853,13 @@ function labelEditor(data, photo) {
         return;
       }
       // Defense in depth: the backend is the source of truth on restriction
-      // (POST /api/v1/labels rejects with 403), but disabled <option>s should
-      // already prevent a non-admin from getting here for a restricted name.
+      // and enabled/disabled (POST /api/v1/labels rejects with 403), but
+      // disabled <option>s should already prevent a non-admin from getting
+      // here for a restricted or disabled name.
       const info = this.knownNames.find(n => n.name === this.selectedName);
-      if (info && info.restricted && !this.isLabelAdmin) {
-        document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `"${info.name}" is a restricted label name.` }));
+      if (info && (info.restricted || info.enabled === false) && !this.isLabelAdmin) {
+        const reason = info.enabled === false ? 'a disabled' : 'a restricted';
+        document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `"${info.name}" is ${reason} label name.` }));
         this.selectedName = '';
         return;
       }

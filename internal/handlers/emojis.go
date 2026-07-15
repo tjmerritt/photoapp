@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -128,6 +129,16 @@ func (h *EmojisHandler) React(w http.ResponseWriter, r *http.Request, _ httprout
 		return
 	}
 
+	// Phase 6b: per-user override — see resolve.go's userCanManageOwnEmoji doc.
+	if canManage, err := userCanManageOwnEmoji(ctx, h.DB, userID); err != nil {
+		slog.Error("React", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	} else if !canManage {
+		middleware.WriteError(w, http.StatusForbidden, "emoji reactions have been disabled for your account")
+		return
+	}
+
 	// Verify emoji type exists and is active
 	var active bool
 	err = h.DB.QueryRow(ctx, `SELECT is_active FROM emoji_types WHERE emojiid=$1`, emojiid).Scan(&active)
@@ -173,6 +184,16 @@ func (h *EmojisHandler) Unreact(w http.ResponseWriter, r *http.Request, _ httpro
 	}
 	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", permissions.ResourcePhoto, photoid, permissions.PermPhotoEmojiDelete); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	// Phase 6b: per-user override — see resolve.go's userCanManageOwnEmoji doc.
+	if canManage, err := userCanManageOwnEmoji(ctx, h.DB, userID); err != nil {
+		slog.Error("Unreact", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	} else if !canManage {
+		middleware.WriteError(w, http.StatusForbidden, "emoji reactions have been disabled for your account")
 		return
 	}
 
@@ -296,6 +317,131 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 		"pages":  buildPages(total, offset, limit, baseURL),
 		"emojis": types,
 	})
+}
+
+// GET /api/v1/admin/emoji-types?search=&include_disabled=&offset=&limit=  (Phase 6d)
+// Like ListTypes, but for the emoji admin page: includes inactive emoji
+// types (unless include_disabled is left off), doesn't exclude skintone
+// variants, and requires admin access rather than being publicly readable.
+// Requires: authenticated + (PermAdmin or PermEmojiAdmin).
+func (h *EmojisHandler) AdminListTypes(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := middleware.ExhibitionID(ctx)
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermEmojiAdmin); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+
+	q := r.URL.Query()
+	search := strings.TrimSpace(q.Get("search"))
+	includeDisabled := q.Get("include_disabled") == "true"
+	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
+
+	where := "base_hexcode IS NULL"
+	args := []any{}
+	n := 1
+	if !includeDisabled {
+		where += " AND is_active = TRUE"
+	}
+	if search != "" {
+		where += fmt.Sprintf(" AND (alt_text ILIKE $%d OR tags ILIKE $%d)", n, n)
+		args = append(args, "%"+search+"%")
+		n++
+	}
+
+	var total int
+	if err := h.DB.QueryRow(ctx, "SELECT COUNT(*) FROM emoji_types WHERE "+where, args...).Scan(&total); err != nil {
+		slog.Error("AdminListTypes count", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	rowArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := h.DB.Query(ctx, fmt.Sprintf(`
+		SELECT et.emojiid::text, et.emoji_char, et.image_url, et.alt_text,
+		       et.is_active, COALESCE(et.hexcode,''),
+		       COALESCE(ec.usage_count, 0) AS usage_count
+		FROM   emoji_types et
+		LEFT JOIN (
+		    SELECT emojiid, COUNT(*) AS usage_count
+		    FROM   emoji_reactions
+		    GROUP  BY emojiid
+		) ec ON ec.emojiid = et.emojiid
+		WHERE  %s
+		ORDER  BY et.alt_text ASC
+		LIMIT  $%d OFFSET $%d
+	`, where, n, n+1), rowArgs...)
+	if err != nil {
+		slog.Error("AdminListTypes", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	defer rows.Close()
+
+	types := make([]models.EmojiTypeResponse, 0)
+	for rows.Next() {
+		var et models.EmojiTypeResponse
+		if err := rows.Scan(&et.EmojiID, &et.EmojiChar, &et.ImageURL, &et.AltText,
+			&et.IsActive, &et.Hexcode, &et.UsageCount); err != nil {
+			slog.Error("AdminListTypes", "error", err)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		et.ImageURL = proxyImageURLPtr(et.ImageURL)
+		types = append(types, et)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("AdminListTypes", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, map[string]any{
+		"total":  total,
+		"offset": offset,
+		"limit":  limit,
+		"emojis": types,
+	})
+}
+
+// PATCH /api/v1/admin/emoji-types/:emojiid  (Phase 6d)
+// Body: { "is_active": bool }
+// Requires: authenticated + (PermAdmin or PermEmojiAdmin).
+func (h *EmojisHandler) AdminUpdateType(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	ctx := r.Context()
+	emojiid := ps.ByName("emojiid")
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := middleware.ExhibitionID(ctx)
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermEmojiAdmin); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+
+	var req struct {
+		IsActive *bool `json:"is_active"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.IsActive == nil {
+		middleware.WriteError(w, http.StatusBadRequest, "is_active is required")
+		return
+	}
+
+	ct, err := h.DB.Exec(ctx, `UPDATE emoji_types SET is_active = $1 WHERE emojiid = $2`, *req.IsActive, emojiid)
+	if err != nil {
+		slog.Error("AdminUpdateType", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if ct.RowsAffected() == 0 {
+		middleware.WriteError(w, http.StatusNotFound, "emoji type not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // GET /api/v1/emoji/variants?hexcode=  — returns all skintone variants for a base emoji.

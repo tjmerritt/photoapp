@@ -24,26 +24,21 @@ type LabelsHandler struct {
 	Checker *permissions.Checker
 }
 
-// fetchLabelNameInfo returns a label name's color override and restricted
-// flag from label_names (Phase 5a/5b). A name with no row at all has no
-// color override and is not restricted — both columns' zero values are
-// exactly the right defaults, and a name only ever gains a row once
-// something explicitly marks it (EXIF import, --restrict-labels, or the
-// PATCH /api/v1/label-names endpoint below).
-func fetchLabelNameInfo(ctx context.Context, pool *db.Pool, name string) (colorHex *string, restricted bool, err error) {
-	err = pool.QueryRow(ctx, `SELECT color_hex, restricted FROM label_names WHERE name = $1`, name).
-		Scan(&colorHex, &restricted)
+// fetchLabelNameInfo returns a label name's color override, restricted flag
+// (Phase 5b), and enabled flag (Phase 6e) from label_names. A name with no
+// row at all has no color override, is not restricted, and is enabled —
+// those are exactly the right zero-value defaults, and a name only ever
+// gains a row once something explicitly marks it (EXIF import,
+// --restrict-labels, or the PATCH /api/v1/label-names endpoint below).
+func fetchLabelNameInfo(ctx context.Context, pool *db.Pool, name string) (colorHex *string, restricted bool, enabled bool, err error) {
+	err = pool.QueryRow(ctx, `SELECT color_hex, restricted, enabled FROM label_names WHERE name = $1`, name).
+		Scan(&colorHex, &restricted, &enabled)
 	if err == pgx.ErrNoRows {
-		return nil, false, nil
+		return nil, false, true, nil
 	}
-	return colorHex, restricted, err
+	return colorHex, restricted, enabled, err
 }
 
-// isLabelNameRestricted reports whether name has been marked restricted.
-func isLabelNameRestricted(ctx context.Context, pool *db.Pool, name string) (bool, error) {
-	_, restricted, err := fetchLabelNameInfo(ctx, pool, name)
-	return restricted, err
-}
 
 var hexColorRe = regexp.MustCompile(`(?i)^#[0-9a-f]{6}$`)
 
@@ -114,18 +109,36 @@ func (h *LabelsHandler) Create(w http.ResponseWriter, r *http.Request, _ httprou
 		return
 	}
 
-	// Phase 5a/5b: look up this name's color override and restricted flag —
-	// the latter gates who may proceed, the former just rides along on the
-	// response so the frontend doesn't need a second round-trip.
-	colorHex, restricted, err := fetchLabelNameInfo(ctx, h.DB, req.Name)
+	// Phase 6b: an admin can revoke one specific user's ability to add labels
+	// even though PhotoLabelCreate above is granted broadly to every logged-in
+	// user via the seeded Contributor role — see resolve.go's comment on why
+	// this needs a real column instead of another permission grant.
+	if canManage, err := userCanManageOwnLabels(ctx, h.DB, userID); err != nil {
+		slog.Error("Create", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	} else if !canManage {
+		middleware.WriteError(w, http.StatusForbidden, "label management has been disabled for your account")
+		return
+	}
+
+	// Phase 5a/5b/6e: look up this name's color override, restricted flag,
+	// and enabled flag — the latter two gate who may proceed, the color just
+	// rides along on the response so the frontend doesn't need a second
+	// round-trip.
+	colorHex, restricted, enabled, err := fetchLabelNameInfo(ctx, h.DB, req.Name)
 	if err != nil {
 		slog.Error("Create", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	if restricted {
+	if restricted || !enabled {
 		if ok, _ := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermLabelAdmin); !ok {
-			middleware.WriteError(w, http.StatusForbidden, fmt.Sprintf("label name %q is restricted", req.Name))
+			if !enabled {
+				middleware.WriteError(w, http.StatusForbidden, fmt.Sprintf("label name %q is disabled", req.Name))
+			} else {
+				middleware.WriteError(w, http.StatusForbidden, fmt.Sprintf("label name %q is restricted", req.Name))
+			}
 			return
 		}
 	}
@@ -197,26 +210,31 @@ func (h *LabelsHandler) Update(w http.ResponseWriter, r *http.Request, ps httpro
 		}
 	}
 
-	// Phase 5b: even the label's own creator may not modify it once its name
-	// is restricted — only Admin/LabelAdmin may. Checks both the label's
-	// current name and, if this request renames it, the new name too.
+	// Phase 5b/6e: even the label's own creator may not modify it once its
+	// name is restricted or disabled — only Admin/LabelAdmin may. Checks both
+	// the label's current name and, if this request renames it, the new name
+	// too.
 	namesToCheck := []string{existingName}
 	if req.Name != nil && *req.Name != existingName {
 		namesToCheck = append(namesToCheck, *req.Name)
 	}
 	for _, n := range namesToCheck {
-		restricted, err := isLabelNameRestricted(ctx, h.DB, n)
+		_, restricted, enabled, err := fetchLabelNameInfo(ctx, h.DB, n)
 		if err != nil {
 			slog.Error("Update", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
 		}
-		if !restricted {
+		if !restricted && enabled {
 			continue
 		}
 		exhibitionID, _ := resolvePhotoExhibition(ctx, h.DB, photoid)
 		if ok, _ := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermLabelAdmin); !ok {
-			middleware.WriteError(w, http.StatusForbidden, fmt.Sprintf("label name %q is restricted", n))
+			if !enabled {
+				middleware.WriteError(w, http.StatusForbidden, fmt.Sprintf("label name %q is disabled", n))
+			} else {
+				middleware.WriteError(w, http.StatusForbidden, fmt.Sprintf("label name %q is restricted", n))
+			}
 			return
 		}
 	}
@@ -242,7 +260,7 @@ func (h *LabelsHandler) Update(w http.ResponseWriter, r *http.Request, ps httpro
 	var username string
 	_ = h.DB.QueryRow(ctx, `SELECT username FROM users WHERE userid=$1`, userID).Scan(&username)
 
-	colorHex, restricted, err := fetchLabelNameInfo(ctx, h.DB, newName)
+	colorHex, restricted, _, err := fetchLabelNameInfo(ctx, h.DB, newName)
 	if err != nil {
 		slog.Error("Update", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -288,16 +306,20 @@ func (h *LabelsHandler) Delete(w http.ResponseWriter, r *http.Request, ps httpro
 		}
 	}
 
-	// Phase 5b: even the label's own creator may not delete it once its name
-	// is restricted — only Admin/LabelAdmin may.
-	if restricted, err := isLabelNameRestricted(ctx, h.DB, name); err != nil {
+	// Phase 5b/6e: even the label's own creator may not delete it once its
+	// name is restricted or disabled — only Admin/LabelAdmin may.
+	if _, restricted, enabled, err := fetchLabelNameInfo(ctx, h.DB, name); err != nil {
 		slog.Error("Delete", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
-	} else if restricted {
+	} else if restricted || !enabled {
 		exhibitionID, _ := resolvePhotoExhibition(ctx, h.DB, photoid)
 		if ok, _ := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermLabelAdmin); !ok {
-			middleware.WriteError(w, http.StatusForbidden, fmt.Sprintf("label name %q is restricted", name))
+			if !enabled {
+				middleware.WriteError(w, http.StatusForbidden, fmt.Sprintf("label name %q is disabled", name))
+			} else {
+				middleware.WriteError(w, http.StatusForbidden, fmt.Sprintf("label name %q is restricted", name))
+			}
 			return
 		}
 	}
@@ -315,11 +337,14 @@ func (h *LabelsHandler) Delete(w http.ResponseWriter, r *http.Request, ps httpro
 }
 
 // GET /api/v1/label-names  — distinct label names across all non-deleted
-// labels, annotated with each name's color override (Phase 5a) and
-// restricted flag (Phase 5b) where set.
+// labels, annotated with each name's color override (Phase 5a), restricted
+// flag (Phase 5b), and enabled flag (Phase 6e) where set. Returns every name
+// regardless of enabled/restricted state — this feeds the color/lock-icon
+// rendering for labels that already exist on photos, not just the "add a new
+// label" suggestion list (which does its own client-side filtering).
 func (h *LabelsHandler) Names(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	rows, err := h.DB.Query(r.Context(), `
-		SELECT DISTINCT l.name, ln.color_hex, COALESCE(ln.restricted, FALSE)
+		SELECT DISTINCT l.name, ln.color_hex, COALESCE(ln.restricted, FALSE), COALESCE(ln.enabled, TRUE)
 		FROM   labels l
 		LEFT   JOIN label_names ln ON ln.name = l.name
 		WHERE  l.deleted_at IS NULL
@@ -335,18 +360,103 @@ func (h *LabelsHandler) Names(w http.ResponseWriter, r *http.Request, _ httprout
 	names := []models.LabelNameInfo{}
 	for rows.Next() {
 		var n models.LabelNameInfo
-		if err := rows.Scan(&n.Name, &n.ColorHex, &n.Restricted); err == nil {
+		if err := rows.Scan(&n.Name, &n.ColorHex, &n.Restricted, &n.Enabled); err == nil {
 			names = append(names, n)
 		}
 	}
 	middleware.WriteJSON(w, http.StatusOK, map[string][]models.LabelNameInfo{"names": names})
 }
 
+// GET /api/v1/admin/label-names?search=&include_disabled=&offset=&limit=  (Phase 6e)
+// Paginated admin listing of every distinct label name in use, each
+// annotated with its color override, restricted flag, enabled flag, and
+// usage count (how many non-deleted labels currently use it).
+// Requires: authenticated + (PermAdmin or PermLabelAdmin).
+func (h *LabelsHandler) AdminListNames(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := middleware.ExhibitionID(ctx)
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermLabelAdmin); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+
+	q := r.URL.Query()
+	search := strings.TrimSpace(q.Get("search"))
+	includeDisabled := q.Get("include_disabled") == "true"
+	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
+
+	where := "l.deleted_at IS NULL"
+	args := []any{}
+	n := 1
+	if !includeDisabled {
+		where += " AND COALESCE(ln.enabled, TRUE)"
+	}
+	if search != "" {
+		where += fmt.Sprintf(" AND l.name ILIKE $%d", n)
+		args = append(args, "%"+search+"%")
+		n++
+	}
+
+	var total int
+	if err := h.DB.QueryRow(ctx, fmt.Sprintf(`
+		SELECT COUNT(DISTINCT l.name)
+		FROM   labels l
+		LEFT   JOIN label_names ln ON ln.name = l.name
+		WHERE  %s
+	`, where), args...).Scan(&total); err != nil {
+		slog.Error("AdminListNames count", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	rowArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := h.DB.Query(ctx, fmt.Sprintf(`
+		SELECT l.name, ln.color_hex, COALESCE(ln.restricted, FALSE), COALESCE(ln.enabled, TRUE),
+		       COUNT(*) AS usage_count
+		FROM   labels l
+		LEFT   JOIN label_names ln ON ln.name = l.name
+		WHERE  %s
+		GROUP  BY l.name, ln.color_hex, ln.restricted, ln.enabled
+		ORDER  BY l.name
+		LIMIT  $%d OFFSET $%d
+	`, where, n, n+1), rowArgs...)
+	if err != nil {
+		slog.Error("AdminListNames", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	defer rows.Close()
+
+	names := make([]models.LabelNameInfo, 0)
+	for rows.Next() {
+		var ln models.LabelNameInfo
+		if err := rows.Scan(&ln.Name, &ln.ColorHex, &ln.Restricted, &ln.Enabled, &ln.UsageCount); err != nil {
+			slog.Error("AdminListNames", "error", err)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		names = append(names, ln)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("AdminListNames", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, map[string]any{
+		"total":  total,
+		"offset": offset,
+		"limit":  limit,
+		"names":  names,
+	})
+}
+
 // PATCH /api/v1/label-names?name=<name>  (requires Admin or LabelAdmin)
-// Body: { "color_hex": "#rrggbb" | "" , "restricted": bool } — either or
-// both fields; only the fields present in the request are changed. An empty
-// string for color_hex clears the override (falling back to the client-side
-// hash-based color again).
+// Body: { "color_hex": "#rrggbb" | "" , "restricted": bool, "enabled": bool }
+// — any subset of fields; only the fields present in the request are
+// changed. An empty string for color_hex clears the override (falling back
+// to the client-side hash-based color again).
 func (h *LabelsHandler) UpdateName(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	ctx := r.Context()
 	name := strings.TrimSpace(r.URL.Query().Get("name"))
@@ -365,13 +475,14 @@ func (h *LabelsHandler) UpdateName(w http.ResponseWriter, r *http.Request, _ htt
 	var req struct {
 		ColorHex   *string `json:"color_hex"`
 		Restricted *bool   `json:"restricted"`
+		Enabled    *bool   `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		middleware.WriteError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	if req.ColorHex == nil && req.Restricted == nil {
-		middleware.WriteError(w, http.StatusBadRequest, "color_hex or restricted is required")
+	if req.ColorHex == nil && req.Restricted == nil && req.Enabled == nil {
+		middleware.WriteError(w, http.StatusBadRequest, "color_hex, restricted, or enabled is required")
 		return
 	}
 
@@ -392,20 +503,27 @@ func (h *LabelsHandler) UpdateName(w http.ResponseWriter, r *http.Request, _ htt
 		restrictedVal = *req.Restricted
 	}
 
+	hasEnabled := req.Enabled != nil
+	enabledVal := true
+	if hasEnabled {
+		enabledVal = *req.Enabled
+	}
+
 	if _, err := h.DB.Exec(ctx, `
-		INSERT INTO label_names (name, color_hex, restricted)
-		VALUES ($1, $2, $3)
+		INSERT INTO label_names (name, color_hex, restricted, enabled)
+		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (name) DO UPDATE SET
-			color_hex  = CASE WHEN $4 THEN $2 ELSE label_names.color_hex  END,
-			restricted = CASE WHEN $5 THEN $3 ELSE label_names.restricted END,
+			color_hex  = CASE WHEN $5 THEN $2 ELSE label_names.color_hex  END,
+			restricted = CASE WHEN $6 THEN $3 ELSE label_names.restricted END,
+			enabled    = CASE WHEN $7 THEN $4 ELSE label_names.enabled    END,
 			updated_at = NOW()
-	`, name, colorVal, restrictedVal, hasColor, hasRestricted); err != nil {
+	`, name, colorVal, restrictedVal, enabledVal, hasColor, hasRestricted, hasEnabled); err != nil {
 		slog.Error("UpdateName", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
 
-	colorHex, restricted, err := fetchLabelNameInfo(ctx, h.DB, name)
+	colorHex, restricted, enabled, err := fetchLabelNameInfo(ctx, h.DB, name)
 	if err != nil {
 		slog.Error("UpdateName", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -415,6 +533,7 @@ func (h *LabelsHandler) UpdateName(w http.ResponseWriter, r *http.Request, _ htt
 		Name:       name,
 		ColorHex:   colorHex,
 		Restricted: restricted,
+		Enabled:    enabled,
 	})
 }
 

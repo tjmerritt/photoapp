@@ -93,6 +93,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/tjmerritt/photoapp/internal/db"
 )
 
@@ -340,6 +341,117 @@ func (c *Checker) UserPermissions(
 		grants = append(grants, g)
 	}
 	return grants, rows.Err()
+}
+
+// ── Per-user singleton grants (Phase 6b) ─────────────────────────────────────
+//
+// A handful of admin toggles (currently just "access to private photos") only
+// ever need to ADD a permission to one specific user on top of their normal
+// role-derived grants — never revoke one that a broader role already confers.
+// That fits the existing additive entity_role_grants model perfectly, so
+// rather than inventing a new table we auto-create one small, well-known role
+// per permission ("__grant:<permission>") the first time it's needed, and
+// grant/revoke it directly to/from the target user (entity_type='User',
+// global scope). This is invisible anywhere else in the system: it's just an
+// ordinary role that happens to bundle exactly one permission and get granted
+// to exactly one user at a time.
+//
+// This mechanism is NOT used for permissions that a broad role (e.g. the
+// seeded "Contributor" role, granted to the LoggedIn entity) already confers
+// to everyone — revoking a single user's access to something everyone else
+// has requires an actual override column checked in the handler, since
+// Check() only ever ORs grants together. See migrations/017_admin_phase6.sql
+// for the columns used for those cases.
+
+func singletonGrantRoleName(permission string) string {
+	return "__grant:" + permission
+}
+
+// ensureSingletonRole returns the roleid of the auto-managed singleton role
+// for permission within exhibitionID, creating it (and its one
+// role_permissions row) if it doesn't already exist.
+func (c *Checker) ensureSingletonRole(ctx context.Context, exhibitionID, permission string) (string, error) {
+	name := singletonGrantRoleName(permission)
+
+	var roleID string
+	err := c.DB.QueryRow(ctx, `
+		INSERT INTO roles (exhibitionid, name, description)
+		VALUES ($1::uuid, $2, 'Auto-managed: per-user grant of ' || $3)
+		ON CONFLICT (exhibitionid, name) DO NOTHING
+		RETURNING roleid::text
+	`, exhibitionID, name, permission).Scan(&roleID)
+	if err == pgx.ErrNoRows {
+		// Row already existed (ON CONFLICT DO NOTHING returns nothing) — fetch it.
+		err = c.DB.QueryRow(ctx, `
+			SELECT roleid::text FROM roles WHERE exhibitionid = $1::uuid AND name = $2
+		`, exhibitionID, name).Scan(&roleID)
+	}
+	if err != nil {
+		return "", err
+	}
+
+	if _, err := c.DB.Exec(ctx, `
+		INSERT INTO role_permissions (roleid, permission)
+		VALUES ($1, $2)
+		ON CONFLICT DO NOTHING
+	`, roleID, permission); err != nil {
+		return "", err
+	}
+
+	return roleID, nil
+}
+
+// GrantUserPermission idempotently grants permission to userID, scoped
+// globally within exhibitionID, via the singleton-role mechanism above.
+func (c *Checker) GrantUserPermission(ctx context.Context, exhibitionID, userID, permission string) error {
+	roleID, err := c.ensureSingletonRole(ctx, exhibitionID, permission)
+	if err != nil {
+		return err
+	}
+	_, err = c.DB.Exec(ctx, `
+		INSERT INTO entity_role_grants (roleid, entity_type, entity_ref)
+		SELECT $1, 'User', $2
+		WHERE NOT EXISTS (
+			SELECT 1 FROM entity_role_grants
+			WHERE roleid = $1 AND entity_type = 'User' AND entity_ref = $2
+			  AND resource_type IS NULL
+		)
+	`, roleID, userID)
+	return err
+}
+
+// RevokeUserPermission removes a previously-granted singleton-role grant of
+// permission from userID within exhibitionID. A no-op if none exists.
+func (c *Checker) RevokeUserPermission(ctx context.Context, exhibitionID, userID, permission string) error {
+	name := singletonGrantRoleName(permission)
+	_, err := c.DB.Exec(ctx, `
+		DELETE FROM entity_role_grants erg
+		USING roles r
+		WHERE erg.roleid = r.roleid
+		  AND r.exhibitionid = $1::uuid AND r.name = $2
+		  AND erg.entity_type = 'User' AND erg.entity_ref = $3
+		  AND erg.resource_type IS NULL
+	`, exhibitionID, name, userID)
+	return err
+}
+
+// HasDirectUserGrant reports whether userID has been individually granted
+// permission via the singleton-role mechanism (as opposed to holding it
+// through a broader role like Admin). Used by the admin UI to render the
+// current toggle state.
+func (c *Checker) HasDirectUserGrant(ctx context.Context, exhibitionID, userID, permission string) (bool, error) {
+	var exists bool
+	err := c.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM   entity_role_grants erg
+			JOIN   roles              r ON r.roleid = erg.roleid
+			WHERE  r.exhibitionid = $1::uuid AND r.name = $2
+			  AND  erg.entity_type = 'User' AND erg.entity_ref = $3
+			  AND  erg.resource_type IS NULL
+		)
+	`, exhibitionID, singletonGrantRoleName(permission), userID).Scan(&exists)
+	return exists, err
 }
 
 // HasAny reports whether the user holds at least one of the given permissions

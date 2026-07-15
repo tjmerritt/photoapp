@@ -91,13 +91,23 @@ func (h *AuthHandler) LookupUserFlags(ctx context.Context, userID string) middle
 }
 
 // LookupSession returns the userID for a valid session token, or "".
+//
+// Phase 6b: joins users.account_enabled so a disabled account's existing
+// sessions stop working the moment an admin flips the toggle, without
+// needing to hunt down and revoke every outstanding session token — this is
+// re-checked on every request since Auth middleware calls LookupSession per
+// request rather than caching it.
 func (h *AuthHandler) LookupSession(ctx context.Context, token string) string {
 	var userID string
 	err := h.DB.QueryRow(ctx, `
-		SELECT userid::text FROM sessions
-		WHERE  token_hash = $1
-		  AND  revoked_at IS NULL
-		  AND  expires_at > NOW()
+		SELECT s.userid::text
+		FROM   sessions s
+		JOIN   users    u ON u.userid = s.userid
+		WHERE  s.token_hash     = $1
+		  AND  s.revoked_at     IS NULL
+		  AND  s.expires_at     > NOW()
+		  AND  u.deleted_at     IS NULL
+		  AND  u.account_enabled = TRUE
 	`, token).Scan(&userID)
 	if err != nil {
 		return ""
@@ -884,16 +894,24 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request, _ httprouter
 	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 
 	var userID, hash string
+	var accountEnabled bool
 	err := h.DB.QueryRow(r.Context(), `
-		SELECT userid::text, password_hash FROM users
+		SELECT userid::text, password_hash, account_enabled FROM users
 		WHERE  (email=$1 OR username=$1) AND provider='local' AND deleted_at IS NULL
-	`, req.Email).Scan(&userID, &hash)
+	`, req.Email).Scan(&userID, &hash, &accountEnabled)
 	if err != nil {
 		middleware.WriteError(w, http.StatusUnauthorized, "invalid email or password")
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)); err != nil {
 		middleware.WriteError(w, http.StatusUnauthorized, "invalid email or password")
+		return
+	}
+	// Phase 6b: give a clear reason here rather than letting the login appear
+	// to succeed only for LookupSession to immediately reject the resulting
+	// cookie on the very next request.
+	if !accountEnabled {
+		middleware.WriteError(w, http.StatusForbidden, "this account has been disabled")
 		return
 	}
 

@@ -84,6 +84,12 @@ type LabelNameInfo struct {
 	Name       string  `json:"name"`
 	ColorHex   *string `json:"color,omitempty"`
 	Restricted bool    `json:"restricted"`
+	// Enabled (Phase 6e/migration 017) defaults true for names with no
+	// label_names row at all — see fetchLabelNameInfo's COALESCE.
+	Enabled bool `json:"enabled"`
+	// UsageCount (Phase 6e) — how many non-deleted labels currently use this
+	// name; only populated by the admin listing endpoint.
+	UsageCount int `json:"usage_count,omitempty"`
 }
 
 type Emoji struct {

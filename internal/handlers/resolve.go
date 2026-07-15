@@ -98,3 +98,32 @@ func resolveDisplayGallery(ctx context.Context, pool *db.Pool, displayid string)
 	displayGalleryCache.Store(displayid, galleryID)
 	return galleryID, nil
 }
+
+// ── Phase 6b: per-user "manage my own X" overrides ───────────────────────────
+//
+// These read the users.can_manage_own_* columns added in
+// migrations/017_admin_phase6.sql. They are deliberately NOT cached like the
+// lookups above — an admin flipping one of these toggles needs to take
+// effect on the very next request, not whenever a stale cache entry expires.
+// Each is a hard AND on top of the normal permission check in its caller: a
+// user who fails this still needs PhotoLabelCreate/PhotoEmojiCreate&Delete/
+// PhotoCommentCreate as usual, but passing the permission check alone is no
+// longer sufficient once an admin has switched this off for them.
+
+func userCanManageOwnLabels(ctx context.Context, pool *db.Pool, userID string) (bool, error) {
+	var v bool
+	err := pool.QueryRow(ctx, `SELECT can_manage_own_labels FROM users WHERE userid=$1`, userID).Scan(&v)
+	return v, err
+}
+
+func userCanManageOwnEmoji(ctx context.Context, pool *db.Pool, userID string) (bool, error) {
+	var v bool
+	err := pool.QueryRow(ctx, `SELECT can_manage_own_emoji FROM users WHERE userid=$1`, userID).Scan(&v)
+	return v, err
+}
+
+func userCanManageOwnComments(ctx context.Context, pool *db.Pool, userID string) (bool, error) {
+	var v bool
+	err := pool.QueryRow(ctx, `SELECT can_manage_own_comments FROM users WHERE userid=$1`, userID).Scan(&v)
+	return v, err
+}

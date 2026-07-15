@@ -114,9 +114,21 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	r.POST("/api/v1/photos/upload",                       auth(uploads.ServeHTTP))
 
 	// ── Admin endpoints (auth + PermAdmin enforced in handler) ───────────────────
-	r.GET("/api/v1/admin/exhibitions", auth(admin.ListExhibitions))
-	r.GET("/api/v1/admin/photos",      auth(admin.ListPhotos))
-	r.PATCH("/api/v1/admin/photo",     auth(admin.SetPublic))
+	r.GET("/api/v1/admin/exhibitions",  auth(admin.ListExhibitions))
+	r.GET("/api/v1/admin/photos",       auth(admin.ListPhotos))
+	r.PATCH("/api/v1/admin/photo",      auth(admin.SetPublic))
+	r.GET("/api/v1/admin/stats",        auth(admin.Stats))
+
+	// Phase 6b: user admin (PermAdmin/PermUserAdmin enforced in handler)
+	r.GET("/api/v1/admin/users",           auth(admin.ListUsers))
+	r.PATCH("/api/v1/admin/users/:userid", auth(admin.UpdateUser))
+
+	// Phase 6d: emoji admin (PermAdmin/PermEmojiAdmin enforced in handler)
+	r.GET("/api/v1/admin/emoji-types",            auth(emojis.AdminListTypes))
+	r.PATCH("/api/v1/admin/emoji-types/:emojiid", auth(emojis.AdminUpdateType))
+
+	// Phase 6e: label admin (PermAdmin/PermLabelAdmin enforced in handler)
+	r.GET("/api/v1/admin/label-names", auth(labels.AdminListNames))
 
 	// ── Static file serving for uploaded emoji images ─────────────────────────
 	r.ServeFiles("/uploads/*filepath", http.Dir(cfg.UploadDir))

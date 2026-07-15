@@ -108,6 +108,16 @@ func (h *CommentsHandler) Create(w http.ResponseWriter, r *http.Request, _ httpr
 		return
 	}
 
+	// Phase 6b: per-user override — see resolve.go's userCanManageOwnComments doc.
+	if canManage, err := userCanManageOwnComments(ctx, h.DB, userID); err != nil {
+		slog.Error("Create", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	} else if !canManage {
+		middleware.WriteError(w, http.StatusForbidden, "commenting has been disabled for your account")
+		return
+	}
+
 	// If replying, verify parent comment exists and belongs to same photo
 	if parentID != "" {
 		var parentPhoto string
