@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/julienschmidt/httprouter"
 	"github.com/tjmerritt/photoapp/internal/config"
@@ -280,4 +282,174 @@ func (h *GrantsHandler) Revoke(w http.ResponseWriter, r *http.Request, ps httpro
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// adminRole is the shape returned by GET /api/v1/admin/roles — just enough
+// for the "Add grant" popup's Role dropdown (see ListRoles).
+type adminRole struct {
+	RoleID      string   `json:"roleid"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Permissions []string `json:"permissions"`
+}
+
+// GET /api/v1/admin/roles?exhibitionid=  (Phase 6h)
+// Lists the non-deleted roles belonging to one exhibition, with their
+// bundled permissions — used to populate the "Add grant" popup's Role
+// dropdown. There is no browser/editor for roles themselves yet; roles are
+// still only created by scripts/seed-exhibition.sh (plus the auto-managed
+// singleton roles behind the per-user permission toggles).
+// Requires: authenticated + (PermAdmin or PermPermissionsAdmin).
+func (h *GrantsHandler) ListRoles(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := r.URL.Query().Get("exhibitionid")
+	if exhibitionID == "" {
+		exhibitionID = middleware.ExhibitionID(ctx)
+	}
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+	if exhibitionID == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "exhibitionid is required")
+		return
+	}
+
+	rows, err := h.DB.Query(ctx, `
+		SELECT r.roleid::text, r.name, COALESCE(r.description, ''),
+		       `+grantPermsSubquery+` AS perms
+		FROM   roles r
+		WHERE  r.exhibitionid = $1::uuid AND r.deleted_at IS NULL
+		ORDER  BY r.name
+	`, exhibitionID)
+	if err != nil {
+		slog.Error("Grants.ListRoles", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	defer rows.Close()
+
+	roles := make([]adminRole, 0)
+	for rows.Next() {
+		var role adminRole
+		if err := rows.Scan(&role.RoleID, &role.Name, &role.Description, &role.Permissions); err != nil {
+			slog.Error("Grants.ListRoles", "error", err)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		roles = append(roles, role)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("Grants.ListRoles", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, map[string]any{"roles": roles})
+}
+
+// createGrantRequest is the JSON body accepted by POST /api/v1/admin/grants.
+//
+// ExhibitionID and ResourceType/ResourceRef are mutually exclusive (mirrors
+// entity_role_grants' chk_exhibitionid_resource_exclusive constraint — see
+// migrations/018_grant_exhibitionid.sql):
+//   - both empty            -> global grant (every exhibition)
+//   - ExhibitionID set      -> scoped to that one exhibition
+//   - ResourceType/Ref set  -> scoped to that one Gallery/Display/Photo
+type createGrantRequest struct {
+	RoleID       string `json:"roleid"`
+	EntityType   string `json:"entity_type"`
+	EntityRef    string `json:"entity_ref"`
+	ExhibitionID string `json:"exhibitionid"`
+	ResourceType string `json:"resource_type"`
+	ResourceRef  string `json:"resource_ref"`
+}
+
+// POST /api/v1/admin/grants?exhibitionid=  (Phase 6h)
+// Creates a new entity_role_grants row. The exhibitionid query param is only
+// used for the permission check (which exhibition's admin panel is making
+// the request) — the grant's own scope comes entirely from the request body.
+// Requires: authenticated + (PermAdmin or PermPermissionsAdmin).
+func (h *GrantsHandler) Create(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := r.URL.Query().Get("exhibitionid")
+	if exhibitionID == "" {
+		exhibitionID = middleware.ExhibitionID(ctx)
+	}
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+
+	var req createGrantRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.RoleID = strings.TrimSpace(req.RoleID)
+	req.EntityType = strings.TrimSpace(req.EntityType)
+	req.EntityRef = strings.TrimSpace(req.EntityRef)
+	req.ExhibitionID = strings.TrimSpace(req.ExhibitionID)
+	req.ResourceType = strings.TrimSpace(req.ResourceType)
+	req.ResourceRef = strings.TrimSpace(req.ResourceRef)
+
+	if req.RoleID == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "roleid is required")
+		return
+	}
+
+	switch req.EntityType {
+	case permissions.EntityPublic, permissions.EntityLoggedIn:
+		if req.EntityRef != "" {
+			middleware.WriteError(w, http.StatusBadRequest, "entity_ref must be empty for Public/LoggedIn grants")
+			return
+		}
+	case permissions.EntityTeam, permissions.EntityUser:
+		if req.EntityRef == "" {
+			middleware.WriteError(w, http.StatusBadRequest, "entity_ref is required for Team/User grants")
+			return
+		}
+	default:
+		middleware.WriteError(w, http.StatusBadRequest, "entity_type must be one of Public, LoggedIn, Team, User")
+		return
+	}
+
+	if req.ExhibitionID != "" && req.ResourceType != "" {
+		middleware.WriteError(w, http.StatusBadRequest, "a grant cannot be scoped to both an exhibition and a specific resource")
+		return
+	}
+
+	switch req.ResourceType {
+	case "", permissions.ResourceGallery, permissions.ResourceDisplay, permissions.ResourcePhoto:
+		// ok
+	default:
+		middleware.WriteError(w, http.StatusBadRequest, "resource_type must be one of Gallery, Display, Photo, or empty")
+		return
+	}
+	if req.ResourceType != "" && req.ResourceRef == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "resource_ref is required when resource_type is set")
+		return
+	}
+	if req.ResourceType == "" && req.ResourceRef != "" {
+		middleware.WriteError(w, http.StatusBadRequest, "resource_ref must be empty when resource_type is empty")
+		return
+	}
+
+	var grantID string
+	err := h.DB.QueryRow(ctx, `
+		INSERT INTO entity_role_grants
+		    (roleid, entity_type, entity_ref, exhibitionid, resource_type, resource_ref, granted_by)
+		VALUES
+		    ($1::uuid, $2, NULLIF($3, ''), NULLIF($4, '')::uuid, NULLIF($5, ''), NULLIF($6, ''), NULLIF($7, '')::uuid)
+		RETURNING id::text
+	`, req.RoleID, req.EntityType, req.EntityRef, req.ExhibitionID, req.ResourceType, req.ResourceRef, userID).Scan(&grantID)
+	if err != nil {
+		slog.Error("Grants.Create", "error", err, "roleid", req.RoleID, "entity_type", req.EntityType)
+		middleware.WriteError(w, http.StatusBadRequest, "could not create grant — check that the role and entity/resource all exist")
+		return
+	}
+
+	middleware.WriteJSON(w, http.StatusCreated, map[string]any{"grantid": grantID})
 }

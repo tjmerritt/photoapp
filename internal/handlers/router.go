@@ -144,7 +144,10 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	// Phase 6g: permission-grants viewer (PermAdmin/PermPermissionsAdmin enforced in handler)
 	r.GET("/api/v1/admin/grants/global",       auth(grants.ListGlobal))
 	r.GET("/api/v1/admin/grants/exhibition",   auth(grants.ListForExhibition))
+	r.POST("/api/v1/admin/grants",             auth(grants.Create))
 	r.DELETE("/api/v1/admin/grants/:grantid",  auth(grants.Revoke))
+	// Phase 6h: role lookup for the "Add grant" popup (PermAdmin/PermPermissionsAdmin enforced in handler)
+	r.GET("/api/v1/admin/roles",               auth(grants.ListRoles))
 
 	// ── Static file serving for uploaded emoji images ─────────────────────────
 	r.ServeFiles("/uploads/*filepath", http.Dir(cfg.UploadDir))

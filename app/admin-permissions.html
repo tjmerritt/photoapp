@@ -33,6 +33,10 @@
       <span class="text-sm text-white/80 truncate" x-text="exhibitions[0] ? exhibitions[0].name : ''"></span>
     </div>
 
+    <button type="button" @click="openAddModal()"
+            class="shrink-0 px-3 py-1.5 text-xs font-semibold rounded-lg bg-accent text-white hover:opacity-90 transition">
+      + Add grant
+    </button>
     <a href="/" class="text-xs text-white/60 hover:text-white transition shrink-0">← Back to app</a>
   </header>
 
@@ -173,6 +177,193 @@
        class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-sm
               px-5 py-2.5 rounded-xl shadow-lg whitespace-nowrap z-50"
        x-text="toast.message">
+  </div>
+
+  <!-- Add grant modal -->
+  <div x-show="showAddModal"
+       class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+       @click.self="closeAddModal()">
+    <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-base font-bold text-[#1a1a2e]">Add permission grant</h3>
+        <button type="button" @click="closeAddModal()"
+                class="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+      </div>
+
+      <div class="space-y-4">
+
+        <!-- Role -->
+        <div>
+          <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Role</label>
+          <select x-model="formRoleId"
+                  class="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white cursor-pointer
+                         focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition">
+            <option value="">Select a role…</option>
+            <template x-for="role in formRoles" :key="role.roleid">
+              <option :value="role.roleid" x-text="role.name"></option>
+            </template>
+          </select>
+        </div>
+
+        <!-- Entity type -->
+        <div>
+          <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Grant to</label>
+          <select x-model="formEntityType" @change="onEntityTypeChange()"
+                  class="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white cursor-pointer
+                         focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition">
+            <option value="Public">Public (everyone)</option>
+            <option value="LoggedIn">Logged-in users</option>
+            <option value="Team">A specific team</option>
+            <option value="User">A specific user</option>
+          </select>
+        </div>
+
+        <!-- Entity selector: Team -->
+        <div x-show="formEntityType === 'Team'">
+          <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Team</label>
+          <select x-model="formEntityRef"
+                  class="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white cursor-pointer
+                         focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition">
+            <option value="">Select a team…</option>
+            <template x-for="t in formTeams" :key="t.teamid">
+              <option :value="t.teamid" x-text="t.name"></option>
+            </template>
+          </select>
+        </div>
+
+        <!-- Entity selector: User -->
+        <div x-show="formEntityType === 'User'">
+          <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">User</label>
+          <div x-show="!formEntityUser" class="flex items-center gap-2 mb-2">
+            <input type="search" x-model="formUserSearch" placeholder="Search username or email…"
+                   @keyup.enter="searchFormUsers()"
+                   class="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-full bg-white
+                          focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition" />
+            <button type="button" @click="searchFormUsers()"
+                    class="px-3 py-1.5 text-sm rounded-full bg-gray-200 hover:bg-accent hover:text-white transition">Search</button>
+          </div>
+          <div x-show="!formEntityUser && formUserResults.length > 0" class="space-y-1.5 mb-2">
+            <template x-for="u in formUserResults" :key="u.userid">
+              <div class="flex items-center gap-2 bg-gray-50 rounded-lg border border-gray-100 px-3 py-1.5">
+                <div class="flex-1 min-w-0">
+                  <span class="text-sm text-gray-800" x-text="u.username"></span>
+                  <span class="text-xs text-gray-400 ml-1" x-text="u.email"></span>
+                </div>
+                <button type="button" @click="selectFormUser(u)"
+                        class="text-xs font-semibold text-green-600 hover:text-green-800 transition shrink-0">Select</button>
+              </div>
+            </template>
+          </div>
+          <div x-show="formEntityUser" class="flex items-center gap-2 bg-gray-50 rounded-lg border border-gray-100 px-3 py-1.5">
+            <div class="flex-1 min-w-0">
+              <span class="text-sm text-gray-800" x-text="formEntityUser ? formEntityUser.username : ''"></span>
+              <span class="text-xs text-gray-400 ml-1" x-text="formEntityUser ? formEntityUser.email : ''"></span>
+            </div>
+            <button type="button" @click="clearFormUser()"
+                    class="text-xs font-semibold text-gray-400 hover:text-red-600 transition shrink-0">Change</button>
+          </div>
+        </div>
+
+        <!-- Global checkbox -->
+        <div>
+          <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+            <input type="checkbox" x-model="formGlobal" @change="onGlobalChange()"
+                   class="w-4 h-4 accent-[#e94560] cursor-pointer" />
+            Global grant (applies to every exhibition, not just this one)
+          </label>
+        </div>
+
+        <!-- Resource type -->
+        <div x-show="!formGlobal">
+          <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Scope within this exhibition</label>
+          <select x-model="formResourceType" @change="onResourceTypeChange()"
+                  class="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white cursor-pointer
+                         focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition">
+            <option value="">Entire exhibition</option>
+            <option value="Gallery">A specific gallery</option>
+            <option value="Display">A specific display</option>
+            <option value="Photo">A specific photo</option>
+          </select>
+        </div>
+
+        <!-- Resource selector: Gallery -->
+        <div x-show="!formGlobal && formResourceType === 'Gallery'">
+          <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Gallery</label>
+          <select x-model="formResourceRef"
+                  class="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white cursor-pointer
+                         focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition">
+            <option value="">Select a gallery…</option>
+            <template x-for="g in formGalleries" :key="g.galleryid">
+              <option :value="g.galleryid" x-text="g.title"></option>
+            </template>
+          </select>
+        </div>
+
+        <!-- Resource selector: Display (pick a gallery, then a display within it) -->
+        <div x-show="!formGlobal && formResourceType === 'Display'" class="space-y-2">
+          <div>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Gallery</label>
+            <select x-model="formGalleryId" @change="onDisplayGalleryChange()"
+                    class="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white cursor-pointer
+                           focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition">
+              <option value="">Select a gallery…</option>
+              <template x-for="g in formGalleries" :key="g.galleryid">
+                <option :value="g.galleryid" x-text="g.title"></option>
+              </template>
+            </select>
+          </div>
+          <div x-show="formGalleryId">
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Display</label>
+            <select x-model="formResourceRef"
+                    class="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white cursor-pointer
+                           focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition">
+              <option value="">Select a display…</option>
+              <template x-for="(d, idx) in formDisplays" :key="d.displayid">
+                <option :value="d.displayid" x-text="'Display ' + (idx + 1)"></option>
+              </template>
+            </select>
+          </div>
+        </div>
+
+        <!-- Resource selector: Photo -->
+        <div x-show="!formGlobal && formResourceType === 'Photo'">
+          <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Photo</label>
+          <div x-show="!formPhoto" class="flex items-center gap-2 mb-2">
+            <input type="search" x-model="formPhotoSearch" placeholder="Search title or photo ID…"
+                   @keyup.enter="searchFormPhotos()"
+                   class="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-full bg-white
+                          focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition" />
+            <button type="button" @click="searchFormPhotos()"
+                    class="px-3 py-1.5 text-sm rounded-full bg-gray-200 hover:bg-accent hover:text-white transition">Search</button>
+          </div>
+          <div x-show="!formPhoto && formPhotoResults.length > 0" class="space-y-1.5 mb-2">
+            <template x-for="p in formPhotoResults" :key="p.photoid">
+              <div class="flex items-center gap-2 bg-gray-50 rounded-lg border border-gray-100 px-3 py-1.5">
+                <img :src="thumbUrl(p.imageurl, 40)" class="w-8 h-8 object-cover rounded shrink-0" />
+                <span class="text-sm text-gray-800 flex-1 min-w-0 truncate" x-text="p.title || '(no title)'"></span>
+                <button type="button" @click="selectFormPhoto(p)"
+                        class="text-xs font-semibold text-green-600 hover:text-green-800 transition shrink-0">Select</button>
+              </div>
+            </template>
+          </div>
+          <div x-show="formPhoto" class="flex items-center gap-2 bg-gray-50 rounded-lg border border-gray-100 px-3 py-1.5">
+            <img :src="formPhoto ? thumbUrl(formPhoto.imageurl, 40) : ''" class="w-8 h-8 object-cover rounded shrink-0" />
+            <span class="text-sm text-gray-800 flex-1 min-w-0 truncate" x-text="formPhoto ? (formPhoto.title || '(no title)') : ''"></span>
+            <button type="button" @click="clearFormPhoto()"
+                    class="text-xs font-semibold text-gray-400 hover:text-red-600 transition shrink-0">Change</button>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="flex items-center justify-end gap-2 mt-6">
+        <button type="button" @click="closeAddModal()"
+                class="px-4 py-1.5 text-sm rounded-lg bg-gray-100 hover:bg-gray-200 transition">Cancel</button>
+        <button type="button" @click="submitGrant()" :disabled="creatingGrant"
+                class="px-4 py-1.5 text-sm font-semibold rounded-lg bg-[#1a1a2e] text-white hover:bg-accent transition
+                       disabled:opacity-50 disabled:cursor-default">Grant</button>
+      </div>
+    </div>
   </div>
 
 </body>

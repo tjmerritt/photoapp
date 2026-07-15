@@ -710,6 +710,29 @@ function adminPermissions() {
     noExhibitions:      false,
     toast:              { visible: false, message: '' },
 
+    // ── Add-grant popup (Phase 6h) ──────────────────────────────────────────
+    showAddModal:    false,
+    creatingGrant:   false,
+    formRoles:       [],
+    formTeams:       [],
+    formGalleries:   [],
+    formDisplays:    [],
+    formRoleId:      '',
+    formEntityType:  'Public',
+    formEntityRef:   '',
+    formEntityUser:  null,
+    formUserSearch:  '',
+    formUserResults: [],
+    formGlobal:      false,
+    formResourceType: '',
+    formResourceRef:  '',
+    formGalleryId:    '',
+    formPhoto:        null,
+    formPhotoSearch:  '',
+    formPhotoResults: [],
+
+    thumbUrl(url, cssWidth) { return thumbUrl(url, cssWidth); },
+
     async init() {
       if (!(await loadAdminExhibitions(this))) { this.loading = false; return; }
       await Promise.all([this.loadGlobal(), this.loadForExhibition()]);
@@ -767,6 +790,185 @@ function adminPermissions() {
       } catch (e) {
         this.showToast('Revoke failed: ' + e.message);
       }
+    },
+
+    // ── Add-grant popup (Phase 6h) ──────────────────────────────────────────
+
+    async openAddModal() {
+      this.formRoleId       = '';
+      this.formEntityType   = 'Public';
+      this.formEntityRef    = '';
+      this.formEntityUser   = null;
+      this.formUserSearch   = '';
+      this.formUserResults  = [];
+      this.formGlobal       = false;
+      this.formResourceType = '';
+      this.formResourceRef  = '';
+      this.formGalleryId    = '';
+      this.formDisplays     = [];
+      this.formPhoto        = null;
+      this.formPhotoSearch  = '';
+      this.formPhotoResults = [];
+      this.showAddModal = true;
+
+      try {
+        const url = '/api/v1/admin/roles?exhibitionid=' + encodeURIComponent(this.selectedExhibition);
+        const r = await fetch(url);
+        const data = await r.json().catch(function() { return {}; });
+        this.formRoles = data.roles || [];
+      } catch (e) {
+        this.showToast('Could not load roles: ' + e.message);
+      }
+      try {
+        const url = '/api/v1/admin/teams?exhibitionid=' + encodeURIComponent(this.selectedExhibition) + '&limit=200';
+        const r = await fetch(url);
+        const data = await r.json().catch(function() { return {}; });
+        this.formTeams = data.teams || [];
+      } catch (e) {
+        this.formTeams = [];
+      }
+      try {
+        const r = await fetch('/api/v1/galleries?limit=200');
+        const data = await r.json().catch(function() { return {}; });
+        this.formGalleries = data.galleries || [];
+      } catch (e) {
+        this.formGalleries = [];
+      }
+    },
+
+    closeAddModal() {
+      this.showAddModal = false;
+    },
+
+    onEntityTypeChange() {
+      this.formEntityRef   = '';
+      this.formEntityUser  = null;
+      this.formUserSearch  = '';
+      this.formUserResults = [];
+    },
+
+    onGlobalChange() {
+      if (this.formGlobal) {
+        this.formResourceType = '';
+        this.formResourceRef  = '';
+        this.formGalleryId    = '';
+        this.formDisplays     = [];
+        this.formPhoto        = null;
+      }
+    },
+
+    onResourceTypeChange() {
+      this.formResourceRef  = '';
+      this.formGalleryId    = '';
+      this.formDisplays     = [];
+      this.formPhoto        = null;
+      this.formPhotoSearch  = '';
+      this.formPhotoResults = [];
+    },
+
+    async onDisplayGalleryChange() {
+      this.formResourceRef = '';
+      this.formDisplays = [];
+      if (!this.formGalleryId) return;
+      try {
+        const r = await fetch('/api/v1/galleries/' + this.formGalleryId);
+        const data = await r.json().catch(function() { return {}; });
+        this.formDisplays = data.displays || [];
+      } catch (e) {
+        this.showToast('Could not load displays: ' + e.message);
+      }
+    },
+
+    async searchFormUsers() {
+      try {
+        const url = '/api/v1/admin/users?exhibitionid=' + encodeURIComponent(this.selectedExhibition)
+                  + '&search=' + encodeURIComponent(this.formUserSearch) + '&limit=20';
+        const r = await fetch(url);
+        const data = await r.json().catch(function() { return {}; });
+        this.formUserResults = data.users || [];
+      } catch (e) {
+        this.showToast('Search failed: ' + e.message);
+      }
+    },
+
+    selectFormUser(u) {
+      this.formEntityUser  = u;
+      this.formEntityRef   = u.userid;
+      this.formUserResults = [];
+    },
+
+    clearFormUser() {
+      this.formEntityUser = null;
+      this.formEntityRef  = '';
+    },
+
+    async searchFormPhotos() {
+      try {
+        const url = '/api/v1/admin/photos?exhibitionid=' + encodeURIComponent(this.selectedExhibition)
+                  + '&search=' + encodeURIComponent(this.formPhotoSearch) + '&limit=20';
+        const r = await fetch(url);
+        const data = await r.json().catch(function() { return {}; });
+        this.formPhotoResults = data.photos || [];
+      } catch (e) {
+        this.showToast('Search failed: ' + e.message);
+      }
+    },
+
+    selectFormPhoto(p) {
+      this.formPhoto        = p;
+      this.formResourceRef  = p.photoid;
+      this.formPhotoResults = [];
+    },
+
+    clearFormPhoto() {
+      this.formPhoto       = null;
+      this.formResourceRef = '';
+    },
+
+    async submitGrant() {
+      if (!this.formRoleId) { this.showToast('Please select a role.'); return; }
+      if ((this.formEntityType === 'Team' || this.formEntityType === 'User') && !this.formEntityRef) {
+        this.showToast('Please select ' + (this.formEntityType === 'Team' ? 'a team.' : 'a user.'));
+        return;
+      }
+      if (!this.formGlobal && this.formResourceType && !this.formResourceRef) {
+        this.showToast('Please select a ' + this.formResourceType.toLowerCase() + '.');
+        return;
+      }
+
+      this.creatingGrant = true;
+      try {
+        // exhibitionid and resource_type/resource_ref are mutually exclusive
+        // on the server (see migrations/018_grant_exhibitionid.sql) — send
+        // exhibitionid only for the "entire exhibition" case (not global,
+        // no specific resource); a chosen Gallery/Display/Photo carries its
+        // own exhibition implicitly, so exhibitionid must stay empty then.
+        const wholeExhibition = !this.formGlobal && !this.formResourceType;
+        const body = {
+          roleid:        this.formRoleId,
+          entity_type:   this.formEntityType,
+          entity_ref:    this.formEntityRef,
+          exhibitionid:  wholeExhibition ? this.selectedExhibition : '',
+          resource_type: this.formGlobal ? '' : this.formResourceType,
+          resource_ref:  this.formGlobal ? '' : this.formResourceRef,
+        };
+        const url = '/api/v1/admin/grants?exhibitionid=' + encodeURIComponent(this.selectedExhibition);
+        const r = await fetch(url, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify(body),
+        });
+        if (!r.ok) {
+          const e = await r.json().catch(function() { return {}; });
+          throw new Error(e.error || ('HTTP ' + r.status));
+        }
+        this.showAddModal = false;
+        await Promise.all([this.loadGlobal(), this.loadForExhibition()]);
+        this.showToast('Grant created.');
+      } catch (e) {
+        this.showToast('Create failed: ' + e.message);
+      }
+      this.creatingGrant = false;
     },
 
     showToast(msg) {
