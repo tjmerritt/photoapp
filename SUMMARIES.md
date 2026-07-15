@@ -1616,3 +1616,14 @@ Re-checked brace/paren balance on `emojis.go`, `node --check` on `admin.js`, HTM
 
 ### Open items
 None.
+
+## Session 60 — Emoji admin: infinite scroll instead of prev/next
+
+### What was done
+Replaced `admin-emojis.html`'s prev/next pagination buttons with infinite scroll, matching the exact pattern `admin.html`'s photo grid (`adminApp`) already uses: a `window.addEventListener('scroll', ...)` listener that fires `loadMore()` when within 400px of the bottom, `loadMore()` appends to (rather than replaces) the list and advances `offset` by however many rows actually came back, and a bottom spinner shows while fetching more once the first page is already on screen. `doSearch()` (called by the search box and all three filters) now clears `emojis`/`offset`/`total` and calls `loadMore()` fresh, same reset-then-load shape as `adminApp.doSearch()`. Removed the now-unused `prevPage()`/`nextPage()` methods from `adminEmojis` (adminLabels still has its own prev/next buttons — this change was scoped to the emoji admin page only, as asked).
+
+### Testing notes
+`node --check` on `admin.js`, HTML tag-balance and CSP-incompatible-pattern grep on `admin-emojis.html` — all clean. Confirmed no leftover references to `prevPage`/`nextPage`/pagination markup in the HTML.
+
+### Open items
+None.

@@ -72,15 +72,15 @@
       </label>
     </div>
 
-    <!-- Loading skeleton -->
-    <div x-show="loading" class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3">
+    <!-- Loading skeleton (initial load only) -->
+    <div x-show="loading && emojis.length === 0" class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3">
       <template x-for="n in [1,2,3,4,5,6,7,8]" :key="n">
         <div class="h-20 bg-white rounded-xl border border-gray-200 animate-pulse"></div>
       </template>
     </div>
 
     <!-- Emoji grid -->
-    <div x-show="!loading" class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3">
+    <div x-show="emojis.length > 0" class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3">
       <template x-for="em in emojis" :key="em.emojiid">
         <div class="bg-white rounded-xl border shadow-sm p-3 flex flex-col items-center gap-1.5 text-center"
              :class="em.is_active ? 'border-gray-200' : 'border-red-300 bg-red-50/40 opacity-70'">
@@ -107,16 +107,16 @@
     <!-- Empty state -->
     <div x-show="!loading && emojis.length === 0" class="py-16 text-center text-gray-400 text-sm">No emoji types found.</div>
 
-    <!-- Pagination -->
-    <div x-show="!loading && total > limit" class="flex items-center justify-between mt-4 text-sm text-gray-500">
-      <button type="button" @click="prevPage()"
-              :disabled="offset === 0"
-              :class="offset === 0 ? 'opacity-30 cursor-default' : 'hover:text-accent cursor-pointer'">← Prev</button>
-      <span x-text="(offset + 1) + '–' + Math.min(offset + limit, total) + ' of ' + total"></span>
-      <button type="button" @click="nextPage()"
-              :disabled="offset + limit >= total"
-              :class="offset + limit >= total ? 'opacity-30 cursor-default' : 'hover:text-accent cursor-pointer'">Next →</button>
+    <!-- Loading spinner (shown while fetching more on scroll) -->
+    <div x-show="loading && emojis.length > 0" class="flex justify-center py-6">
+      <svg class="w-6 h-6 text-gray-400 animate-spin" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+      </svg>
     </div>
+
+    <!-- Bottom padding -->
+    <div class="h-10"></div>
   </div>
 
   <!-- Toast -->

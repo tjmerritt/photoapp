@@ -296,39 +296,59 @@ function adminUsers() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// adminEmojis (6d) — enable/disable emoji types, with a "show disabled"
-// toggle in the listing. Site-wide (emoji_types has no exhibitionid), so
-// no exhibition selector here.
+// adminEmojis (6d) — enable/disable emoji types, with source/status filters
+// and a "used only" toggle. Site-wide (emoji_types has no exhibitionid), so
+// no exhibition selector here. Infinite-scrolled (same window-scroll-listener
+// shape as adminApp's photo grid above) rather than prev/next buttons.
 // ─────────────────────────────────────────────────────────────────────────────
 function adminEmojis() {
   return {
-    emojis:   [],
-    total:    0,
-    offset:   0,
-    limit:    60,
-    search:   '',
-    source:   'all',   // 'all' | 'openmoji' | 'custom'
-    status:   'all',   // 'all' | 'enabled' | 'disabled'
-    usedOnly: false,
-    loading:  true,
+    emojis:    [],
+    total:     0,
+    offset:    0,
+    limit:     60,
+    search:    '',
+    source:    'all',   // 'all' | 'openmoji' | 'custom'
+    status:    'all',   // 'all' | 'enabled' | 'disabled'
+    usedOnly:  false,
+    loading:   true,
     authError: false,
-    toast:    { visible: false, message: '' },
+    toast:     { visible: false, message: '' },
 
     thumbUrl(url, cssWidth) { return thumbUrl(url, cssWidth); },
 
     async init() {
       const me = await fetch('/auth/me').then(function(r) { return r.json(); });
       if (!me.loggedIn) { window.location.href = '/'; return; }
-      await this.load();
+      await this.loadMore();
+      await this.$nextTick();
+      this.initScroll();
     },
 
-    // Any filter change restarts pagination from the first page.
+    initScroll() {
+      const self = this;
+      window.addEventListener('scroll', function() {
+        if (self.loading || self.offset >= self.total) return;
+        var pageH = Math.max(
+          document.body.scrollHeight,
+          document.documentElement.scrollHeight
+        );
+        if (window.scrollY + window.innerHeight >= pageH - 400) {
+          self.loadMore();
+        }
+      }, { passive: true });
+    },
+
+    // Any filter change discards the current list and restarts from the top.
     doSearch() {
+      this.emojis = [];
       this.offset = 0;
-      this.load();
+      this.total  = 0;
+      this.loadMore();
     },
 
-    async load() {
+    async loadMore() {
+      if (this.loading) return;
       this.loading = true;
       try {
         var url = '/api/v1/admin/emoji-types?search=' + encodeURIComponent(this.search)
@@ -339,8 +359,9 @@ function adminEmojis() {
         const r = await fetch(url);
         if (r.status === 403) { this.authError = true; this.loading = false; return; }
         const data = await r.json();
-        this.emojis = data.emojis || [];
-        this.total  = data.total  || 0;
+        this.total  = data.total || 0;
+        this.emojis = this.emojis.concat(data.emojis || []);
+        this.offset += (data.emojis || []).length;
       } catch (e) {
         this.showToast('Load failed: ' + e.message);
       }
@@ -361,9 +382,6 @@ function adminEmojis() {
         this.showToast('Update failed: ' + e.message);
       }
     },
-
-    prevPage() { if (this.offset > 0) { this.offset = Math.max(0, this.offset - this.limit); this.load(); } },
-    nextPage() { if (this.offset + this.limit < this.total) { this.offset += this.limit; this.load(); } },
 
     showToast(msg) {
       this.toast.message = msg;
