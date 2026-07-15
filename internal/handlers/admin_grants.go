@@ -330,6 +330,58 @@ type createGrantRequest struct {
 	ResourceRef  string `json:"resource_ref"`
 }
 
+// validateGrantRequest trims req's fields in place and checks them against
+// the same rules the database itself enforces (entity_type/entity_ref
+// pairing, exhibitionid vs. resource_type/resource_ref mutual exclusivity,
+// resource_type/resource_ref pairing). Returns an empty string when valid,
+// otherwise a message suitable for a 400 response. Shared by Create and
+// Update so a grant's scope is validated identically whether it's being
+// created fresh or edited in place.
+func validateGrantRequest(req *createGrantRequest) string {
+	req.RoleID = strings.TrimSpace(req.RoleID)
+	req.EntityType = strings.TrimSpace(req.EntityType)
+	req.EntityRef = strings.TrimSpace(req.EntityRef)
+	req.ExhibitionID = strings.TrimSpace(req.ExhibitionID)
+	req.ResourceType = strings.TrimSpace(req.ResourceType)
+	req.ResourceRef = strings.TrimSpace(req.ResourceRef)
+
+	if req.RoleID == "" {
+		return "roleid is required"
+	}
+
+	switch req.EntityType {
+	case permissions.EntityPublic, permissions.EntityLoggedIn:
+		if req.EntityRef != "" {
+			return "entity_ref must be empty for Public/LoggedIn grants"
+		}
+	case permissions.EntityTeam, permissions.EntityUser:
+		if req.EntityRef == "" {
+			return "entity_ref is required for Team/User grants"
+		}
+	default:
+		return "entity_type must be one of Public, LoggedIn, Team, User"
+	}
+
+	if req.ExhibitionID != "" && req.ResourceType != "" {
+		return "a grant cannot be scoped to both an exhibition and a specific resource"
+	}
+
+	switch req.ResourceType {
+	case "", permissions.ResourceGallery, permissions.ResourceDisplay, permissions.ResourcePhoto:
+		// ok
+	default:
+		return "resource_type must be one of Gallery, Display, Photo, or empty"
+	}
+	if req.ResourceType != "" && req.ResourceRef == "" {
+		return "resource_ref is required when resource_type is set"
+	}
+	if req.ResourceType == "" && req.ResourceRef != "" {
+		return "resource_ref must be empty when resource_type is empty"
+	}
+
+	return ""
+}
+
 // POST /api/v1/admin/grants?exhibitionid=  (Phase 6h)
 // Creates a new entity_role_grants row. The exhibitionid query param is only
 // used for the permission check (which exhibition's admin panel is making
@@ -352,52 +404,8 @@ func (h *GrantsHandler) Create(w http.ResponseWriter, r *http.Request, _ httprou
 		middleware.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	req.RoleID = strings.TrimSpace(req.RoleID)
-	req.EntityType = strings.TrimSpace(req.EntityType)
-	req.EntityRef = strings.TrimSpace(req.EntityRef)
-	req.ExhibitionID = strings.TrimSpace(req.ExhibitionID)
-	req.ResourceType = strings.TrimSpace(req.ResourceType)
-	req.ResourceRef = strings.TrimSpace(req.ResourceRef)
-
-	if req.RoleID == "" {
-		middleware.WriteError(w, http.StatusBadRequest, "roleid is required")
-		return
-	}
-
-	switch req.EntityType {
-	case permissions.EntityPublic, permissions.EntityLoggedIn:
-		if req.EntityRef != "" {
-			middleware.WriteError(w, http.StatusBadRequest, "entity_ref must be empty for Public/LoggedIn grants")
-			return
-		}
-	case permissions.EntityTeam, permissions.EntityUser:
-		if req.EntityRef == "" {
-			middleware.WriteError(w, http.StatusBadRequest, "entity_ref is required for Team/User grants")
-			return
-		}
-	default:
-		middleware.WriteError(w, http.StatusBadRequest, "entity_type must be one of Public, LoggedIn, Team, User")
-		return
-	}
-
-	if req.ExhibitionID != "" && req.ResourceType != "" {
-		middleware.WriteError(w, http.StatusBadRequest, "a grant cannot be scoped to both an exhibition and a specific resource")
-		return
-	}
-
-	switch req.ResourceType {
-	case "", permissions.ResourceGallery, permissions.ResourceDisplay, permissions.ResourcePhoto:
-		// ok
-	default:
-		middleware.WriteError(w, http.StatusBadRequest, "resource_type must be one of Gallery, Display, Photo, or empty")
-		return
-	}
-	if req.ResourceType != "" && req.ResourceRef == "" {
-		middleware.WriteError(w, http.StatusBadRequest, "resource_ref is required when resource_type is set")
-		return
-	}
-	if req.ResourceType == "" && req.ResourceRef != "" {
-		middleware.WriteError(w, http.StatusBadRequest, "resource_ref must be empty when resource_type is empty")
+	if msg := validateGrantRequest(&req); msg != "" {
+		middleware.WriteError(w, http.StatusBadRequest, msg)
 		return
 	}
 
@@ -416,4 +424,54 @@ func (h *GrantsHandler) Create(w http.ResponseWriter, r *http.Request, _ httprou
 	}
 
 	middleware.WriteJSON(w, http.StatusCreated, map[string]any{"grantid": grantID})
+}
+
+// PATCH /api/v1/admin/grants/:grantid?exhibitionid=  (Phase 6j)
+// Replaces a grant's role/entity/resource scope in place — same validation
+// as Create, applied to an existing row instead of inserting a new one.
+// Requires: authenticated + (PermAdmin or PermPermissionsAdmin).
+func (h *GrantsHandler) Update(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	ctx := r.Context()
+	grantID := ps.ByName("grantid")
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := r.URL.Query().Get("exhibitionid")
+	if exhibitionID == "" {
+		exhibitionID = middleware.ExhibitionID(ctx)
+	}
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+
+	var req createGrantRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if msg := validateGrantRequest(&req); msg != "" {
+		middleware.WriteError(w, http.StatusBadRequest, msg)
+		return
+	}
+
+	ct, err := h.DB.Exec(ctx, `
+		UPDATE entity_role_grants SET
+		    roleid        = $1::uuid,
+		    entity_type   = $2,
+		    entity_ref    = NULLIF($3, ''),
+		    exhibitionid  = NULLIF($4, '')::uuid,
+		    resource_type = NULLIF($5, ''),
+		    resource_ref  = NULLIF($6, '')
+		WHERE id = $7
+	`, req.RoleID, req.EntityType, req.EntityRef, req.ExhibitionID, req.ResourceType, req.ResourceRef, grantID)
+	if err != nil {
+		slog.Error("Grants.Update", "error", err, "grantid", grantID)
+		middleware.WriteError(w, http.StatusBadRequest, "could not update grant — check that the role and entity/resource all exist")
+		return
+	}
+	if ct.RowsAffected() == 0 {
+		middleware.WriteError(w, http.StatusNotFound, "grant not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

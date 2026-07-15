@@ -1776,3 +1776,23 @@ No Go toolchain or live Postgres in this sandbox (unchanged standing constraint)
 
 ### Open items
 None.
+
+## Session 69 — Permission grants: edit existing grants via a popup
+
+### What was done
+User request: add an option to edit an existing permission grant, using a popup similar to the Session 64 add-grant popup rather than a separate page or inline row-editing.
+
+**Backend** (`internal/handlers/admin_grants.go`): extracted the inline validation from `Create` into a standalone `validateGrantRequest(req *createGrantRequest) string` (trims all fields, checks roleid presence, entity_type/entity_ref pairing, exhibitionid/resource_type mutual exclusivity, resource_type validity and its pairing with resource_ref; returns `""` when valid), so grant creation and grant editing share identical validation instead of duplicating it. Added `Update` (`PATCH /api/v1/admin/grants/:grantid?exhibitionid=`): same `PermAdmin`/`PermPermissionsAdmin` gate as `Create`, decodes the same `createGrantRequest` shape, validates via the shared helper, then runs a straight `UPDATE entity_role_grants SET roleid=..., entity_type=..., entity_ref=NULLIF(...), exhibitionid=NULLIF(...)::uuid, resource_type=NULLIF(...), resource_ref=NULLIF(...) WHERE id=$7`, returning 404 if no row matched or 204 on success.
+
+**`internal/handlers/router.go`**: added `r.PATCH("/api/v1/admin/grants/:grantid", auth(grants.Update))` alongside the existing grants routes.
+
+**Frontend** (`app/admin.js`, `adminPermissions()`): added `formMode` (`'create'`/`'edit'`) and `formGrantId` state. Extracted the roles/teams/galleries lookup fetch (previously inline in the add-modal opener) into a shared `loadFormLookups()`, now called by both `openAddModal()` and the new `openEditModal(g, isGlobal)`. `openEditModal` takes an explicit `isGlobal` flag (since a grant row's own fields can't distinguish "global" from "whole-exhibition" — both leave `resource_type` unset due to `omitempty`) and prefills every form field from the grant being edited, including reconstructing the User selector's display object from `entity_name`/`entity_ref`, resolving a Photo's thumbnail via a lookup against `/api/v1/admin/photos`, and resolving a Display's parent Gallery via `GET /api/v1/displays/:displayid` followed by the existing `onDisplayGalleryChange()` cascade (then restoring the display id afterward, since that cascade resets it). `submitGrant()` now branches POST vs. PATCH (and to the `.../grants/:grantid` URL) based on `formMode`, and its toast message reads "Grant created."/"Grant updated." (or "Create failed"/"Save failed") accordingly.
+
+**Frontend** (`app/admin-permissions.html`): added an "Edit" button (grey, matching the existing Revoke button's styling family) to each row of both the Global grants and Exhibition-specific grants tables, calling `openEditModal(g, true)` and `openEditModal(g, false)` respectively. The modal's title (`x-text="formMode === 'edit' ? 'Edit permission grant' : 'Add permission grant'"`) and its submit button's label (`x-text="formMode === 'edit' ? 'Save' : 'Grant'"`) both switch based on `formMode`, so the same popup markup serves creation and editing without duplication.
+
+### Testing notes
+No Go toolchain or live Postgres in this sandbox (unchanged standing constraint). Verified via: brace/paren-balance counts on `admin_grants.go` (51/51 braces, 186/186 parens) and `router.go` (28/28 braces, 180/180 parens) — both balanced; `node --check` on `admin.js` passed; HTML tag-balance check on `admin-permissions.html` — balanced; a Python-based scan (more reliable than a shell grep here) for backticks/template literals and for semicolons inside `@click`/`x-text`/`x-model`/`:attr` directive values across `admin-permissions.html` — none found.
+
+### Open items
+- Still needs a real Postgres + rebuild to click through editing a grant of each entity/resource combination (Public/LoggedIn/Team/User × global/whole-exhibition/Gallery/Display/Photo) end-to-end before trusting this in production.
+- `openEditModal`'s Photo-thumbnail lookup falls back to a synthesized `{photoid, title: g.resource_name, imageurl: ''}` if the exact-id search doesn't find a match; a blank `imageurl` will render a broken image icon in that fallback case rather than a real thumbnail.

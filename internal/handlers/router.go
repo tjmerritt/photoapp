@@ -142,10 +142,11 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	r.POST("/api/v1/admin/teams/:teamid/members",         auth(teams.AddMember))
 	r.DELETE("/api/v1/admin/teams/:teamid/members/:userid", auth(teams.RemoveMember))
 
-	// Phase 6g/6h: permission-grants viewer + creation (PermAdmin/PermPermissionsAdmin enforced in handler)
+	// Phase 6g/6h/6j: permission-grants viewer + creation + editing (PermAdmin/PermPermissionsAdmin enforced in handler)
 	r.GET("/api/v1/admin/grants/global",       auth(grants.ListGlobal))
 	r.GET("/api/v1/admin/grants/exhibition",   auth(grants.ListForExhibition))
 	r.POST("/api/v1/admin/grants",             auth(grants.Create))
+	r.PATCH("/api/v1/admin/grants/:grantid",   auth(grants.Update))
 	r.DELETE("/api/v1/admin/grants/:grantid",  auth(grants.Revoke))
 
 	// Phase 6i: roles admin (PermAdmin/PermPermissionsAdmin enforced in handler)

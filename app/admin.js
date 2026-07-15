@@ -710,8 +710,10 @@ function adminPermissions() {
     noExhibitions:      false,
     toast:              { visible: false, message: '' },
 
-    // ── Add-grant popup (Phase 6h) ──────────────────────────────────────────
+    // ── Add/edit-grant popup (Phase 6h, 6j) ──────────────────────────────────
     showAddModal:    false,
+    formMode:        'create',   // 'create' | 'edit'
+    formGrantId:     '',
     creatingGrant:   false,
     formRoles:       [],
     formTeams:       [],
@@ -792,25 +794,11 @@ function adminPermissions() {
       }
     },
 
-    // ── Add-grant popup (Phase 6h) ──────────────────────────────────────────
+    // ── Add/edit-grant popup (Phase 6h, 6j) ──────────────────────────────────
 
-    async openAddModal() {
-      this.formRoleId       = '';
-      this.formEntityType   = 'Public';
-      this.formEntityRef    = '';
-      this.formEntityUser   = null;
-      this.formUserSearch   = '';
-      this.formUserResults  = [];
-      this.formGlobal       = false;
-      this.formResourceType = '';
-      this.formResourceRef  = '';
-      this.formGalleryId    = '';
-      this.formDisplays     = [];
-      this.formPhoto        = null;
-      this.formPhotoSearch  = '';
-      this.formPhotoResults = [];
-      this.showAddModal = true;
-
+    // Shared by openAddModal and openEditModal: loads the Role/Team/Gallery
+    // dropdown options for the currently-selected exhibition.
+    async loadFormLookups() {
       try {
         const url = '/api/v1/admin/roles?exhibitionid=' + encodeURIComponent(this.selectedExhibition);
         const r = await fetch(url);
@@ -833,6 +821,82 @@ function adminPermissions() {
         this.formGalleries = data.galleries || [];
       } catch (e) {
         this.formGalleries = [];
+      }
+    },
+
+    async openAddModal() {
+      this.formMode         = 'create';
+      this.formGrantId      = '';
+      this.formRoleId       = '';
+      this.formEntityType   = 'Public';
+      this.formEntityRef    = '';
+      this.formEntityUser   = null;
+      this.formUserSearch   = '';
+      this.formUserResults  = [];
+      this.formGlobal       = false;
+      this.formResourceType = '';
+      this.formResourceRef  = '';
+      this.formGalleryId    = '';
+      this.formDisplays     = [];
+      this.formPhoto        = null;
+      this.formPhotoSearch  = '';
+      this.formPhotoResults = [];
+      this.showAddModal = true;
+
+      await this.loadFormLookups();
+    },
+
+    // isGlobal tells us which table g came from — needed because a global
+    // row's g.resource_type is always absent (undefined), same as an
+    // exhibition-wide row's, so the two can't be told apart from g alone.
+    async openEditModal(g, isGlobal) {
+      this.formMode         = 'edit';
+      this.formGrantId      = g.grantid;
+      this.formRoleId       = g.roleid;
+      this.formEntityType   = g.entity_type;
+      this.formEntityRef    = g.entity_ref || '';
+      this.formEntityUser   = (g.entity_type === 'User')
+        ? { userid: g.entity_ref, username: g.entity_name, email: '' }
+        : null;
+      this.formUserSearch   = '';
+      this.formUserResults  = [];
+      this.formGlobal       = !!isGlobal;
+      this.formResourceType = isGlobal ? '' : (g.resource_type || '');
+      this.formResourceRef  = isGlobal ? '' : (g.resource_ref  || '');
+      this.formGalleryId    = '';
+      this.formDisplays     = [];
+      this.formPhoto        = null;
+      this.formPhotoSearch  = '';
+      this.formPhotoResults = [];
+      this.showAddModal = true;
+
+      await this.loadFormLookups();
+
+      if (!isGlobal && g.resource_type === 'Display') {
+        try {
+          const r = await fetch('/api/v1/displays/' + g.resource_ref);
+          const data = await r.json().catch(function() { return {}; });
+          if (data.galleryid) {
+            this.formGalleryId = data.galleryid;
+            await this.onDisplayGalleryChange();
+            this.formResourceRef = g.resource_ref;
+          }
+        } catch (e) {
+          this.showToast('Could not load display: ' + e.message);
+        }
+      }
+
+      if (!isGlobal && g.resource_type === 'Photo') {
+        try {
+          const url = '/api/v1/admin/photos?exhibitionid=' + encodeURIComponent(this.selectedExhibition)
+                    + '&search=' + encodeURIComponent(g.resource_ref) + '&limit=5';
+          const r = await fetch(url);
+          const data = await r.json().catch(function() { return {}; });
+          const found = (data.photos || []).find(function(p) { return p.photoid === g.resource_ref; });
+          this.formPhoto = found || { photoid: g.resource_ref, title: g.resource_name, imageurl: '' };
+        } catch (e) {
+          this.formPhoto = { photoid: g.resource_ref, title: g.resource_name, imageurl: '' };
+        }
       }
     },
 
@@ -937,6 +1001,7 @@ function adminPermissions() {
       }
 
       this.creatingGrant = true;
+      const isEdit = this.formMode === 'edit';
       try {
         // exhibitionid and resource_type/resource_ref are mutually exclusive
         // on the server (see migrations/018_grant_exhibitionid.sql) — send
@@ -952,9 +1017,11 @@ function adminPermissions() {
           resource_type: this.formGlobal ? '' : this.formResourceType,
           resource_ref:  this.formGlobal ? '' : this.formResourceRef,
         };
-        const url = '/api/v1/admin/grants?exhibitionid=' + encodeURIComponent(this.selectedExhibition);
+        const url = isEdit
+          ? '/api/v1/admin/grants/' + this.formGrantId + '?exhibitionid=' + encodeURIComponent(this.selectedExhibition)
+          : '/api/v1/admin/grants?exhibitionid=' + encodeURIComponent(this.selectedExhibition);
         const r = await fetch(url, {
-          method:  'POST',
+          method:  isEdit ? 'PATCH' : 'POST',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify(body),
         });
@@ -964,9 +1031,9 @@ function adminPermissions() {
         }
         this.showAddModal = false;
         await Promise.all([this.loadGlobal(), this.loadForExhibition()]);
-        this.showToast('Grant created.');
+        this.showToast(isEdit ? 'Grant updated.' : 'Grant created.');
       } catch (e) {
-        this.showToast('Create failed: ' + e.message);
+        this.showToast((isEdit ? 'Save' : 'Create') + ' failed: ' + e.message);
       }
       this.creatingGrant = false;
     },
