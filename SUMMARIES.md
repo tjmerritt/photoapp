@@ -1589,3 +1589,14 @@ No Go toolchain or browser available in this sandbox (same constraint as every p
 - Still no way to actually run this against a live Postgres/Go build in this environment — the user should run `migrations/017_admin_phase6.sql`, rebuild, and click through all four new admin pages (especially the per-user toggles and the emoji/label enable-disable flows) before trusting this in production.
 - 6a's "active label/emoji" counts are intentionally site-wide, not per-exhibition — flagging in case that's surprising when multiple exhibitions are in play.
 - No UI yet for granting `UserAdmin`/`EmojiAdmin`/`LabelAdmin`/`GalleryAdmin` themselves (i.e. an admin-of-admins page) — Phase 6 as specified only covers using those permissions, not managing who holds them; that would need to go through Phase 2g (gallery permissions UI) or a future extension of this work.
+
+## Session 58 — Emoji admin: prefer OpenMoji graphics over the browser font
+
+### What was done
+User reported the emoji admin grid (`app/admin-emojis.html`) was rendering built-in emoji using the browser's native emoji font (`em.emoji`), which only covers a subset of the OpenMoji set that `cmd/import-emojis` actually imports (it populates `image_url` for every emoji from `https://openmoji.org/data/color/svg/<hexcode>.svg`). `photo.html` and `app.js`'s `emojiShortcodeHtml` already prefer the image over the native character; the admin page had the precedence backwards. Swapped it: the `<img>` (OpenMoji graphic) now renders whenever `image_url` is set, with the native character only as a fallback for the handful of seed reactions (`migrations/002_seed.sql`) that predate running `import-emojis` and have no `image_url` yet.
+
+### Testing notes
+Re-ran the HTML tag-balance check on `admin-emojis.html` — OK. No other page needed the same fix (all others already preferred the image).
+
+### Open items
+None — this was a small, isolated precedence fix.

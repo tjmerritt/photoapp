@@ -67,9 +67,14 @@
       <template x-for="em in emojis" :key="em.emojiid">
         <div class="bg-white rounded-xl border shadow-sm p-3 flex flex-col items-center gap-1.5 text-center"
              :class="em.is_active ? 'border-gray-200' : 'border-red-300 bg-red-50/40 opacity-70'">
-          <span x-show="em.emoji" x-text="em.emoji" class="text-2xl leading-none"></span>
-          <img x-show="!em.emoji && em.imageurl" :src="thumbUrl(em.imageurl, 40)" :alt="em.alttext"
+          <!-- OpenMoji graphic takes precedence over the native character —
+               matches photo.html's emoji rendering convention, since the
+               browser's built-in emoji font only covers a subset of the
+               OpenMoji-imported set (see cmd/import-emojis, which populates
+               image_url from openmoji.org for every imported emoji). -->
+          <img x-show="em.imageurl" :src="thumbUrl(em.imageurl, 40)" :alt="em.alttext"
                class="w-8 h-8 object-contain" />
+          <span x-show="!em.imageurl && em.emoji" x-text="em.emoji" class="text-2xl leading-none"></span>
           <span class="text-xs text-gray-600 truncate w-full" x-text="em.alttext"></span>
           <span class="text-[10px] text-gray-400" x-text="em.usage_count + ' uses'"></span>
           <label class="flex items-center gap-1 cursor-pointer select-none mt-0.5">
