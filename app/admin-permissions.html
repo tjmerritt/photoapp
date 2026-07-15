@@ -33,10 +33,6 @@
       <span class="text-sm text-white/80 truncate" x-text="exhibitions[0] ? exhibitions[0].name : ''"></span>
     </div>
 
-    <button type="button" @click="openAddModal()"
-            class="shrink-0 px-3 py-1.5 text-xs font-semibold rounded-lg bg-accent text-white hover:opacity-90 transition">
-      + Add grant
-    </button>
     <a href="/" class="text-xs text-white/60 hover:text-white transition shrink-0">← Back to app</a>
   </header>
 
@@ -64,6 +60,14 @@
   </div>
 
   <div x-show="!authError && !noExhibitions" class="max-w-6xl mx-auto p-4 space-y-8">
+
+    <!-- Add grant -->
+    <div class="flex justify-end">
+      <button type="button" @click="openAddModal()"
+              class="px-3 py-1.5 text-sm rounded-full bg-gray-200 hover:bg-accent hover:text-white transition">
+        + Add grant
+      </button>
+    </div>
 
     <!-- Global grants -->
     <section>
@@ -191,19 +195,6 @@
       </div>
 
       <div class="space-y-4">
-
-        <!-- Role -->
-        <div>
-          <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Role</label>
-          <select x-model="formRoleId"
-                  class="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white cursor-pointer
-                         focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition">
-            <option value="">Select a role…</option>
-            <template x-for="role in formRoles" :key="role.roleid">
-              <option :value="role.roleid" x-text="role.name"></option>
-            </template>
-          </select>
-        </div>
 
         <!-- Entity type -->
         <div>
@@ -352,6 +343,19 @@
             <button type="button" @click="clearFormPhoto()"
                     class="text-xs font-semibold text-gray-400 hover:text-red-600 transition shrink-0">Change</button>
           </div>
+        </div>
+
+        <!-- Role -->
+        <div>
+          <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Role</label>
+          <select x-model="formRoleId"
+                  class="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white cursor-pointer
+                         focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition">
+            <option value="">Select a role…</option>
+            <template x-for="role in formRoles" :key="role.roleid">
+              <option :value="role.roleid" x-text="role.name"></option>
+            </template>
+          </select>
         </div>
 
       </div>

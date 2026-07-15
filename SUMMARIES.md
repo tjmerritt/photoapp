@@ -1714,3 +1714,25 @@ No Go toolchain or live Postgres in this sandbox (unchanged standing constraint)
 - No role browser/editor exists yet — `ListRoles` only reads what `seed-exhibition.sh` (or the singleton-permission mechanism) already created. Creating brand-new roles or editing their permission bundles from the UI would be a separate feature.
 - The Team/Gallery/Photo pickers reuse existing endpoints (`/api/v1/admin/teams`, `/api/v1/galleries`, `/api/v1/admin/photos`) that are gated on slightly different permission sets than the grants viewer itself (`PermTeamAdmin`/`GalleryView`/strict `PermAdmin` respectively) — an admin who holds only `PermPermissionsAdmin` (without also `PermAdmin`) could see some of those pickers come back empty/403. Not a new problem this session introduced, just worth knowing if that combination comes up.
 - Still needs a real Postgres + rebuild to click through the popup end-to-end (all four entity types, all four resource scopes, plus the validation error paths) before trusting this in production.
+
+## Session 65 — Add-grant button: repositioned and restyled
+
+### What was done
+User feedback on Session 64's "+ Add grant" button: it was in the header (styled `bg-accent`, a reddish/pink fill) and should instead sit below the admin-page nav bar, styled grey like the rest of the page's pill buttons. Moved the button out of `admin-permissions.html`'s `<header>` into its own right-aligned row at the top of the main content area (below the nav bar, above the "Global grants" section), and swapped its class from `bg-accent text-white hover:opacity-90` to `bg-gray-200 hover:bg-accent hover:text-white` — the same grey-pill style already used by every "Search" button across the admin.js page family (`admin-teams.html`, `admin-emojis.html`, etc.), so it now matches the established convention rather than standing out in red.
+
+### Testing notes
+HTML tag-balance and CSP-pattern grep on `admin-permissions.html` — clean.
+
+### Open items
+None.
+
+## Session 66 — Add-grant popup: reordered fields (entity → resource → role)
+
+### What was done
+User feedback: the popup's field order was confusing (Role first, then Entity, then Global/Resource). Reordered `admin-permissions.html`'s form so it reads in the natural order of "who gets it, what it applies to, what it grants": entity type + entity selector (Team/User) first, then the Global checkbox and resource-scope fields (resource type + Gallery/Display/Photo selector), then the Role dropdown last, immediately above the Grant/Cancel buttons. Pure markup reordering — no changes to `admin.js`'s logic, since all the fields were already independent `<div>` blocks with no ordering dependencies between them.
+
+### Testing notes
+HTML tag-balance and CSP-pattern grep on `admin-permissions.html` — clean. Confirmed via grep that the comment markers now appear in the order Entity type → Global checkbox → Resource type → Role.
+
+### Open items
+None.
