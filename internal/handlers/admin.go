@@ -366,7 +366,9 @@ func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request, _ httpr
 
 	// can_view_private is derived from the singleton-role mechanism (Phase
 	// 6b's private-photo-view toggle) rather than a column — see
-	// permissions.Checker.HasDirectUserGrant.
+	// permissions.Checker.HasDirectUserGrant. The grant itself is scoped to
+	// this exhibition via erg.exhibitionid (migrations/018_grant_exhibitionid.sql
+	// fixed an earlier bug where these grants leaked into every exhibition).
 	rowArgs := append(append([]any{}, args...), exhibitionID, permissions.PermPrivatePhotoView, limit, offset)
 	rows, err := h.DB.Query(ctx, fmt.Sprintf(`
 		SELECT u.userid::text, u.username, u.email, COALESCE(u.fullname, ''),
@@ -378,14 +380,14 @@ func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request, _ httpr
 		           JOIN   roles              r ON r.roleid = erg.roleid
 		           WHERE  r.exhibitionid = $%d::uuid AND r.name = '__grant:' || $%d
 		             AND  erg.entity_type = 'User' AND erg.entity_ref = u.userid::text
-		             AND  erg.resource_type IS NULL
+		             AND  erg.exhibitionid = $%d::uuid AND erg.resource_type IS NULL
 		       ) AS can_view_private
 		FROM   users u
 		JOIN   user_exhibitions ue ON ue.userid = u.userid
 		WHERE  %s
 		ORDER  BY u.username
 		LIMIT  $%d OFFSET $%d
-	`, n, n+1, where, n+2, n+3), rowArgs...)
+	`, n, n+1, n, where, n+2, n+3), rowArgs...)
 	if err != nil {
 		slog.Error("ListUsers", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")

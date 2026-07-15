@@ -144,8 +144,8 @@
                   </div>
                 </td>
                 <td class="px-3 py-3 text-gray-500 text-xs">
-                  <span class="font-semibold text-gray-600" x-text="g.resource_type"></span>
-                  <span class="block" x-text="g.resource_name"></span>
+                  <span class="font-semibold text-gray-600" x-text="g.resource_type || 'Exhibition'"></span>
+                  <span class="block" x-text="g.resource_type ? g.resource_name : '(entire exhibition)'"></span>
                 </td>
                 <td class="px-3 py-3 text-gray-400 text-xs" x-text="g.granted_at ? g.granted_at.slice(0, 10) : ''"></td>
                 <td class="px-3 py-3 text-right">

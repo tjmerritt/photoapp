@@ -24,11 +24,17 @@
 //
 // # Resource scope types
 //
-//   - Global (nil scope) — applies to the whole exhibition
-//   - Exhibition         — a specific exhibition
-//   - Gallery            — a specific gallery (covers Displays within it)
-//   - Display            — a specific display
-//   - Photo              — a specific photo (covers its Labels, Emojis, Comments)
+// A grant row is scoped by at most one of two independent mechanisms —
+// never both on the same row:
+//
+//   - exhibitionid (a column on entity_role_grants) — NULL means the grant
+//     applies to every exhibition ("global"); set means the grant applies to
+//     that one exhibition only (covers all its Galleries/Displays/Photos).
+//     This replaced an earlier resource_type = 'Exhibition' convention (see
+//     migrations/018_grant_exhibitionid.sql).
+//   - resource_type/resource_ref — scopes the grant to one specific Gallery,
+//     Display, or Photo. Rows with a resource_type always have
+//     exhibitionid = NULL.
 //
 // # Permission hierarchy
 //
@@ -108,11 +114,14 @@ const (
 )
 
 // Resource types — what is being acted on.
+//
+// There is no ResourceExhibition: exhibition-level scope is expressed via the
+// exhibitionid column on entity_role_grants instead (see
+// migrations/018_grant_exhibitionid.sql).
 const (
-	ResourceExhibition = "Exhibition"
-	ResourceGallery    = "Gallery"
-	ResourceDisplay    = "Display"
-	ResourcePhoto      = "Photo"
+	ResourceGallery = "Gallery"
+	ResourceDisplay = "Display"
+	ResourcePhoto   = "Photo"
 )
 
 // Gallery permissions.
@@ -179,9 +188,10 @@ const (
 	// deleting teams and managing their membership.
 	PermTeamAdmin = "TeamAdmin"
 	// PermPermissionsAdmin governs the permission-grants viewer (Phase 6g):
-	// browsing and revoking entity_role_grants rows, both global (resource_type
-	// IS NULL — see Check()'s doc comment, these apply across every
-	// exhibition, not just the role's "home" one) and exhibition-scoped.
+	// browsing and revoking entity_role_grants rows, both global
+	// (exhibitionid IS NULL — see Check()'s doc comment, these apply across
+	// every exhibition, not just the role's "home" one) and exhibition-scoped
+	// (exhibitionid set).
 	PermPermissionsAdmin = "PermissionsAdmin"
 )
 
@@ -253,11 +263,11 @@ func (c *Checker) Check(
 			                         ))
 			       )
 			  AND  (
-			           -- Global grant: applies everywhere
-			           erg.resource_type IS NULL
+			           -- Global grant: applies everywhere (no exhibitionid, no resource)
+			           (erg.exhibitionid IS NULL AND erg.resource_type IS NULL)
 			           -- Exhibition-level grant: covers all galleries/displays/photos within
-			        OR ($3 <> '' AND erg.resource_type = 'Exhibition'
-			                     AND erg.resource_ref = $3)
+			        OR ($3 <> '' AND erg.exhibitionid = $3::uuid
+			                     AND erg.resource_type IS NULL)
 			           -- Gallery-level grant: covers all displays within this gallery
 			        OR ($4 <> '' AND erg.resource_type = 'Gallery'
 			                     AND erg.resource_ref = $4)
@@ -322,11 +332,11 @@ func (c *Checker) UserPermissions(
 		                         ))
 		       )
 		  AND  (
-		           -- Global grants
-		           erg.resource_type IS NULL
+		           -- Global grants (no exhibitionid, no resource)
+		           (erg.exhibitionid IS NULL AND erg.resource_type IS NULL)
 		           -- Exhibition-level grants
-		        OR ($2 <> '' AND erg.resource_type = 'Exhibition'
-		                     AND erg.resource_ref = $2)
+		        OR ($2 <> '' AND erg.exhibitionid = $2::uuid
+		                     AND erg.resource_type IS NULL)
 		           -- Gallery, Display, and Photo grants within this exhibition.
 		           -- We include all resource-scoped grants whose role belongs to
 		           -- this exhibition so the frontend has the complete picture.
@@ -409,22 +419,27 @@ func (c *Checker) ensureSingletonRole(ctx context.Context, exhibitionID, permiss
 	return roleID, nil
 }
 
-// GrantUserPermission idempotently grants permission to userID, scoped
-// globally within exhibitionID, via the singleton-role mechanism above.
+// GrantUserPermission idempotently grants permission to userID, scoped to
+// exhibitionID only, via the singleton-role mechanism above.
+//
+// The grant row's exhibitionid is set to exhibitionID (not left NULL/global)
+// so this never leaks into other exhibitions — see
+// migrations/018_grant_exhibitionid.sql, which fixed exactly this leak for
+// any grants already made before the exhibitionid column existed.
 func (c *Checker) GrantUserPermission(ctx context.Context, exhibitionID, userID, permission string) error {
 	roleID, err := c.ensureSingletonRole(ctx, exhibitionID, permission)
 	if err != nil {
 		return err
 	}
 	_, err = c.DB.Exec(ctx, `
-		INSERT INTO entity_role_grants (roleid, entity_type, entity_ref)
-		SELECT $1, 'User', $2
+		INSERT INTO entity_role_grants (roleid, entity_type, entity_ref, exhibitionid)
+		SELECT $1, 'User', $2, $3::uuid
 		WHERE NOT EXISTS (
 			SELECT 1 FROM entity_role_grants
 			WHERE roleid = $1 AND entity_type = 'User' AND entity_ref = $2
-			  AND resource_type IS NULL
+			  AND exhibitionid = $3::uuid AND resource_type IS NULL
 		)
-	`, roleID, userID)
+	`, roleID, userID, exhibitionID)
 	return err
 }
 
@@ -438,7 +453,7 @@ func (c *Checker) RevokeUserPermission(ctx context.Context, exhibitionID, userID
 		WHERE erg.roleid = r.roleid
 		  AND r.exhibitionid = $1::uuid AND r.name = $2
 		  AND erg.entity_type = 'User' AND erg.entity_ref = $3
-		  AND erg.resource_type IS NULL
+		  AND erg.exhibitionid = $1::uuid AND erg.resource_type IS NULL
 	`, exhibitionID, name, userID)
 	return err
 }
@@ -456,7 +471,7 @@ func (c *Checker) HasDirectUserGrant(ctx context.Context, exhibitionID, userID, 
 			JOIN   roles              r ON r.roleid = erg.roleid
 			WHERE  r.exhibitionid = $1::uuid AND r.name = $2
 			  AND  erg.entity_type = 'User' AND erg.entity_ref = $3
-			  AND  erg.resource_type IS NULL
+			  AND  erg.exhibitionid = $1::uuid AND erg.resource_type IS NULL
 		)
 	`, exhibitionID, singletonGrantRoleName(permission), userID).Scan(&exists)
 	return exists, err

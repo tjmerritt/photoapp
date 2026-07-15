@@ -144,9 +144,11 @@ ON CONFLICT DO NOTHING;
 
 -- ── Global grants ─────────────────────────────────────────────────────────────
 
--- Grant Viewer to Public (unauthenticated visitors can read)
-INSERT INTO entity_role_grants (roleid, entity_type)
-SELECT roleid, 'Public'
+-- Grant Viewer to Public (unauthenticated visitors can read), scoped to this
+-- exhibition only via the exhibitionid column (NOT a global grant -- see
+-- migrations/018_grant_exhibitionid.sql).
+INSERT INTO entity_role_grants (roleid, entity_type, exhibitionid)
+SELECT roleid, 'Public', '$EXHIBITION_ID'::uuid
 FROM   roles
 WHERE  exhibitionid = '$EXHIBITION_ID'::uuid
   AND  name = 'Viewer'
@@ -155,12 +157,14 @@ WHERE  exhibitionid = '$EXHIBITION_ID'::uuid
            WHERE  erg.roleid = roles.roleid
              AND  erg.entity_type = 'Public'
              AND  erg.entity_ref  IS NULL
+             AND  erg.exhibitionid = '$EXHIBITION_ID'::uuid
              AND  erg.resource_type IS NULL
        );
 
--- Grant Contributor to LoggedIn (all authenticated users can contribute)
-INSERT INTO entity_role_grants (roleid, entity_type)
-SELECT roleid, 'LoggedIn'
+-- Grant Contributor to LoggedIn (all authenticated users can contribute),
+-- scoped to this exhibition only.
+INSERT INTO entity_role_grants (roleid, entity_type, exhibitionid)
+SELECT roleid, 'LoggedIn', '$EXHIBITION_ID'::uuid
 FROM   roles
 WHERE  exhibitionid = '$EXHIBITION_ID'::uuid
   AND  name = 'Contributor'
@@ -169,6 +173,7 @@ WHERE  exhibitionid = '$EXHIBITION_ID'::uuid
            WHERE  erg.roleid = roles.roleid
              AND  erg.entity_type = 'LoggedIn'
              AND  erg.entity_ref  IS NULL
+             AND  erg.exhibitionid = '$EXHIBITION_ID'::uuid
              AND  erg.resource_type IS NULL
        );
 
@@ -191,9 +196,9 @@ WHERE  t.exhibitionid = '$EXHIBITION_ID'::uuid
   AND  t.deleted_at IS NULL
 ON CONFLICT DO NOTHING;
 
--- Grant Admin role to the Admins team
-INSERT INTO entity_role_grants (roleid, entity_type, entity_ref)
-SELECT r.roleid, 'Team', t.teamid::text
+-- Grant Admin role to the Admins team, scoped to this exhibition only.
+INSERT INTO entity_role_grants (roleid, entity_type, entity_ref, exhibitionid)
+SELECT r.roleid, 'Team', t.teamid::text, '$EXHIBITION_ID'::uuid
 FROM   roles r
 JOIN   teams t ON t.exhibitionid = r.exhibitionid
 WHERE  r.exhibitionid = '$EXHIBITION_ID'::uuid
@@ -205,6 +210,7 @@ WHERE  r.exhibitionid = '$EXHIBITION_ID'::uuid
            WHERE  erg.roleid      = r.roleid
              AND  erg.entity_type = 'Team'
              AND  erg.entity_ref  = t.teamid::text
+             AND  erg.exhibitionid = '$EXHIBITION_ID'::uuid
              AND  erg.resource_type IS NULL
        );
 

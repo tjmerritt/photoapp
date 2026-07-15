@@ -14,16 +14,16 @@ import (
 // GrantsHandler powers the permission-grants viewer admin page (Phase 6g):
 // browsing (and revoking) raw entity_role_grants rows, split into two views
 // per the permissions model's own split (see
-// internal/permissions/permissions.go's Check() doc comment):
+// internal/permissions/permissions.go's Check() doc comment and
+// migrations/018_grant_exhibitionid.sql):
 //
-//   - "Global" grants (resource_type IS NULL) apply everywhere, across every
-//     exhibition — Check()'s SQL for that branch does not filter on the
-//     grant's role's exhibitionid at all, so these are genuinely
-//     exhibition-independent despite every role still having a "home"
-//     exhibition on the roles row.
+//   - "Global" grants (exhibitionid IS NULL AND resource_type IS NULL) apply
+//     everywhere, across every exhibition, regardless of which exhibition
+//     the granting role calls "home".
 //   - "Exhibition-specific" grants are scoped to one exhibition, either
-//     directly (resource_type = 'Exhibition') or via a Gallery/Display/Photo
-//     resource that belongs to that exhibition.
+//     directly (exhibitionid set, resource_type NULL — covers every
+//     Gallery/Display/Photo within it) or via one specific Gallery/Display/
+//     Photo resource that belongs to that exhibition.
 type GrantsHandler struct {
 	DB      *db.Pool
 	Cfg     *config.Config
@@ -91,7 +91,7 @@ func (h *GrantsHandler) ListGlobal(w http.ResponseWriter, r *http.Request, _ htt
 		SELECT COUNT(*)
 		FROM   entity_role_grants erg
 		JOIN   roles r ON r.roleid = erg.roleid
-		WHERE  erg.resource_type IS NULL AND r.deleted_at IS NULL
+		WHERE  erg.exhibitionid IS NULL AND erg.resource_type IS NULL AND r.deleted_at IS NULL
 	`).Scan(&total); err != nil {
 		slog.Error("Grants.ListGlobal count", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -110,7 +110,7 @@ func (h *GrantsHandler) ListGlobal(w http.ResponseWriter, r *http.Request, _ htt
 		JOIN   roles       r  ON r.roleid = erg.roleid
 		JOIN   exhibitions ex ON ex.exhibitionid = r.exhibitionid
 		`+grantEntityJoins+`
-		WHERE  erg.resource_type IS NULL AND r.deleted_at IS NULL
+		WHERE  erg.exhibitionid IS NULL AND erg.resource_type IS NULL AND r.deleted_at IS NULL
 		ORDER  BY ex.name, r.name, erg.entity_type
 		LIMIT  $1 OFFSET $2
 	`, limit, offset)
@@ -148,8 +148,8 @@ func (h *GrantsHandler) ListGlobal(w http.ResponseWriter, r *http.Request, _ htt
 }
 
 // GET /api/v1/admin/grants/exhibition?exhibitionid=&offset=&limit=  (Phase 6g)
-// Lists grants scoped to one exhibition: directly (resource_type =
-// 'Exhibition') or via a Gallery/Display/Photo resource owned by it.
+// Lists grants scoped to one exhibition: directly (exhibitionid set,
+// resource_type NULL) or via a Gallery/Display/Photo resource owned by it.
 // Requires: authenticated + (PermAdmin or PermPermissionsAdmin).
 func (h *GrantsHandler) ListForExhibition(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	ctx := r.Context()
@@ -172,7 +172,7 @@ func (h *GrantsHandler) ListForExhibition(w http.ResponseWriter, r *http.Request
 	const where = `
 		r.deleted_at IS NULL
 		AND (
-		       (erg.resource_type = 'Exhibition' AND erg.resource_ref = $1)
+		       (erg.exhibitionid = $1::uuid AND erg.resource_type IS NULL)
 		    OR (erg.resource_type IN ('Gallery', 'Display', 'Photo') AND r.exhibitionid = $1::uuid)
 		)`
 
@@ -194,12 +194,14 @@ func (h *GrantsHandler) ListForExhibition(w http.ResponseWriter, r *http.Request
 		       r.exhibitionid::text, ex.name,
 		       `+grantPermsSubquery+` AS perms,
 		       COALESCE(erg.resource_type, ''), COALESCE(erg.resource_ref, ''),
-		       CASE erg.resource_type
-		           WHEN 'Exhibition' THEN ex.name
-		           WHEN 'Gallery'    THEN COALESCE(gal.title, '(deleted gallery)')
-		           WHEN 'Display'    THEN 'Display in ' || COALESCE(dispgal.title, '(deleted gallery)')
-		           WHEN 'Photo'      THEN COALESCE(pho.title_text, '(untitled photo)')
-		       END AS resource_name,
+		       COALESCE(
+		           CASE erg.resource_type
+		               WHEN 'Gallery' THEN COALESCE(gal.title, '(deleted gallery)')
+		               WHEN 'Display' THEN 'Display in ' || COALESCE(dispgal.title, '(deleted gallery)')
+		               WHEN 'Photo'   THEN COALESCE(pho.title_text, '(untitled photo)')
+		           END,
+		           ''
+		       ) AS resource_name,
 		       erg.granted_at::text,
 		       COALESCE(gb.username, '')
 		FROM   entity_role_grants erg
@@ -211,7 +213,7 @@ func (h *GrantsHandler) ListForExhibition(w http.ResponseWriter, r *http.Request
 		LEFT JOIN galleries dispgal ON dispgal.galleryid = disp.galleryid
 		LEFT JOIN photos    pho     ON erg.resource_type = 'Photo' AND pho.photoid::text = erg.resource_ref
 		WHERE  `+where+`
-		ORDER  BY erg.resource_type, resource_name, r.name
+		ORDER  BY COALESCE(erg.resource_type, ''), resource_name, r.name
 		LIMIT  $2 OFFSET $3
 	`, exhibitionID, limit, offset)
 	if err != nil {
