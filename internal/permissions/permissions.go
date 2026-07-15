@@ -175,6 +175,14 @@ const (
 	PermEmojiAdmin   = "EmojiAdmin"
 	PermUserAdmin    = "UserAdmin"
 	PermGalleryAdmin = "GalleryAdmin"
+	// PermTeamAdmin governs the teams admin page (Phase 6f): creating/editing/
+	// deleting teams and managing their membership.
+	PermTeamAdmin = "TeamAdmin"
+	// PermPermissionsAdmin governs the permission-grants viewer (Phase 6g):
+	// browsing and revoking entity_role_grants rows, both global (resource_type
+	// IS NULL — see Check()'s doc comment, these apply across every
+	// exhibition, not just the role's "home" one) and exhibition-scoped.
+	PermPermissionsAdmin = "PermissionsAdmin"
 )
 
 // ── Types ─────────────────────────────────────────────────────────────────────

@@ -484,10 +484,306 @@ function adminLabels() {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// adminTeams (6f) — create/edit/delete teams and manage their membership.
+// Exhibition-scoped (a team belongs to one exhibition), same selector
+// pattern as adminUsers/adminMaster via loadAdminExhibitions().
+// ─────────────────────────────────────────────────────────────────────────────
+function adminTeams() {
+  return {
+    exhibitions:        [],
+    selectedExhibition: '',
+    teams:              [],
+    total:              0,
+    offset:             0,
+    limit:              50,
+    search:             '',
+    loading:            true,
+    authError:          false,
+    noExhibitions:      false,
+    toast:              { visible: false, message: '' },
+
+    // New-team form.
+    newTeamName:        '',
+    newTeamDescription: '',
+    creating:           false,
+
+    // Member panel — only one team's members are shown expanded at a time.
+    expandedTeamId:     null,
+    members:            [],
+    membersLoading:     false,
+    memberSearch:       '',
+    memberResults:      [],
+    memberSearching:    false,
+
+    async init() {
+      if (!(await loadAdminExhibitions(this))) { this.loading = false; return; }
+      await this.loadTeams();
+      this.loading = false;
+    },
+
+    async changeExhibition() {
+      const ex = this.exhibitions.find(function(e) { return e.exhibitionid === this.selectedExhibition; }, this);
+      if (crossHostRedirect(ex, '/admin-teams.html')) return;
+      this.offset = 0;
+      this.expandedTeamId = null;
+      await this.loadTeams();
+    },
+
+    doSearch() {
+      this.offset = 0;
+      this.loadTeams();
+    },
+
+    async loadTeams() {
+      this.loading = true;
+      try {
+        var url = '/api/v1/admin/teams?exhibitionid=' + encodeURIComponent(this.selectedExhibition)
+                + '&search=' + encodeURIComponent(this.search)
+                + '&limit=' + this.limit + '&offset=' + this.offset;
+        const r = await fetch(url);
+        if (r.status === 403 || r.status === 404) { this.authError = true; this.loading = false; return; }
+        const data = await r.json();
+        this.teams = data.teams || [];
+        this.total = data.total || 0;
+      } catch (e) {
+        this.showToast('Load failed: ' + e.message);
+      }
+      this.loading = false;
+    },
+
+    prevPage() { if (this.offset > 0) { this.offset = Math.max(0, this.offset - this.limit); this.loadTeams(); } },
+    nextPage() { if (this.offset + this.limit < this.total) { this.offset += this.limit; this.loadTeams(); } },
+
+    async createTeam() {
+      const name = this.newTeamName.trim();
+      if (!name) { this.showToast('Team name is required.'); return; }
+      this.creating = true;
+      try {
+        const r = await fetch('/api/v1/admin/teams?exhibitionid=' + encodeURIComponent(this.selectedExhibition), {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ name: name, description: this.newTeamDescription.trim() }),
+        });
+        if (!r.ok) {
+          const e = await r.json().catch(function() { return {}; });
+          throw new Error(e.error || ('HTTP ' + r.status));
+        }
+        this.newTeamName = '';
+        this.newTeamDescription = '';
+        this.offset = 0;
+        await this.loadTeams();
+      } catch (e) {
+        this.showToast('Create failed: ' + e.message);
+      }
+      this.creating = false;
+    },
+
+    startEdit(t) {
+      t.editing = true;
+      t.editName = t.name;
+      t.editDescription = t.description;
+    },
+
+    cancelEdit(t) {
+      t.editing = false;
+    },
+
+    async saveEdit(t) {
+      const name = (t.editName || '').trim();
+      if (!name) { this.showToast('Team name is required.'); return; }
+      try {
+        const r = await fetch('/api/v1/admin/teams/' + t.teamid, {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ name: name, description: t.editDescription || '' }),
+        });
+        if (!r.ok) {
+          const e = await r.json().catch(function() { return {}; });
+          throw new Error(e.error || ('HTTP ' + r.status));
+        }
+        t.name = name;
+        t.description = t.editDescription || '';
+        t.editing = false;
+      } catch (e) {
+        this.showToast('Update failed: ' + e.message);
+      }
+    },
+
+    async deleteTeam(t) {
+      try {
+        const r = await fetch('/api/v1/admin/teams/' + t.teamid, { method: 'DELETE' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        this.teams = this.teams.filter(function(x) { return x.teamid !== t.teamid; });
+        this.total = Math.max(0, this.total - 1);
+        if (this.expandedTeamId === t.teamid) this.expandedTeamId = null;
+      } catch (e) {
+        this.showToast('Delete failed: ' + e.message);
+      }
+    },
+
+    async toggleExpand(t) {
+      if (this.expandedTeamId === t.teamid) { this.expandedTeamId = null; return; }
+      this.expandedTeamId = t.teamid;
+      this.memberSearch = '';
+      this.memberResults = [];
+      await this.loadMembers(t.teamid);
+    },
+
+    async loadMembers(teamid) {
+      this.membersLoading = true;
+      try {
+        const r = await fetch('/api/v1/admin/teams/' + teamid + '/members');
+        const data = await r.json();
+        this.members = data.members || [];
+      } catch (e) {
+        this.showToast('Load members failed: ' + e.message);
+      }
+      this.membersLoading = false;
+    },
+
+    async searchMemberCandidates() {
+      const q = this.memberSearch.trim();
+      if (!q) { this.memberResults = []; return; }
+      this.memberSearching = true;
+      try {
+        const url = '/api/v1/admin/users?exhibitionid=' + encodeURIComponent(this.selectedExhibition)
+                  + '&search=' + encodeURIComponent(q) + '&limit=10';
+        const r = await fetch(url);
+        const data = await r.json();
+        const memberIds = this.members.map(function(m) { return m.userid; });
+        this.memberResults = (data.users || []).filter(function(u) { return memberIds.indexOf(u.userid) === -1; });
+      } catch (e) {
+        this.showToast('Search failed: ' + e.message);
+      }
+      this.memberSearching = false;
+    },
+
+    async addMember(teamid, user) {
+      try {
+        const r = await fetch('/api/v1/admin/teams/' + teamid + '/members?userid=' + encodeURIComponent(user.userid), {
+          method: 'POST',
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        this.members.push({ userid: user.userid, username: user.username, email: user.email, joined_at: '' });
+        this.memberResults = this.memberResults.filter(function(u) { return u.userid !== user.userid; });
+      } catch (e) {
+        this.showToast('Add member failed: ' + e.message);
+      }
+    },
+
+    async removeMember(teamid, user) {
+      try {
+        const r = await fetch('/api/v1/admin/teams/' + teamid + '/members/' + user.userid, { method: 'DELETE' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        this.members = this.members.filter(function(m) { return m.userid !== user.userid; });
+      } catch (e) {
+        this.showToast('Remove member failed: ' + e.message);
+      }
+    },
+
+    showToast(msg) {
+      this.toast.message = msg;
+      this.toast.visible = true;
+      const self = this;
+      setTimeout(function() { self.toast.visible = false; }, 3500);
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// adminPermissions (6g) — viewer for entity_role_grants, split into "global"
+// (resource_type IS NULL — applies across every exhibition, not just the
+// role's home one; see GrantsHandler's backend doc comment) and
+// "exhibition-specific" grants, each revocable.
+// ─────────────────────────────────────────────────────────────────────────────
+function adminPermissions() {
+  return {
+    exhibitions:        [],
+    selectedExhibition: '',
+    globalGrants:       [],
+    globalTotal:        0,
+    exGrants:           [],
+    exTotal:            0,
+    loading:            true,
+    authError:          false,
+    noExhibitions:      false,
+    toast:              { visible: false, message: '' },
+
+    async init() {
+      if (!(await loadAdminExhibitions(this))) { this.loading = false; return; }
+      await Promise.all([this.loadGlobal(), this.loadForExhibition()]);
+      this.loading = false;
+    },
+
+    async changeExhibition() {
+      const ex = this.exhibitions.find(function(e) { return e.exhibitionid === this.selectedExhibition; }, this);
+      if (crossHostRedirect(ex, '/admin-permissions.html')) return;
+      await this.loadForExhibition();
+    },
+
+    async loadGlobal() {
+      try {
+        const r = await fetch('/api/v1/admin/grants/global?limit=200');
+        if (r.status === 403 || r.status === 404) { this.authError = true; return; }
+        const data = await r.json();
+        this.globalGrants = data.grants || [];
+        this.globalTotal  = data.total  || 0;
+      } catch (e) {
+        this.showToast('Load failed: ' + e.message);
+      }
+    },
+
+    async loadForExhibition() {
+      try {
+        var url = '/api/v1/admin/grants/exhibition?exhibitionid=' + encodeURIComponent(this.selectedExhibition) + '&limit=200';
+        const r = await fetch(url);
+        if (r.status === 403 || r.status === 404) { this.authError = true; return; }
+        const data = await r.json();
+        this.exGrants = data.grants || [];
+        this.exTotal  = data.total  || 0;
+      } catch (e) {
+        this.showToast('Load failed: ' + e.message);
+      }
+    },
+
+    async revokeGlobal(g) {
+      try {
+        const r = await fetch('/api/v1/admin/grants/' + g.grantid, { method: 'DELETE' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        this.globalGrants = this.globalGrants.filter(function(x) { return x.grantid !== g.grantid; });
+        this.globalTotal = Math.max(0, this.globalTotal - 1);
+      } catch (e) {
+        this.showToast('Revoke failed: ' + e.message);
+      }
+    },
+
+    async revokeExhibition(g) {
+      try {
+        const r = await fetch('/api/v1/admin/grants/' + g.grantid, { method: 'DELETE' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        this.exGrants = this.exGrants.filter(function(x) { return x.grantid !== g.grantid; });
+        this.exTotal = Math.max(0, this.exTotal - 1);
+      } catch (e) {
+        this.showToast('Revoke failed: ' + e.message);
+      }
+    },
+
+    showToast(msg) {
+      this.toast.message = msg;
+      this.toast.visible = true;
+      const self = this;
+      setTimeout(function() { self.toast.visible = false; }, 3500);
+    },
+  };
+}
+
 document.addEventListener('alpine:init', function() {
   Alpine.data('adminApp', adminApp);
   Alpine.data('adminMaster', adminMaster);
   Alpine.data('adminUsers', adminUsers);
   Alpine.data('adminEmojis', adminEmojis);
   Alpine.data('adminLabels', adminLabels);
+  Alpine.data('adminTeams', adminTeams);
+  Alpine.data('adminPermissions', adminPermissions);
 });

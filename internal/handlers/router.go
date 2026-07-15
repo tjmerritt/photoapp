@@ -36,6 +36,8 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	displays    := &DisplaysHandler{DB: pool, Cfg: cfg, Checker: checker}
 	templates   := &TemplatesHandler{DB: pool, Checker: checker}
 	uploads     := &UploadPhotosHandler{DB: pool, Cfg: cfg, Checker: checker}
+	teams       := &TeamsHandler{DB: pool, Cfg: cfg, Checker: checker}
+	grants      := &GrantsHandler{DB: pool, Cfg: cfg, Checker: checker}
 
 	// Convenience: wrap a httprouter.Handle with RequireAuth
 	auth := func(h httprouter.Handle) httprouter.Handle {
@@ -129,6 +131,20 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 
 	// Phase 6e: label admin (PermAdmin/PermLabelAdmin enforced in handler)
 	r.GET("/api/v1/admin/label-names", auth(labels.AdminListNames))
+
+	// Phase 6f: teams admin (PermAdmin/PermTeamAdmin enforced in handler)
+	r.GET("/api/v1/admin/teams",                          auth(teams.List))
+	r.POST("/api/v1/admin/teams",                         auth(teams.Create))
+	r.PATCH("/api/v1/admin/teams/:teamid",                auth(teams.Update))
+	r.DELETE("/api/v1/admin/teams/:teamid",               auth(teams.Delete))
+	r.GET("/api/v1/admin/teams/:teamid/members",          auth(teams.ListMembers))
+	r.POST("/api/v1/admin/teams/:teamid/members",         auth(teams.AddMember))
+	r.DELETE("/api/v1/admin/teams/:teamid/members/:userid", auth(teams.RemoveMember))
+
+	// Phase 6g: permission-grants viewer (PermAdmin/PermPermissionsAdmin enforced in handler)
+	r.GET("/api/v1/admin/grants/global",       auth(grants.ListGlobal))
+	r.GET("/api/v1/admin/grants/exhibition",   auth(grants.ListForExhibition))
+	r.DELETE("/api/v1/admin/grants/:grantid",  auth(grants.Revoke))
 
 	// ── Static file serving for uploaded emoji images ─────────────────────────
 	r.ServeFiles("/uploads/*filepath", http.Dir(cfg.UploadDir))

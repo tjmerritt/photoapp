@@ -1,0 +1,281 @@
+package handlers
+
+import (
+	"log/slog"
+	"net/http"
+
+	"github.com/julienschmidt/httprouter"
+	"github.com/tjmerritt/photoapp/internal/config"
+	"github.com/tjmerritt/photoapp/internal/db"
+	"github.com/tjmerritt/photoapp/internal/middleware"
+	"github.com/tjmerritt/photoapp/internal/permissions"
+)
+
+// GrantsHandler powers the permission-grants viewer admin page (Phase 6g):
+// browsing (and revoking) raw entity_role_grants rows, split into two views
+// per the permissions model's own split (see
+// internal/permissions/permissions.go's Check() doc comment):
+//
+//   - "Global" grants (resource_type IS NULL) apply everywhere, across every
+//     exhibition — Check()'s SQL for that branch does not filter on the
+//     grant's role's exhibitionid at all, so these are genuinely
+//     exhibition-independent despite every role still having a "home"
+//     exhibition on the roles row.
+//   - "Exhibition-specific" grants are scoped to one exhibition, either
+//     directly (resource_type = 'Exhibition') or via a Gallery/Display/Photo
+//     resource that belongs to that exhibition.
+type GrantsHandler struct {
+	DB      *db.Pool
+	Cfg     *config.Config
+	Checker *permissions.Checker
+}
+
+// adminGrant is the shape returned by both grants-listing endpoints.
+type adminGrant struct {
+	GrantID        string   `json:"grantid"`
+	EntityType     string   `json:"entity_type"`
+	EntityRef      string   `json:"entity_ref,omitempty"`
+	EntityName     string   `json:"entity_name"`
+	RoleID         string   `json:"roleid"`
+	RoleName       string   `json:"role_name"`
+	ExhibitionID   string   `json:"exhibitionid"`
+	ExhibitionName string   `json:"exhibition_name"`
+	Permissions    []string `json:"permissions"`
+	ResourceType   string   `json:"resource_type,omitempty"`
+	ResourceRef    string   `json:"resource_ref,omitempty"`
+	ResourceName   string   `json:"resource_name,omitempty"`
+	GrantedAt      string   `json:"granted_at"`
+	GrantedBy      string   `json:"granted_by,omitempty"`
+}
+
+// The following three SQL fragments are shared by ListGlobal and
+// ListForExhibition below — both resolve the grant's entity to a friendly
+// name and its role's bundled permissions the same way; only the WHERE
+// clause and (for the exhibition-scoped one) the extra resource-name
+// resolution differ.
+const grantEntityNameCase = `
+	CASE erg.entity_type
+	    WHEN 'Public'   THEN 'Public'
+	    WHEN 'LoggedIn' THEN 'Logged-in users'
+	    WHEN 'User'     THEN COALESCE(u.username, '(deleted user)')
+	    WHEN 'Team'     THEN COALESCE(tm.name, '(deleted team)')
+	END`
+
+const grantEntityJoins = `
+	LEFT JOIN users u  ON erg.entity_type = 'User' AND u.userid::text = erg.entity_ref
+	LEFT JOIN teams tm ON erg.entity_type = 'Team' AND tm.teamid::text = erg.entity_ref
+	LEFT JOIN users gb ON gb.userid = erg.granted_by`
+
+const grantPermsSubquery = `
+	COALESCE((SELECT array_agg(rp.permission ORDER BY rp.permission)
+	          FROM role_permissions rp WHERE rp.roleid = r.roleid), '{}')`
+
+// GET /api/v1/admin/grants/global?offset=&limit=  (Phase 6g)
+// Requires: authenticated + (PermAdmin or PermPermissionsAdmin).
+func (h *GrantsHandler) ListGlobal(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := r.URL.Query().Get("exhibitionid")
+	if exhibitionID == "" {
+		exhibitionID = middleware.ExhibitionID(ctx)
+	}
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+
+	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
+
+	var total int
+	if err := h.DB.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM   entity_role_grants erg
+		JOIN   roles r ON r.roleid = erg.roleid
+		WHERE  erg.resource_type IS NULL AND r.deleted_at IS NULL
+	`).Scan(&total); err != nil {
+		slog.Error("Grants.ListGlobal count", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	rows, err := h.DB.Query(ctx, `
+		SELECT erg.id::text, erg.entity_type, COALESCE(erg.entity_ref, ''),
+		       `+grantEntityNameCase+` AS entity_name,
+		       r.roleid::text, r.name,
+		       ex.exhibitionid::text, ex.name,
+		       `+grantPermsSubquery+` AS perms,
+		       erg.granted_at::text,
+		       COALESCE(gb.username, '')
+		FROM   entity_role_grants erg
+		JOIN   roles       r  ON r.roleid = erg.roleid
+		JOIN   exhibitions ex ON ex.exhibitionid = r.exhibitionid
+		`+grantEntityJoins+`
+		WHERE  erg.resource_type IS NULL AND r.deleted_at IS NULL
+		ORDER  BY ex.name, r.name, erg.entity_type
+		LIMIT  $1 OFFSET $2
+	`, limit, offset)
+	if err != nil {
+		slog.Error("Grants.ListGlobal", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	defer rows.Close()
+
+	grants := make([]adminGrant, 0)
+	for rows.Next() {
+		var g adminGrant
+		if err := rows.Scan(&g.GrantID, &g.EntityType, &g.EntityRef, &g.EntityName,
+			&g.RoleID, &g.RoleName, &g.ExhibitionID, &g.ExhibitionName,
+			&g.Permissions, &g.GrantedAt, &g.GrantedBy); err != nil {
+			slog.Error("Grants.ListGlobal", "error", err)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		grants = append(grants, g)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("Grants.ListGlobal", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, map[string]any{
+		"total":  total,
+		"offset": offset,
+		"limit":  limit,
+		"grants": grants,
+	})
+}
+
+// GET /api/v1/admin/grants/exhibition?exhibitionid=&offset=&limit=  (Phase 6g)
+// Lists grants scoped to one exhibition: directly (resource_type =
+// 'Exhibition') or via a Gallery/Display/Photo resource owned by it.
+// Requires: authenticated + (PermAdmin or PermPermissionsAdmin).
+func (h *GrantsHandler) ListForExhibition(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := r.URL.Query().Get("exhibitionid")
+	if exhibitionID == "" {
+		exhibitionID = middleware.ExhibitionID(ctx)
+	}
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+	if exhibitionID == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "exhibitionid is required")
+		return
+	}
+
+	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
+
+	const where = `
+		r.deleted_at IS NULL
+		AND (
+		       (erg.resource_type = 'Exhibition' AND erg.resource_ref = $1)
+		    OR (erg.resource_type IN ('Gallery', 'Display', 'Photo') AND r.exhibitionid = $1::uuid)
+		)`
+
+	var total int
+	if err := h.DB.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM   entity_role_grants erg
+		JOIN   roles r ON r.roleid = erg.roleid
+		WHERE  `+where, exhibitionID).Scan(&total); err != nil {
+		slog.Error("Grants.ListForExhibition count", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	rows, err := h.DB.Query(ctx, `
+		SELECT erg.id::text, erg.entity_type, COALESCE(erg.entity_ref, ''),
+		       `+grantEntityNameCase+` AS entity_name,
+		       r.roleid::text, r.name,
+		       r.exhibitionid::text, ex.name,
+		       `+grantPermsSubquery+` AS perms,
+		       COALESCE(erg.resource_type, ''), COALESCE(erg.resource_ref, ''),
+		       CASE erg.resource_type
+		           WHEN 'Exhibition' THEN ex.name
+		           WHEN 'Gallery'    THEN COALESCE(gal.title, '(deleted gallery)')
+		           WHEN 'Display'    THEN 'Display in ' || COALESCE(dispgal.title, '(deleted gallery)')
+		           WHEN 'Photo'      THEN COALESCE(pho.title_text, '(untitled photo)')
+		       END AS resource_name,
+		       erg.granted_at::text,
+		       COALESCE(gb.username, '')
+		FROM   entity_role_grants erg
+		JOIN   roles       r  ON r.roleid = erg.roleid
+		JOIN   exhibitions ex ON ex.exhibitionid = r.exhibitionid
+		`+grantEntityJoins+`
+		LEFT JOIN galleries gal     ON erg.resource_type = 'Gallery' AND gal.galleryid::text = erg.resource_ref
+		LEFT JOIN displays  disp    ON erg.resource_type = 'Display' AND disp.displayid::text = erg.resource_ref
+		LEFT JOIN galleries dispgal ON dispgal.galleryid = disp.galleryid
+		LEFT JOIN photos    pho     ON erg.resource_type = 'Photo' AND pho.photoid::text = erg.resource_ref
+		WHERE  `+where+`
+		ORDER  BY erg.resource_type, resource_name, r.name
+		LIMIT  $2 OFFSET $3
+	`, exhibitionID, limit, offset)
+	if err != nil {
+		slog.Error("Grants.ListForExhibition", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	defer rows.Close()
+
+	grants := make([]adminGrant, 0)
+	for rows.Next() {
+		var g adminGrant
+		if err := rows.Scan(&g.GrantID, &g.EntityType, &g.EntityRef, &g.EntityName,
+			&g.RoleID, &g.RoleName, &g.ExhibitionID, &g.ExhibitionName,
+			&g.Permissions, &g.ResourceType, &g.ResourceRef, &g.ResourceName,
+			&g.GrantedAt, &g.GrantedBy); err != nil {
+			slog.Error("Grants.ListForExhibition", "error", err)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		grants = append(grants, g)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("Grants.ListForExhibition", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, map[string]any{
+		"total":  total,
+		"offset": offset,
+		"limit":  limit,
+		"grants": grants,
+	})
+}
+
+// DELETE /api/v1/admin/grants/:grantid?exhibitionid=  (Phase 6g)
+// Revokes a single entity_role_grants row outright. Does not touch the
+// underlying role or its permissions — just the one grant of that role to
+// that entity/resource.
+// Requires: authenticated + (PermAdmin or PermPermissionsAdmin).
+func (h *GrantsHandler) Revoke(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	ctx := r.Context()
+	grantID := ps.ByName("grantid")
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := r.URL.Query().Get("exhibitionid")
+	if exhibitionID == "" {
+		exhibitionID = middleware.ExhibitionID(ctx)
+	}
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+
+	ct, err := h.DB.Exec(ctx, `DELETE FROM entity_role_grants WHERE id = $1`, grantID)
+	if err != nil {
+		slog.Error("Grants.Revoke", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if ct.RowsAffected() == 0 {
+		middleware.WriteError(w, http.StatusNotFound, "grant not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
