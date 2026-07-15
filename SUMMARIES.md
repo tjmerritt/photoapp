@@ -1652,3 +1652,14 @@ No Go toolchain or browser available in this sandbox (same standing constraint a
 - Still no way to run this against a live Postgres/Go build in this sandbox — recommend rebuilding and clicking through both new pages (team CRUD + membership changes, and revoking a grant of each kind) before trusting this in production.
 - Permissions viewer has no UI for authoring brand-new grants (assigning a role to an entity for the first time) — intentionally out of scope this round; would need its own follow-up if wanted.
 - Global grants list currently has no pagination (flat fetch, `limit=200`) — a deliberate simplification given typical small grant counts; revisit if a deployment ends up with more than that.
+
+## Session 62 — Fixed: emoji admin showed no emoji after the infinite-scroll change
+
+### What was done
+User reported `admin-emojis.html` stopped showing any emoji after Session 60's infinite-scroll change. Root cause: `adminEmojis`'s data still initialized `loading: true` (leftover from before infinite scroll, when `loading` only drove the skeleton display), but `loadMore()` now guards its own entry with `if (this.loading) return;` so a second concurrent call doesn't double-fetch. Since `init()` calls `loadMore()` while `loading` was still `true` from initialization, that very first call hit the guard and returned immediately — no fetch ever happened, and the skeleton just stayed empty forever. `adminApp` (the photo grid, which originated this same scroll-loading pattern) correctly initializes `loading: false`; `adminEmojis` had been left on the old default. Fixed by changing `adminEmojis`'s initial `loading` to `false`, matching `adminApp`.
+
+### Testing notes
+`node --check` on `admin.js` — OK. Grepped every `loading:` initializer in `admin.js` to confirm no other component has the same guard-vs-initial-state mismatch (only `adminApp`/`adminEmojis` use the scroll-guard `loadMore()` pattern; both now initialize `false`).
+
+### Open items
+None.

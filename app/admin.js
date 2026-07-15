@@ -311,7 +311,7 @@ function adminEmojis() {
     source:    'all',   // 'all' | 'openmoji' | 'custom'
     status:    'all',   // 'all' | 'enabled' | 'disabled'
     usedOnly:  false,
-    loading:   true,
+    loading:   false,
     authError: false,
     toast:     { visible: false, message: '' },
 
