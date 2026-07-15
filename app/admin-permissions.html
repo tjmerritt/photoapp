@@ -82,9 +82,8 @@
           <thead>
             <tr class="border-b border-gray-100 text-left text-xs text-gray-500 uppercase tracking-wide">
               <th class="px-4 py-2.5 font-semibold">Entity</th>
-              <th class="px-3 py-2.5 font-semibold">Role</th>
-              <th class="px-3 py-2.5 font-semibold">Permissions</th>
               <th class="px-3 py-2.5 font-semibold">Home exhibition</th>
+              <th class="px-3 py-2.5 font-semibold">Role</th>
               <th class="px-3 py-2.5 font-semibold">Granted</th>
               <th class="px-3 py-2.5 font-semibold"></th>
             </tr>
@@ -96,15 +95,8 @@
                   <span class="font-medium text-gray-800" x-text="g.entity_name"></span>
                   <span class="text-xs text-gray-400 ml-1" x-text="'(' + g.entity_type + ')'"></span>
                 </td>
-                <td class="px-3 py-3 text-gray-700" x-text="g.role_name"></td>
-                <td class="px-3 py-3">
-                  <div class="flex flex-wrap gap-1">
-                    <template x-for="p in g.permissions" :key="p">
-                      <span class="text-[10px] font-semibold bg-gray-100 text-gray-600 rounded-full px-2 py-0.5" x-text="p"></span>
-                    </template>
-                  </div>
-                </td>
                 <td class="px-3 py-3 text-gray-500 text-xs" x-text="g.exhibition_name"></td>
+                <td class="px-3 py-3 text-gray-700" x-text="g.role_name"></td>
                 <td class="px-3 py-3 text-gray-400 text-xs" x-text="g.granted_at ? g.granted_at.slice(0, 10) : ''"></td>
                 <td class="px-3 py-3 text-right">
                   <button type="button" @click="revokeGlobal(g)"
@@ -130,9 +122,8 @@
           <thead>
             <tr class="border-b border-gray-100 text-left text-xs text-gray-500 uppercase tracking-wide">
               <th class="px-4 py-2.5 font-semibold">Entity</th>
-              <th class="px-3 py-2.5 font-semibold">Role</th>
-              <th class="px-3 py-2.5 font-semibold">Permissions</th>
               <th class="px-3 py-2.5 font-semibold">Resource</th>
+              <th class="px-3 py-2.5 font-semibold">Role</th>
               <th class="px-3 py-2.5 font-semibold">Granted</th>
               <th class="px-3 py-2.5 font-semibold"></th>
             </tr>
@@ -144,18 +135,11 @@
                   <span class="font-medium text-gray-800" x-text="g.entity_name"></span>
                   <span class="text-xs text-gray-400 ml-1" x-text="'(' + g.entity_type + ')'"></span>
                 </td>
-                <td class="px-3 py-3 text-gray-700" x-text="g.role_name"></td>
-                <td class="px-3 py-3">
-                  <div class="flex flex-wrap gap-1">
-                    <template x-for="p in g.permissions" :key="p">
-                      <span class="text-[10px] font-semibold bg-gray-100 text-gray-600 rounded-full px-2 py-0.5" x-text="p"></span>
-                    </template>
-                  </div>
-                </td>
                 <td class="px-3 py-3 text-gray-500 text-xs">
                   <span class="font-semibold text-gray-600" x-text="g.resource_type || 'Exhibition'"></span>
                   <span class="block" x-text="g.resource_type ? g.resource_name : '(entire exhibition)'"></span>
                 </td>
+                <td class="px-3 py-3 text-gray-700" x-text="g.role_name"></td>
                 <td class="px-3 py-3 text-gray-400 text-xs" x-text="g.granted_at ? g.granted_at.slice(0, 10) : ''"></td>
                 <td class="px-3 py-3 text-right">
                   <button type="button" @click="revokeExhibition(g)"

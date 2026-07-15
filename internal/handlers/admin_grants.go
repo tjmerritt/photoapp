@@ -33,28 +33,32 @@ type GrantsHandler struct {
 }
 
 // adminGrant is the shape returned by both grants-listing endpoints.
+//
+// The permissions a role bundles are intentionally NOT included here — the
+// grant is fundamentally an (entity, resource) -> role mapping, and showing
+// each role's full permission list on every one of its grants would repeat
+// the same details over and over across rows and bury the mapping itself.
+// That detail belongs on the roles admin page (admin-roles.html) instead.
 type adminGrant struct {
-	GrantID        string   `json:"grantid"`
-	EntityType     string   `json:"entity_type"`
-	EntityRef      string   `json:"entity_ref,omitempty"`
-	EntityName     string   `json:"entity_name"`
-	RoleID         string   `json:"roleid"`
-	RoleName       string   `json:"role_name"`
-	ExhibitionID   string   `json:"exhibitionid"`
-	ExhibitionName string   `json:"exhibition_name"`
-	Permissions    []string `json:"permissions"`
-	ResourceType   string   `json:"resource_type,omitempty"`
-	ResourceRef    string   `json:"resource_ref,omitempty"`
-	ResourceName   string   `json:"resource_name,omitempty"`
-	GrantedAt      string   `json:"granted_at"`
-	GrantedBy      string   `json:"granted_by,omitempty"`
+	GrantID        string `json:"grantid"`
+	EntityType     string `json:"entity_type"`
+	EntityRef      string `json:"entity_ref,omitempty"`
+	EntityName     string `json:"entity_name"`
+	RoleID         string `json:"roleid"`
+	RoleName       string `json:"role_name"`
+	ExhibitionID   string `json:"exhibitionid"`
+	ExhibitionName string `json:"exhibition_name"`
+	ResourceType   string `json:"resource_type,omitempty"`
+	ResourceRef    string `json:"resource_ref,omitempty"`
+	ResourceName   string `json:"resource_name,omitempty"`
+	GrantedAt      string `json:"granted_at"`
+	GrantedBy      string `json:"granted_by,omitempty"`
 }
 
-// The following three SQL fragments are shared by ListGlobal and
-// ListForExhibition below — both resolve the grant's entity to a friendly
-// name and its role's bundled permissions the same way; only the WHERE
-// clause and (for the exhibition-scoped one) the extra resource-name
-// resolution differ.
+// The following SQL fragments are shared by ListGlobal and ListForExhibition
+// below — both resolve the grant's entity to a friendly name the same way;
+// only the WHERE clause and (for the exhibition-scoped one) the extra
+// resource-name resolution differ.
 const grantEntityNameCase = `
 	CASE erg.entity_type
 	    WHEN 'Public'   THEN 'Public'
@@ -71,6 +75,33 @@ const grantEntityJoins = `
 const grantPermsSubquery = `
 	COALESCE((SELECT array_agg(rp.permission ORDER BY rp.permission)
 	          FROM role_permissions rp WHERE rp.roleid = r.roleid), '{}')`
+
+// grantEntityRank orders rows broadest-to-narrowest by entity type: Public
+// (everyone) is broader than LoggedIn, which is broader than Team, which is
+// broader than a single User. Used as the primary ORDER BY key in both
+// listing queries below, matching the (entity, resource) -> role column
+// order the admin page displays.
+const grantEntityRank = `
+	CASE erg.entity_type
+	    WHEN 'Public'   THEN 0
+	    WHEN 'LoggedIn' THEN 1
+	    WHEN 'Team'     THEN 2
+	    WHEN 'User'     THEN 3
+	    ELSE 4
+	END`
+
+// grantResourceRank orders rows broadest-to-narrowest by resource scope:
+// the whole exhibition (no resource_type) is broader than a Gallery, which
+// is broader than a Display, which is broader than a single Photo. Used as
+// the secondary ORDER BY key in ListForExhibition.
+const grantResourceRank = `
+	CASE COALESCE(erg.resource_type, '')
+	    WHEN ''        THEN 0
+	    WHEN 'Gallery' THEN 1
+	    WHEN 'Display' THEN 2
+	    WHEN 'Photo'   THEN 3
+	    ELSE 4
+	END`
 
 // GET /api/v1/admin/grants/global?offset=&limit=  (Phase 6g)
 // Requires: authenticated + (PermAdmin or PermPermissionsAdmin).
@@ -105,7 +136,6 @@ func (h *GrantsHandler) ListGlobal(w http.ResponseWriter, r *http.Request, _ htt
 		       `+grantEntityNameCase+` AS entity_name,
 		       r.roleid::text, r.name,
 		       ex.exhibitionid::text, ex.name,
-		       `+grantPermsSubquery+` AS perms,
 		       erg.granted_at::text,
 		       COALESCE(gb.username, '')
 		FROM   entity_role_grants erg
@@ -113,7 +143,7 @@ func (h *GrantsHandler) ListGlobal(w http.ResponseWriter, r *http.Request, _ htt
 		JOIN   exhibitions ex ON ex.exhibitionid = r.exhibitionid
 		`+grantEntityJoins+`
 		WHERE  erg.exhibitionid IS NULL AND erg.resource_type IS NULL AND r.deleted_at IS NULL
-		ORDER  BY ex.name, r.name, erg.entity_type
+		ORDER  BY `+grantEntityRank+`, ex.name, r.name
 		LIMIT  $1 OFFSET $2
 	`, limit, offset)
 	if err != nil {
@@ -128,7 +158,7 @@ func (h *GrantsHandler) ListGlobal(w http.ResponseWriter, r *http.Request, _ htt
 		var g adminGrant
 		if err := rows.Scan(&g.GrantID, &g.EntityType, &g.EntityRef, &g.EntityName,
 			&g.RoleID, &g.RoleName, &g.ExhibitionID, &g.ExhibitionName,
-			&g.Permissions, &g.GrantedAt, &g.GrantedBy); err != nil {
+			&g.GrantedAt, &g.GrantedBy); err != nil {
 			slog.Error("Grants.ListGlobal", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
@@ -194,7 +224,6 @@ func (h *GrantsHandler) ListForExhibition(w http.ResponseWriter, r *http.Request
 		       `+grantEntityNameCase+` AS entity_name,
 		       r.roleid::text, r.name,
 		       r.exhibitionid::text, ex.name,
-		       `+grantPermsSubquery+` AS perms,
 		       COALESCE(erg.resource_type, ''), COALESCE(erg.resource_ref, ''),
 		       COALESCE(
 		           CASE erg.resource_type
@@ -215,7 +244,7 @@ func (h *GrantsHandler) ListForExhibition(w http.ResponseWriter, r *http.Request
 		LEFT JOIN galleries dispgal ON dispgal.galleryid = disp.galleryid
 		LEFT JOIN photos    pho     ON erg.resource_type = 'Photo' AND pho.photoid::text = erg.resource_ref
 		WHERE  `+where+`
-		ORDER  BY COALESCE(erg.resource_type, ''), resource_name, r.name
+		ORDER  BY `+grantEntityRank+`, `+grantResourceRank+`, resource_name, r.name
 		LIMIT  $2 OFFSET $3
 	`, exhibitionID, limit, offset)
 	if err != nil {
@@ -230,7 +259,7 @@ func (h *GrantsHandler) ListForExhibition(w http.ResponseWriter, r *http.Request
 		var g adminGrant
 		if err := rows.Scan(&g.GrantID, &g.EntityType, &g.EntityRef, &g.EntityName,
 			&g.RoleID, &g.RoleName, &g.ExhibitionID, &g.ExhibitionName,
-			&g.Permissions, &g.ResourceType, &g.ResourceRef, &g.ResourceName,
+			&g.ResourceType, &g.ResourceRef, &g.ResourceName,
 			&g.GrantedAt, &g.GrantedBy); err != nil {
 			slog.Error("Grants.ListForExhibition", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")

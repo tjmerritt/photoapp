@@ -1761,3 +1761,18 @@ No Go toolchain or live Postgres in this sandbox (unchanged standing constraint)
 - Still needs a real Postgres + rebuild to click through role creation, renaming, permission toggling, and deletion end-to-end before trusting this in production.
 - Deleting a role with a non-zero `grant_count` isn't specially warned against beyond showing the count in the row (no confirmation dialog, matching this app's existing no-`confirm()` convention) — worth keeping an eye on if that surprises anyone in practice.
 - The singleton-role guard blocks editing/deleting `__grant:*` roles by name prefix; if a real, intentionally-named role ever started with that exact prefix it would be incorrectly blocked too, but that's an extremely unlikely naming collision.
+
+## Session 68 — Permissions viewer: dropped Permissions column, reordered to (entity, resource) → role, sorted broadest-to-narrowest
+
+### What was done
+User feedback on `admin-permissions.html`: the grant is fundamentally an `(entity, resource) -> role` mapping, and repeating each role's full permission-badge list on every one of its grant rows buried that mapping in noise — that detail now belongs solely on the Session 67 roles admin page. Also asked for the columns to actually follow that `(entity, resource) -> role` order, and for rows to sort broadest-to-narrowest along both narrowing dimensions: entity (Public → LoggedIn → Team → User) and resource (whole exhibition → Gallery → Display → Photo).
+
+**Backend** (`internal/handlers/admin_grants.go`): dropped `Permissions []string` from `adminGrant` entirely and removed the `grantPermsSubquery` SELECT/scan from both `ListGlobal` and `ListForExhibition` (the constant itself stays — `roles.go`'s `RolesHandler.List` still uses it). Added two shared `CASE`-expression SQL fragments: `grantEntityRank` (Public=0, LoggedIn=1, Team=2, User=3) and `grantResourceRank` (no resource_type=0, Gallery=1, Display=2, Photo=3). `ListGlobal` now orders by `grantEntityRank, ex.name, r.name` (no resource dimension exists for a truly global grant, so entity rank is the only narrowing axis there). `ListForExhibition` now orders by `grantEntityRank, grantResourceRank, resource_name, r.name` — entity primary, resource secondary, matching the column order.
+
+**Frontend** (`app/admin-permissions.html`): both tables lost their "Permissions" badge column. Column order changed to Entity → Home exhibition → Role → Granted (Global grants table) and Entity → Resource → Role → Granted (Exhibition-specific table) — the "Home exhibition" column fills the (entity, resource) → role template's resource slot for the Global table, since a genuinely global grant has no resource scope narrower than "everywhere" to show; it's the closest thing that table has to describe the grant's relationship to a specific exhibition.
+
+### Testing notes
+No Go toolchain or live Postgres in this sandbox (unchanged standing constraint). Verified via: brace/paren-balance counts on `admin_grants.go`, `roles.go`, `router.go` (all balanced); `node --check` on `admin.js`; HTML tag-balance and CSP-pattern grep on `admin-permissions.html` (clean); grepped for any leftover `g.permissions`/`.Permissions` references across the touched HTML/Go files to confirm the removal was complete on both ends of the API contract.
+
+### Open items
+None.
