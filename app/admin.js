@@ -302,15 +302,17 @@ function adminUsers() {
 // ─────────────────────────────────────────────────────────────────────────────
 function adminEmojis() {
   return {
-    emojis:          [],
-    total:           0,
-    offset:          0,
-    limit:           60,
-    search:          '',
-    includeDisabled: true,
-    loading:         true,
-    authError:       false,
-    toast:           { visible: false, message: '' },
+    emojis:   [],
+    total:    0,
+    offset:   0,
+    limit:    60,
+    search:   '',
+    source:   'all',   // 'all' | 'openmoji' | 'custom'
+    status:   'all',   // 'all' | 'enabled' | 'disabled'
+    usedOnly: false,
+    loading:  true,
+    authError: false,
+    toast:    { visible: false, message: '' },
 
     thumbUrl(url, cssWidth) { return thumbUrl(url, cssWidth); },
 
@@ -320,6 +322,7 @@ function adminEmojis() {
       await this.load();
     },
 
+    // Any filter change restarts pagination from the first page.
     doSearch() {
       this.offset = 0;
       this.load();
@@ -329,7 +332,9 @@ function adminEmojis() {
       this.loading = true;
       try {
         var url = '/api/v1/admin/emoji-types?search=' + encodeURIComponent(this.search)
-                + '&include_disabled=' + (this.includeDisabled ? 'true' : 'false')
+                + '&source=' + encodeURIComponent(this.source)
+                + '&status=' + encodeURIComponent(this.status)
+                + '&used_only=' + (this.usedOnly ? 'true' : 'false')
                 + '&limit=' + this.limit + '&offset=' + this.offset;
         const r = await fetch(url);
         if (r.status === 403) { this.authError = true; this.loading = false; return; }

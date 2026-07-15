@@ -1600,3 +1600,19 @@ Re-ran the HTML tag-balance check on `admin-emojis.html` — OK. No other page n
 
 ### Open items
 None — this was a small, isolated precedence fix.
+
+## Session 59 — Emoji admin: source/status filters + used-only toggle
+
+### What was done
+Extended `GET /api/v1/admin/emoji-types` with three new filters, replacing the old boolean `include_disabled` param entirely:
+- `source=all|openmoji|custom` — distinguishes OpenMoji-imported emoji (non-null `hexcode`, set by `cmd/import-emojis`) from user-uploaded custom emoji (`hexcode` is never set by `POST /api/v1/emoji/types`'s `UploadType` handler).
+- `status=all|enabled|disabled` — replaces the old `include_disabled` boolean with a proper tri-state.
+- `used_only=true` — filters to emoji with at least one reaction anywhere, via `EXISTS (... FROM emoji_reactions er WHERE er.emojiid = et.emojiid)` rather than the pre-aggregated `usage_count` column, so it's correct regardless of the LEFT JOIN used for display. Had to alias the COUNT query's `FROM emoji_types` as `et` (it wasn't aliased before) so this EXISTS clause — which needs to correlate against the outer row — works identically in both the count and page queries.
+
+`app/admin-emojis.html`/`app/admin.js`'s `adminEmojis` component: swapped the single "Show disabled" checkbox for two `<select>` dropdowns (source, status) plus a "Used only" checkbox; all three call the existing `doSearch()` (resets to page 1, reloads).
+
+### Testing notes
+Re-checked brace/paren balance on `emojis.go`, `node --check` on `admin.js`, HTML tag balance and the CSP-incompatible-pattern grep on `admin-emojis.html` — all clean.
+
+### Open items
+None.

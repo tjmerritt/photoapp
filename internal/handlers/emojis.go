@@ -319,10 +319,20 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 	})
 }
 
-// GET /api/v1/admin/emoji-types?search=&include_disabled=&offset=&limit=  (Phase 6d)
-// Like ListTypes, but for the emoji admin page: includes inactive emoji
-// types (unless include_disabled is left off), doesn't exclude skintone
-// variants, and requires admin access rather than being publicly readable.
+// GET /api/v1/admin/emoji-types?search=&source=&status=&used_only=&offset=&limit=  (Phase 6d)
+// Like ListTypes, but for the emoji admin page: doesn't exclude inactive
+// emoji types by default, doesn't exclude skintone variants, and requires
+// admin access rather than being publicly readable.
+//
+// Query params:
+//
+//	source     – "all" (default), "openmoji" (hexcode set — imported via
+//	             cmd/import-emojis), or "custom" (hexcode unset — uploaded
+//	             via POST /api/v1/emoji/types)
+//	status     – "all" (default), "enabled", or "disabled"
+//	used_only  – "true" to only include emoji with at least one reaction
+//	             anywhere (EXISTS against emoji_reactions, not a stale count)
+//
 // Requires: authenticated + (PermAdmin or PermEmojiAdmin).
 func (h *EmojisHandler) AdminListTypes(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	ctx := r.Context()
@@ -335,23 +345,41 @@ func (h *EmojisHandler) AdminListTypes(w http.ResponseWriter, r *http.Request, _
 
 	q := r.URL.Query()
 	search := strings.TrimSpace(q.Get("search"))
-	includeDisabled := q.Get("include_disabled") == "true"
+	source := q.Get("source")
+	status := q.Get("status")
+	usedOnly := q.Get("used_only") == "true"
 	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
 
-	where := "base_hexcode IS NULL"
+	where := "et.base_hexcode IS NULL"
 	args := []any{}
 	n := 1
-	if !includeDisabled {
-		where += " AND is_active = TRUE"
+
+	switch status {
+	case "enabled":
+		where += " AND et.is_active = TRUE"
+	case "disabled":
+		where += " AND et.is_active = FALSE"
 	}
+
+	switch source {
+	case "openmoji":
+		where += " AND et.hexcode IS NOT NULL AND et.hexcode <> ''"
+	case "custom":
+		where += " AND (et.hexcode IS NULL OR et.hexcode = '')"
+	}
+
+	if usedOnly {
+		where += " AND EXISTS (SELECT 1 FROM emoji_reactions er WHERE er.emojiid = et.emojiid)"
+	}
+
 	if search != "" {
-		where += fmt.Sprintf(" AND (alt_text ILIKE $%d OR tags ILIKE $%d)", n, n)
+		where += fmt.Sprintf(" AND (et.alt_text ILIKE $%d OR et.tags ILIKE $%d)", n, n)
 		args = append(args, "%"+search+"%")
 		n++
 	}
 
 	var total int
-	if err := h.DB.QueryRow(ctx, "SELECT COUNT(*) FROM emoji_types WHERE "+where, args...).Scan(&total); err != nil {
+	if err := h.DB.QueryRow(ctx, "SELECT COUNT(*) FROM emoji_types et WHERE "+where, args...).Scan(&total); err != nil {
 		slog.Error("AdminListTypes count", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
