@@ -38,6 +38,7 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	uploads     := &UploadPhotosHandler{DB: pool, Cfg: cfg, Checker: checker}
 	teams       := &TeamsHandler{DB: pool, Cfg: cfg, Checker: checker}
 	grants      := &GrantsHandler{DB: pool, Cfg: cfg, Checker: checker}
+	roles       := &RolesHandler{DB: pool, Cfg: cfg, Checker: checker}
 
 	// Convenience: wrap a httprouter.Handle with RequireAuth
 	auth := func(h httprouter.Handle) httprouter.Handle {
@@ -141,13 +142,20 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	r.POST("/api/v1/admin/teams/:teamid/members",         auth(teams.AddMember))
 	r.DELETE("/api/v1/admin/teams/:teamid/members/:userid", auth(teams.RemoveMember))
 
-	// Phase 6g: permission-grants viewer (PermAdmin/PermPermissionsAdmin enforced in handler)
+	// Phase 6g/6h: permission-grants viewer + creation (PermAdmin/PermPermissionsAdmin enforced in handler)
 	r.GET("/api/v1/admin/grants/global",       auth(grants.ListGlobal))
 	r.GET("/api/v1/admin/grants/exhibition",   auth(grants.ListForExhibition))
 	r.POST("/api/v1/admin/grants",             auth(grants.Create))
 	r.DELETE("/api/v1/admin/grants/:grantid",  auth(grants.Revoke))
-	// Phase 6h: role lookup for the "Add grant" popup (PermAdmin/PermPermissionsAdmin enforced in handler)
-	r.GET("/api/v1/admin/roles",               auth(grants.ListRoles))
+
+	// Phase 6i: roles admin (PermAdmin/PermPermissionsAdmin enforced in handler)
+	r.GET("/api/v1/admin/roles",                            auth(roles.List))
+	r.POST("/api/v1/admin/roles",                           auth(roles.Create))
+	r.PATCH("/api/v1/admin/roles/:roleid",                  auth(roles.Update))
+	r.DELETE("/api/v1/admin/roles/:roleid",                 auth(roles.Delete))
+	r.POST("/api/v1/admin/roles/:roleid/permissions",       auth(roles.AddPermission))
+	r.DELETE("/api/v1/admin/roles/:roleid/permissions/:permission", auth(roles.RemovePermission))
+	r.GET("/api/v1/admin/permission-catalog",               auth(roles.PermissionCatalog))
 
 	// ── Static file serving for uploaded emoji images ─────────────────────────
 	r.ServeFiles("/uploads/*filepath", http.Dir(cfg.UploadDir))

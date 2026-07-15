@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en" x-data="adminTeams" x-init="init()">
+<html lang="en" x-data="adminRoles" x-init="init()">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Team Admin</title>
+  <title>Role Admin</title>
   <link rel="icon" href="/favicon.ico">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="stylesheet" href="/tailwind.css">
@@ -15,7 +15,7 @@
 
   <!-- Header -->
   <header class="bg-[#1a1a2e] text-white px-5 py-3.5 flex items-center justify-between gap-4">
-    <h1 class="text-lg font-bold tracking-tight shrink-0">Team Admin</h1>
+    <h1 class="text-lg font-bold tracking-tight shrink-0">Role Admin</h1>
 
     <div x-show="exhibitions.length > 1" class="flex items-center gap-2 flex-1 min-w-0">
       <label class="text-xs text-white/60 shrink-0">Exhibition:</label>
@@ -34,7 +34,7 @@
     </div>
 
     <div class="flex items-center gap-5 shrink-0">
-      <span class="text-xs text-white/60" x-text="total + ' teams'"></span>
+      <span class="text-xs text-white/60" x-text="total + ' roles'"></span>
       <a href="/" class="text-xs text-white/60 hover:text-white transition">← Back to app</a>
     </div>
   </header>
@@ -44,11 +44,11 @@
     <a href="/admin-master.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Overview</a>
     <a href="/admin.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Photos</a>
     <a href="/admin-users.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Users</a>
-    <a href="/admin-teams.html" class="px-3 py-1.5 rounded-lg font-semibold bg-gray-100 whitespace-nowrap">Teams</a>
+    <a href="/admin-teams.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Teams</a>
     <a href="/admin-emojis.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Emojis</a>
     <a href="/admin-labels.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Labels</a>
     <a href="/admin-permissions.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Permissions</a>
-    <a href="/admin-roles.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Roles</a>
+    <a href="/admin-roles.html" class="px-3 py-1.5 rounded-lg font-semibold bg-gray-100 whitespace-nowrap">Roles</a>
     <a href="/gallery-admin.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Galleries</a>
     <a href="/template-admin.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Templates</a>
   </nav>
@@ -65,17 +65,17 @@
 
   <div x-show="!authError && !noExhibitions" class="max-w-4xl mx-auto p-4">
 
-    <!-- Add team -->
+    <!-- Add role -->
     <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 mb-4">
-      <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Add team</p>
+      <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Add role</p>
       <div class="flex items-center gap-2 flex-wrap">
-        <input type="text" x-model="newTeamName" placeholder="Team name"
+        <input type="text" x-model="newRoleName" placeholder="Role name"
                class="flex-1 min-w-[10rem] px-3 py-1.5 text-sm border border-gray-300 rounded-lg
                       focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition" />
-        <input type="text" x-model="newTeamDescription" placeholder="Description (optional)"
+        <input type="text" x-model="newRoleDescription" placeholder="Description (optional)"
                class="flex-1 min-w-[10rem] px-3 py-1.5 text-sm border border-gray-300 rounded-lg
                       focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition" />
-        <button type="button" @click="createTeam()" :disabled="creating"
+        <button type="button" @click="createRole()" :disabled="creating"
                 class="px-4 py-1.5 text-sm font-semibold rounded-lg bg-[#1a1a2e] text-white hover:bg-accent transition
                        disabled:opacity-50 disabled:cursor-default">Add</button>
       </div>
@@ -83,7 +83,7 @@
 
     <!-- Search -->
     <div class="flex items-center gap-2 mb-4">
-      <input type="search" x-model="search" placeholder="Search teams…"
+      <input type="search" x-model="search" placeholder="Search roles…"
              @keyup.enter="doSearch()"
              class="flex-1 max-w-sm px-3 py-1.5 text-sm border border-gray-300 rounded-full bg-white
                     focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition" />
@@ -98,83 +98,66 @@
       </template>
     </div>
 
-    <!-- Team list -->
+    <!-- Role list -->
     <div x-show="!loading" class="space-y-3">
-      <template x-for="t in teams" :key="t.teamid">
+      <template x-for="role in roles" :key="role.roleid">
         <div class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
 
           <!-- Row (view mode) -->
-          <div x-show="!t.editing" class="p-4 flex items-center gap-3">
-            <button type="button" @click="toggleExpand(t)"
+          <div x-show="!role.editing" class="p-4 flex items-center gap-3">
+            <button type="button" @click="toggleExpand(role)"
                     class="shrink-0 w-6 h-6 flex items-center justify-center rounded-lg hover:bg-gray-100 transition"
-                    title="Show members">
+                    title="Show permissions">
               <svg class="w-4 h-4 text-gray-400 transition-transform"
-                   :class="expandedTeamId === t.teamid ? 'rotate-90' : ''"
+                   :class="expandedRoleId === role.roleid ? 'rotate-90' : ''"
                    fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
               </svg>
             </button>
             <div class="flex-1 min-w-0">
-              <p class="font-semibold text-gray-800 truncate" x-text="t.name"></p>
-              <p class="text-xs text-gray-500 truncate" x-text="t.description || '(no description)'"></p>
+              <p class="font-semibold text-gray-800 truncate" x-text="role.name"></p>
+              <p class="text-xs text-gray-500 truncate" x-text="role.description || '(no description)'"></p>
             </div>
-            <span class="text-xs text-gray-400 shrink-0" x-text="t.member_count + ' member' + (t.member_count === 1 ? '' : 's')"></span>
-            <button type="button" @click="startEdit(t)"
+            <span class="text-xs text-gray-400 shrink-0"
+                  x-text="role.permissions.length + ' permission' + (role.permissions.length === 1 ? '' : 's')"></span>
+            <span class="text-xs text-gray-400 shrink-0"
+                  x-text="role.grant_count + ' grant' + (role.grant_count === 1 ? '' : 's')"></span>
+            <button type="button" @click="startEdit(role)"
                     class="shrink-0 text-xs font-semibold text-gray-500 hover:text-accent transition">Edit</button>
-            <button type="button" @click="deleteTeam(t)"
+            <button type="button" @click="deleteRole(role)"
                     class="shrink-0 text-xs font-semibold text-red-500 hover:text-red-700 transition">Delete</button>
           </div>
 
           <!-- Row (edit mode) -->
-          <div x-show="t.editing" class="p-4 flex items-center gap-2 flex-wrap">
-            <input type="text" x-model="t.editName" placeholder="Team name"
+          <div x-show="role.editing" class="p-4 flex items-center gap-2 flex-wrap">
+            <input type="text" x-model="role.editName" placeholder="Role name"
                    class="flex-1 min-w-[8rem] px-3 py-1.5 text-sm border border-gray-300 rounded-lg
                           focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition" />
-            <input type="text" x-model="t.editDescription" placeholder="Description"
+            <input type="text" x-model="role.editDescription" placeholder="Description"
                    class="flex-1 min-w-[8rem] px-3 py-1.5 text-sm border border-gray-300 rounded-lg
                           focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition" />
-            <button type="button" @click="saveEdit(t)"
+            <button type="button" @click="saveEdit(role)"
                     class="px-3 py-1.5 text-sm font-semibold rounded-lg bg-[#1a1a2e] text-white hover:bg-accent transition">Save</button>
-            <button type="button" @click="cancelEdit(t)"
+            <button type="button" @click="cancelEdit(role)"
                     class="px-3 py-1.5 text-sm rounded-lg bg-gray-100 hover:bg-gray-200 transition">Cancel</button>
           </div>
 
-          <!-- Members panel -->
-          <div x-show="expandedTeamId === t.teamid" class="border-t border-gray-100 bg-gray-50/60 p-4">
-            <div x-show="membersLoading" class="text-xs text-gray-400">Loading members…</div>
-
-            <div x-show="!membersLoading" class="space-y-1.5 mb-3">
-              <template x-for="m in members" :key="m.userid">
-                <div class="flex items-center gap-2 bg-white rounded-lg border border-gray-100 px-3 py-1.5">
-                  <div class="flex-1 min-w-0">
-                    <span class="text-sm text-gray-800" x-text="m.username"></span>
-                    <span class="text-xs text-gray-400 ml-1" x-text="m.email"></span>
+          <!-- Permissions panel -->
+          <div x-show="expandedRoleId === role.roleid" class="border-t border-gray-100 bg-gray-50/60 p-4">
+            <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Permissions</p>
+            <div class="grid grid-cols-2 sm:grid-cols-3 gap-4">
+              <template x-for="group in permissionGroups" :key="group.name">
+                <div>
+                  <p class="text-xs font-semibold text-gray-600 mb-1.5" x-text="group.name"></p>
+                  <div class="space-y-1">
+                    <template x-for="p in group.permissions" :key="p">
+                      <label class="flex items-center gap-2 text-xs text-gray-600 cursor-pointer select-none">
+                        <input type="checkbox" :checked="hasPermission(role, p)" @change="togglePermission(role, p)"
+                               class="w-3.5 h-3.5 accent-[#e94560] cursor-pointer" />
+                        <span x-text="p"></span>
+                      </label>
+                    </template>
                   </div>
-                  <button type="button" @click="removeMember(t.teamid, m)"
-                          class="text-xs font-semibold text-red-500 hover:text-red-700 transition shrink-0">Remove</button>
-                </div>
-              </template>
-              <div x-show="members.length === 0" class="text-xs text-gray-400 py-1">No members yet.</div>
-            </div>
-
-            <!-- Add member -->
-            <div class="flex items-center gap-2 mb-2">
-              <input type="search" x-model="memberSearch" placeholder="Search users to add…"
-                     @keyup.enter="searchMemberCandidates()"
-                     class="flex-1 max-w-xs px-3 py-1.5 text-sm border border-gray-300 rounded-full bg-white
-                            focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition" />
-              <button type="button" @click="searchMemberCandidates()"
-                      class="px-3 py-1.5 text-sm rounded-full bg-gray-200 hover:bg-accent hover:text-white transition">Search</button>
-            </div>
-            <div x-show="memberResults.length > 0" class="space-y-1.5">
-              <template x-for="u in memberResults" :key="u.userid">
-                <div class="flex items-center gap-2 bg-white rounded-lg border border-gray-100 px-3 py-1.5">
-                  <div class="flex-1 min-w-0">
-                    <span class="text-sm text-gray-800" x-text="u.username"></span>
-                    <span class="text-xs text-gray-400 ml-1" x-text="u.email"></span>
-                  </div>
-                  <button type="button" @click="addMember(t.teamid, u)"
-                          class="text-xs font-semibold text-green-600 hover:text-green-800 transition shrink-0">Add</button>
                 </div>
               </template>
             </div>
@@ -183,7 +166,7 @@
       </template>
 
       <!-- Empty state -->
-      <div x-show="teams.length === 0" class="py-16 text-center text-gray-400 text-sm">No teams found.</div>
+      <div x-show="roles.length === 0" class="py-16 text-center text-gray-400 text-sm">No roles found.</div>
     </div>
 
     <!-- Pagination -->

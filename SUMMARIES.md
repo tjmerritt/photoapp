@@ -1736,3 +1736,28 @@ HTML tag-balance and CSP-pattern grep on `admin-permissions.html` — clean. Con
 
 ### Open items
 None.
+
+## Session 67 — Phase 6i: Roles admin page
+
+### What was done
+Added a full CRUD admin page for roles — the last piece of the permissions system (Sessions 57/61/63/64) that still had no UI: roles were previously only created by `scripts/seed-exhibition.sh` or auto-managed by the per-user singleton-grant mechanism, with no way to make a new one, rename one, or change what permissions it bundles short of hand-editing the database.
+
+**`internal/permissions/permissions.go`**: added `PermissionCatalog()` — every permission constant, grouped (Gallery, Display, Photo, Photo labels, Photo emoji, Photo comments, Emoji types, Administrative) — and `IsValidPermission(s)`, a lookup against that catalog. This is now the single source of truth backing both the roles admin page's checkbox grid and server-side validation when a permission is added to a role. `PermPermissionsAdmin`'s doc comment updated to note it now also governs role management (reused rather than adding yet another permission constant, since role management is squarely part of the permissions system this constant already covers).
+
+**`internal/handlers/roles.go`** (new file): `RolesHandler` with `List` (paginated, searchable, includes each role's permission list and a `grant_count` of how many `entity_role_grants` rows currently use it), `Create`, `Update` (name/description), `Delete` (soft-delete; also proactively strips the role's `entity_role_grants` and `role_permissions` rows — unlike Session 60's team-delete fix, this is pure hygiene here, not a correctness fix, since every permission query already filters `r.deleted_at IS NULL` on the role itself), `AddPermission`/`RemovePermission` (toggle one permission on a role), and `PermissionCatalog` (serves the catalog to the frontend). All gated on `HasAny(PermAdmin, PermPermissionsAdmin)`, matching the rest of the permissions-system endpoints.
+
+Auto-managed singleton roles (name starting with `__grant:` — the mechanism behind the Users admin page's "view private photos" toggle) are excluded from every listing (`LEFT(r.name, 8) <> '__grant:'`) and actively blocked from being edited/deleted even by direct roleid (`roleExhibitionID` helper 400s if the target role's name has that prefix) — otherwise this new UI could be used to accidentally break that toggle for whoever it's been granted to.
+
+Also moved the lightweight `ListRoles` endpoint Session 64 added to `admin_grants.go` (for the "Add grant" popup's Role dropdown) into this new handler as `RolesHandler.List`, now with pagination/search/grant_count added — one endpoint now serves both the popup and the new admin page, avoiding duplicate "list roles for this exhibition" logic.
+
+**`internal/handlers/router.go`**: wired `GET/POST /api/v1/admin/roles`, `PATCH/DELETE /api/v1/admin/roles/:roleid`, `POST /api/v1/admin/roles/:roleid/permissions`, `DELETE /api/v1/admin/roles/:roleid/permissions/:permission`, `GET /api/v1/admin/permission-catalog` — the nesting shape mirrors the already-proven teams/grants route nesting in this router. Removed the old `grants.ListRoles` registration.
+
+**Frontend**: `app/admin-roles.html` (new) — add-role form, search, role list with expand/edit/delete, each row showing permission count and grant count; expanding a role reveals a permission checkbox grid grouped by `PermissionCatalog`'s categories, each checkbox toggling immediately via `AddPermission`/`RemovePermission` (same "toggle immediately, no separate save step" pattern as the Users and Emojis admin pages). `app/admin.js`'s new `adminRoles()` component follows the same shape as `adminTeams()` (in-place edit via `role.editing`/`role.editName`/`role.editDescription`, no `confirm()` dialogs on delete, matching this codebase's established convention). Added a "Roles" nav link to all 8 pre-existing admin pages and a "Roles" card to `admin-master.html`.
+
+### Testing notes
+No Go toolchain or live Postgres in this sandbox (unchanged standing constraint). Verified via: brace/paren-balance counts on `roles.go`, `router.go`, `admin_grants.go`, `permissions.go` (all balanced); `node --check` on `admin.js`; HTML tag-balance and the CSP-incompatible-pattern grep across all 9 admin pages (all clean — the checkbox grid uses `:checked="hasPermission(role, p)"` and `@change="togglePermission(role, p)"`, method calls inside bound attributes and event handlers, both already an established working pattern elsewhere in this codebase, e.g. `:src="thumbUrl(...)"`). Grepped for leftover references to the old `grants.ListRoles` registration and the `adminRole`/`grantPermsSubquery` symbols to confirm no duplicate definitions across the two files.
+
+### Open items
+- Still needs a real Postgres + rebuild to click through role creation, renaming, permission toggling, and deletion end-to-end before trusting this in production.
+- Deleting a role with a non-zero `grant_count` isn't specially warned against beyond showing the count in the row (no confirmation dialog, matching this app's existing no-`confirm()` convention) — worth keeping an eye on if that surprises anyone in practice.
+- The singleton-role guard blocks editing/deleting `__grant:*` roles by name prefix; if a real, intentionally-named role ever started with that exact prefix it would be incorrectly blocked too, but that's an extremely unlikely naming collision.

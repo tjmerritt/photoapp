@@ -980,6 +980,193 @@ function adminPermissions() {
   };
 }
 
+function adminRoles() {
+  return {
+    exhibitions:        [],
+    selectedExhibition: '',
+    roles:              [],
+    total:              0,
+    offset:             0,
+    limit:              50,
+    search:             '',
+    loading:            true,
+    authError:          false,
+    noExhibitions:      false,
+    toast:              { visible: false, message: '' },
+
+    // New-role form.
+    newRoleName:        '',
+    newRoleDescription: '',
+    creating:           false,
+
+    // Only one role's permission/edit panel is expanded at a time.
+    expandedRoleId:     null,
+    permissionGroups:   [],
+
+    async init() {
+      if (!(await loadAdminExhibitions(this))) { this.loading = false; return; }
+      await Promise.all([this.loadRoles(), this.loadPermissionCatalog()]);
+      this.loading = false;
+    },
+
+    async changeExhibition() {
+      const ex = this.exhibitions.find(function(e) { return e.exhibitionid === this.selectedExhibition; }, this);
+      if (crossHostRedirect(ex, '/admin-roles.html')) return;
+      this.offset = 0;
+      await this.loadRoles();
+    },
+
+    async loadPermissionCatalog() {
+      try {
+        const url = '/api/v1/admin/permission-catalog?exhibitionid=' + encodeURIComponent(this.selectedExhibition);
+        const r = await fetch(url);
+        const data = await r.json().catch(function() { return {}; });
+        this.permissionGroups = data.groups || [];
+      } catch (e) {
+        this.showToast('Could not load permission catalog: ' + e.message);
+      }
+    },
+
+    doSearch() {
+      this.offset = 0;
+      this.loadRoles();
+    },
+
+    async loadRoles() {
+      this.loading = true;
+      try {
+        const url = '/api/v1/admin/roles?exhibitionid=' + encodeURIComponent(this.selectedExhibition)
+                  + '&search=' + encodeURIComponent(this.search)
+                  + '&limit=' + this.limit + '&offset=' + this.offset;
+        const r = await fetch(url);
+        if (r.status === 403 || r.status === 404) { this.authError = true; this.loading = false; return; }
+        const data = await r.json();
+        this.roles  = data.roles || [];
+        this.total  = data.total || 0;
+      } catch (e) {
+        this.showToast('Load failed: ' + e.message);
+      }
+      this.loading = false;
+    },
+
+    prevPage() {
+      this.offset = Math.max(0, this.offset - this.limit);
+      this.loadRoles();
+    },
+
+    nextPage() {
+      this.offset = this.offset + this.limit;
+      this.loadRoles();
+    },
+
+    async createRole() {
+      const name = this.newRoleName.trim();
+      if (!name) { this.showToast('Role name is required.'); return; }
+      this.creating = true;
+      try {
+        const r = await fetch('/api/v1/admin/roles?exhibitionid=' + encodeURIComponent(this.selectedExhibition), {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ name: name, description: this.newRoleDescription.trim() }),
+        });
+        if (!r.ok) {
+          const e = await r.json().catch(function() { return {}; });
+          throw new Error(e.error || ('HTTP ' + r.status));
+        }
+        this.newRoleName = '';
+        this.newRoleDescription = '';
+        this.offset = 0;
+        await this.loadRoles();
+      } catch (e) {
+        this.showToast('Create failed: ' + e.message);
+      }
+      this.creating = false;
+    },
+
+    startEdit(role) {
+      role.editing = true;
+      role.editName = role.name;
+      role.editDescription = role.description;
+    },
+
+    cancelEdit(role) {
+      role.editing = false;
+    },
+
+    async saveEdit(role) {
+      const name = (role.editName || '').trim();
+      if (!name) { this.showToast('Role name is required.'); return; }
+      try {
+        const r = await fetch('/api/v1/admin/roles/' + role.roleid, {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ name: name, description: role.editDescription || '' }),
+        });
+        if (!r.ok) {
+          const e = await r.json().catch(function() { return {}; });
+          throw new Error(e.error || ('HTTP ' + r.status));
+        }
+        role.name = name;
+        role.description = role.editDescription || '';
+        role.editing = false;
+      } catch (e) {
+        this.showToast('Save failed: ' + e.message);
+      }
+    },
+
+    async deleteRole(role) {
+      try {
+        const r = await fetch('/api/v1/admin/roles/' + role.roleid, { method: 'DELETE' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        this.roles = this.roles.filter(function(x) { return x.roleid !== role.roleid; });
+        this.total = Math.max(0, this.total - 1);
+        if (this.expandedRoleId === role.roleid) this.expandedRoleId = null;
+      } catch (e) {
+        this.showToast('Delete failed: ' + e.message);
+      }
+    },
+
+    toggleExpand(role) {
+      this.expandedRoleId = (this.expandedRoleId === role.roleid) ? null : role.roleid;
+    },
+
+    hasPermission(role, p) {
+      return role.permissions.indexOf(p) !== -1;
+    },
+
+    async togglePermission(role, p) {
+      if (this.hasPermission(role, p)) {
+        try {
+          const r = await fetch('/api/v1/admin/roles/' + role.roleid + '/permissions/' + encodeURIComponent(p), { method: 'DELETE' });
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          role.permissions = role.permissions.filter(function(x) { return x !== p; });
+        } catch (e) {
+          this.showToast('Update failed: ' + e.message);
+        }
+      } else {
+        try {
+          const r = await fetch('/api/v1/admin/roles/' + role.roleid + '/permissions', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ permission: p }),
+          });
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          role.permissions.push(p);
+        } catch (e) {
+          this.showToast('Update failed: ' + e.message);
+        }
+      }
+    },
+
+    showToast(msg) {
+      this.toast.message = msg;
+      this.toast.visible = true;
+      const self = this;
+      setTimeout(function() { self.toast.visible = false; }, 3500);
+    },
+  };
+}
+
 document.addEventListener('alpine:init', function() {
   Alpine.data('adminApp', adminApp);
   Alpine.data('adminMaster', adminMaster);
@@ -988,4 +1175,5 @@ document.addEventListener('alpine:init', function() {
   Alpine.data('adminLabels', adminLabels);
   Alpine.data('adminTeams', adminTeams);
   Alpine.data('adminPermissions', adminPermissions);
+  Alpine.data('adminRoles', adminRoles);
 });

@@ -187,13 +187,57 @@ const (
 	// PermTeamAdmin governs the teams admin page (Phase 6f): creating/editing/
 	// deleting teams and managing their membership.
 	PermTeamAdmin = "TeamAdmin"
-	// PermPermissionsAdmin governs the permission-grants viewer (Phase 6g):
-	// browsing and revoking entity_role_grants rows, both global
-	// (exhibitionid IS NULL — see Check()'s doc comment, these apply across
-	// every exhibition, not just the role's "home" one) and exhibition-scoped
-	// (exhibitionid set).
+	// PermPermissionsAdmin governs the permission-grants viewer (Phase 6g,
+	// 6h) and the roles admin page (Phase 6i): browsing/revoking/creating
+	// entity_role_grants rows (both global — exhibitionid IS NULL, see
+	// Check()'s doc comment — and exhibition-scoped), and creating/editing/
+	// deleting roles and the permissions they bundle.
 	PermPermissionsAdmin = "PermissionsAdmin"
 )
+
+// ── Permission catalog ────────────────────────────────────────────────────────
+
+// PermissionGroup is one category of related permissions, used to render the
+// roles admin page's permission checkbox grid (Phase 6i) in a readable
+// layout instead of one flat list.
+type PermissionGroup struct {
+	Name        string   `json:"name"`
+	Permissions []string `json:"permissions"`
+}
+
+// PermissionCatalog returns every known permission string, grouped for
+// display. This is the single source of truth for "what permissions exist"
+// — IsValidPermission and the roles admin page's checkbox grid both derive
+// from it, so a newly added permission constant only needs to be listed
+// here once.
+func PermissionCatalog() []PermissionGroup {
+	return []PermissionGroup{
+		{Name: "Gallery", Permissions: []string{PermGalleryView, PermGalleryCreate, PermGalleryModify, PermGalleryDelete}},
+		{Name: "Display", Permissions: []string{PermDisplayView, PermDisplayCreate, PermDisplayModify, PermDisplayDelete}},
+		{Name: "Photo", Permissions: []string{PermPhotoCreate, PermPhotoDelete, PermPrivatePhotoView, PermPhotoDescriptionModify}},
+		{Name: "Photo labels", Permissions: []string{PermPhotoLabelView, PermPhotoLabelCreate, PermPhotoLabelModify, PermPhotoLabelDelete}},
+		{Name: "Photo emoji", Permissions: []string{PermPhotoEmojiView, PermPhotoEmojiCreate, PermPhotoEmojiDelete}},
+		{Name: "Photo comments", Permissions: []string{PermPhotoCommentView, PermPhotoCommentCreate, PermPhotoCommentModify, PermPhotoCommentDelete}},
+		{Name: "Emoji types", Permissions: []string{PermEmojiUpload}},
+		{Name: "Administrative", Permissions: []string{PermAdmin, PermLabelAdmin, PermEmojiAdmin, PermUserAdmin, PermGalleryAdmin, PermTeamAdmin, PermPermissionsAdmin}},
+	}
+}
+
+// IsValidPermission reports whether s is one of the known permission
+// constants listed in PermissionCatalog. Used to validate a permission name
+// before adding it to a role (roles admin page, Phase 6i) — rejects typos
+// or garbage instead of silently bundling an unrecognized string that would
+// never match anything in Check().
+func IsValidPermission(s string) bool {
+	for _, g := range PermissionCatalog() {
+		for _, p := range g.Permissions {
+			if p == s {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
