@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Photo Admin</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="stylesheet" href="/tailwind.css">
   <link rel="stylesheet" href="/fonts.css">
   <script src="/admin.js"></script>
@@ -39,6 +41,20 @@
     </div>
   </header>
 
+  <!-- Admin page nav -->
+  <nav class="bg-white border-b border-gray-200 px-5 py-2.5 flex items-center gap-1 text-sm overflow-x-auto">
+    <a href="/admin-master.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Overview</a>
+    <a href="/admin.html" class="px-3 py-1.5 rounded-lg font-semibold bg-gray-100 whitespace-nowrap">Photos</a>
+    <a href="/admin-users.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Users</a>
+    <a href="/admin-teams.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Teams</a>
+    <a href="/admin-emojis.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Emojis</a>
+    <a href="/admin-labels.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Labels</a>
+    <a href="/admin-permissions.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Permissions</a>
+    <a href="/admin-roles.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Roles</a>
+    <a href="/gallery-admin.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Galleries</a>
+    <a href="/template-admin.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Templates</a>
+  </nav>
+
   <!-- Auth error -->
   <div x-show="authError"
        class="max-w-md mx-auto mt-12 bg-red-50 border border-red-300 rounded-2xl p-6 text-center text-red-800 text-sm">
@@ -52,6 +68,16 @@
        class="max-w-md mx-auto mt-12 bg-red-50 border border-red-300 rounded-2xl p-6 text-center text-red-800 text-sm">
     You are not a member of any exhibitions. Ask an admin to add you via
     <code class="font-mono bg-red-100 px-1 rounded">user_exhibitions</code>.
+  </div>
+
+  <!-- Search (Phase 6c) -->
+  <div x-show="!authError && !noExhibitions" class="max-w-6xl mx-auto px-4 pt-4 flex items-center gap-2">
+    <input type="search" x-model="search" placeholder="Search title or photo ID…"
+           @keyup.enter="doSearch()"
+           class="flex-1 max-w-sm px-3 py-1.5 text-sm border border-gray-300 rounded-full bg-white
+                  focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/60 transition" />
+    <button type="button" @click="doSearch()"
+            class="px-3 py-1.5 text-sm rounded-full bg-gray-200 hover:bg-accent hover:text-white transition">Search</button>
   </div>
 
   <!-- Loading skeleton (initial load only) -->

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,23 +17,34 @@ import (
 	"github.com/tjmerritt/photoapp/internal/db"
 	"github.com/tjmerritt/photoapp/internal/middleware"
 	"github.com/tjmerritt/photoapp/internal/models"
+	"github.com/tjmerritt/photoapp/internal/permissions"
 )
 
 type EmojisHandler struct {
-	DB  *db.Pool
-	Cfg *config.Config
+	DB      *db.Pool
+	Cfg     *config.Config
+	Checker *permissions.Checker
 }
 
 // GET /api/v1/emojis?photoid=&offset=&limit=
 func (h *EmojisHandler) List(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
 	photoid := r.URL.Query().Get("photoid")
 	if photoid == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "photoid is required")
 		return
 	}
+
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := middleware.ExhibitionID(ctx)
+	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermPhotoEmojiView); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
 
-	emojis, total, err := fetchEmojis(r.Context(), h.DB, photoid, offset, limit, 3)
+	emojis, total, err := fetchEmojis(ctx, h.DB, photoid, offset, limit, 3)
 	if err != nil {
 		slog.Error("List", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -50,16 +62,25 @@ func (h *EmojisHandler) List(w http.ResponseWriter, r *http.Request, _ httproute
 
 // GET /api/v1/emoji/users?emoji=&offset=&limit=
 func (h *EmojisHandler) ListUsers(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
 	emojiid := r.URL.Query().Get("emoji")
 	photoid := r.URL.Query().Get("photoid")
 	if emojiid == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "emoji is required")
 		return
 	}
+
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := middleware.ExhibitionID(ctx)
+	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermPhotoEmojiView); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
 
 	var total int
-	err := h.DB.QueryRow(r.Context(), `
+	err := h.DB.QueryRow(ctx, `
 		SELECT COUNT(*) FROM emoji_reactions
 		WHERE emojiid=$1 AND ($2='' OR photoid::text=$2)
 	`, emojiid, photoid).Scan(&total)
@@ -69,7 +90,7 @@ func (h *EmojisHandler) ListUsers(w http.ResponseWriter, r *http.Request, _ http
 		return
 	}
 
-	users, err := fetchEmojiUsers(r.Context(), h.DB, photoid, emojiid, offset, limit)
+	users, err := fetchEmojiUsers(ctx, h.DB, photoid, emojiid, offset, limit)
 	if err != nil {
 		slog.Error("ListUsers", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -88,24 +109,45 @@ func (h *EmojisHandler) ListUsers(w http.ResponseWriter, r *http.Request, _ http
 // POST /api/v1/emoji/react?photoid=&emojiid=  (requires auth)
 // Adds the current user's reaction to a photo with the given emoji.
 func (h *EmojisHandler) React(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
 	photoid := r.URL.Query().Get("photoid")
 	emojiid := r.URL.Query().Get("emojiid")
-	userID := middleware.MustUserID(r.Context())
+	userID := middleware.MustUserID(ctx)
 
 	if photoid == "" || emojiid == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "photoid and emojiid are required")
 		return
 	}
 
+	exhibitionID, err := resolvePhotoExhibition(ctx, h.DB, photoid)
+	if err != nil {
+		middleware.WriteError(w, http.StatusNotFound, "photo not found")
+		return
+	}
+	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", permissions.ResourcePhoto, photoid, permissions.PermPhotoEmojiCreate); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	// Phase 6b: per-user override — see resolve.go's userCanManageOwnEmoji doc.
+	if canManage, err := userCanManageOwnEmoji(ctx, h.DB, userID); err != nil {
+		slog.Error("React", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	} else if !canManage {
+		middleware.WriteError(w, http.StatusForbidden, "emoji reactions have been disabled for your account")
+		return
+	}
+
 	// Verify emoji type exists and is active
 	var active bool
-	err := h.DB.QueryRow(r.Context(), `SELECT is_active FROM emoji_types WHERE emojiid=$1`, emojiid).Scan(&active)
+	err = h.DB.QueryRow(ctx, `SELECT is_active FROM emoji_types WHERE emojiid=$1`, emojiid).Scan(&active)
 	if err == pgx.ErrNoRows || !active {
 		middleware.WriteError(w, http.StatusBadRequest, "emoji not found or inactive")
 		return
 	}
 
-	_, err = h.DB.Exec(r.Context(), `
+	_, err = h.DB.Exec(ctx, `
 		INSERT INTO emoji_reactions (photoid, emojiid, userid)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (photoid, emojiid, userid) DO NOTHING
@@ -117,7 +159,7 @@ func (h *EmojisHandler) React(w http.ResponseWriter, r *http.Request, _ httprout
 	}
 
 	// Refresh counts materialised view
-	_ = h.DB.RefreshEmojiCounts(r.Context())
+	_ = h.DB.RefreshEmojiCounts(ctx)
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -125,16 +167,37 @@ func (h *EmojisHandler) React(w http.ResponseWriter, r *http.Request, _ httprout
 // DELETE /api/v1/emoji/react?photoid=&emojiid=  (requires auth)
 // Removes the current user's reaction.
 func (h *EmojisHandler) Unreact(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
 	photoid := r.URL.Query().Get("photoid")
 	emojiid := r.URL.Query().Get("emojiid")
-	userID := middleware.MustUserID(r.Context())
+	userID := middleware.MustUserID(ctx)
 
 	if photoid == "" || emojiid == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "photoid and emojiid are required")
 		return
 	}
 
-	ct, err := h.DB.Exec(r.Context(), `
+	exhibitionID, err := resolvePhotoExhibition(ctx, h.DB, photoid)
+	if err != nil {
+		middleware.WriteError(w, http.StatusNotFound, "photo not found")
+		return
+	}
+	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", permissions.ResourcePhoto, photoid, permissions.PermPhotoEmojiDelete); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	// Phase 6b: per-user override — see resolve.go's userCanManageOwnEmoji doc.
+	if canManage, err := userCanManageOwnEmoji(ctx, h.DB, userID); err != nil {
+		slog.Error("Unreact", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	} else if !canManage {
+		middleware.WriteError(w, http.StatusForbidden, "emoji reactions have been disabled for your account")
+		return
+	}
+
+	ct, err := h.DB.Exec(ctx, `
 		DELETE FROM emoji_reactions
 		WHERE photoid=$1 AND emojiid=$2 AND userid=$3
 	`, photoid, emojiid, userID)
@@ -148,7 +211,7 @@ func (h *EmojisHandler) Unreact(w http.ResponseWriter, r *http.Request, _ httpro
 		return
 	}
 
-	_ = h.DB.RefreshEmojiCounts(r.Context())
+	_ = h.DB.RefreshEmojiCounts(ctx)
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -193,7 +256,12 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 		return
 	}
 
-	// Page of results with has_skintones flag.
+	// Page of results with has_skintones flag and global usage_count.
+	// Popular-first (5c): order by total reaction count across all photos,
+	// descending, falling back to alphabetical alt_text for ties — since
+	// most emoji types have zero reactions, this naturally reads as
+	// "frequently-used emojis first, everything else alphabetical" while
+	// still being a single stable ORDER BY that's safe to paginate over.
 	args = append(args, limit, offset)
 	rows, err := h.DB.Query(r.Context(),
 		fmt.Sprintf(`
@@ -202,10 +270,16 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 			       EXISTS (
 			           SELECT 1 FROM emoji_types v
 			           WHERE v.base_hexcode = et.hexcode AND v.is_active = TRUE
-			       ) AS has_skintones
+			       ) AS has_skintones,
+			       COALESCE(ec.usage_count, 0) AS usage_count
 			FROM   emoji_types et
+			LEFT JOIN (
+			    SELECT emojiid, COUNT(*) AS usage_count
+			    FROM   emoji_reactions
+			    GROUP  BY emojiid
+			) ec ON ec.emojiid = et.emojiid
 			WHERE  %s
-			ORDER  BY et.sort_order, et.created_at
+			ORDER  BY COALESCE(ec.usage_count, 0) DESC, et.alt_text ASC, et.sort_order, et.created_at
 			LIMIT  $%d OFFSET $%d
 		`, where, n, n+1),
 		args...,
@@ -221,7 +295,7 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 	for rows.Next() {
 		var et models.EmojiTypeResponse
 		if err := rows.Scan(&et.EmojiID, &et.EmojiChar, &et.ImageURL, &et.AltText,
-			&et.IsActive, &et.Hexcode, &et.HasSkintones); err != nil {
+			&et.IsActive, &et.Hexcode, &et.HasSkintones, &et.UsageCount); err != nil {
 			slog.Error("ListTypes", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
@@ -243,6 +317,159 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 		"pages":  buildPages(total, offset, limit, baseURL),
 		"emojis": types,
 	})
+}
+
+// GET /api/v1/admin/emoji-types?search=&source=&status=&used_only=&offset=&limit=  (Phase 6d)
+// Like ListTypes, but for the emoji admin page: doesn't exclude inactive
+// emoji types by default, doesn't exclude skintone variants, and requires
+// admin access rather than being publicly readable.
+//
+// Query params:
+//
+//	source     – "all" (default), "openmoji" (hexcode set — imported via
+//	             cmd/import-emojis), or "custom" (hexcode unset — uploaded
+//	             via POST /api/v1/emoji/types)
+//	status     – "all" (default), "enabled", or "disabled"
+//	used_only  – "true" to only include emoji with at least one reaction
+//	             anywhere (EXISTS against emoji_reactions, not a stale count)
+//
+// Requires: authenticated + (PermAdmin or PermEmojiAdmin).
+func (h *EmojisHandler) AdminListTypes(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := middleware.ExhibitionID(ctx)
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermEmojiAdmin); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+
+	q := r.URL.Query()
+	search := strings.TrimSpace(q.Get("search"))
+	source := q.Get("source")
+	status := q.Get("status")
+	usedOnly := q.Get("used_only") == "true"
+	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
+
+	where := "et.base_hexcode IS NULL"
+	args := []any{}
+	n := 1
+
+	switch status {
+	case "enabled":
+		where += " AND et.is_active = TRUE"
+	case "disabled":
+		where += " AND et.is_active = FALSE"
+	}
+
+	switch source {
+	case "openmoji":
+		where += " AND et.hexcode IS NOT NULL AND et.hexcode <> ''"
+	case "custom":
+		where += " AND (et.hexcode IS NULL OR et.hexcode = '')"
+	}
+
+	if usedOnly {
+		where += " AND EXISTS (SELECT 1 FROM emoji_reactions er WHERE er.emojiid = et.emojiid)"
+	}
+
+	if search != "" {
+		where += fmt.Sprintf(" AND (et.alt_text ILIKE $%d OR et.tags ILIKE $%d)", n, n)
+		args = append(args, "%"+search+"%")
+		n++
+	}
+
+	var total int
+	if err := h.DB.QueryRow(ctx, "SELECT COUNT(*) FROM emoji_types et WHERE "+where, args...).Scan(&total); err != nil {
+		slog.Error("AdminListTypes count", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	rowArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := h.DB.Query(ctx, fmt.Sprintf(`
+		SELECT et.emojiid::text, et.emoji_char, et.image_url, et.alt_text,
+		       et.is_active, COALESCE(et.hexcode,''),
+		       COALESCE(ec.usage_count, 0) AS usage_count
+		FROM   emoji_types et
+		LEFT JOIN (
+		    SELECT emojiid, COUNT(*) AS usage_count
+		    FROM   emoji_reactions
+		    GROUP  BY emojiid
+		) ec ON ec.emojiid = et.emojiid
+		WHERE  %s
+		ORDER  BY et.alt_text ASC
+		LIMIT  $%d OFFSET $%d
+	`, where, n, n+1), rowArgs...)
+	if err != nil {
+		slog.Error("AdminListTypes", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	defer rows.Close()
+
+	types := make([]models.EmojiTypeResponse, 0)
+	for rows.Next() {
+		var et models.EmojiTypeResponse
+		if err := rows.Scan(&et.EmojiID, &et.EmojiChar, &et.ImageURL, &et.AltText,
+			&et.IsActive, &et.Hexcode, &et.UsageCount); err != nil {
+			slog.Error("AdminListTypes", "error", err)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		et.ImageURL = proxyImageURLPtr(et.ImageURL)
+		types = append(types, et)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("AdminListTypes", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, map[string]any{
+		"total":  total,
+		"offset": offset,
+		"limit":  limit,
+		"emojis": types,
+	})
+}
+
+// PATCH /api/v1/admin/emoji-types/:emojiid  (Phase 6d)
+// Body: { "is_active": bool }
+// Requires: authenticated + (PermAdmin or PermEmojiAdmin).
+func (h *EmojisHandler) AdminUpdateType(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	ctx := r.Context()
+	emojiid := ps.ByName("emojiid")
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := middleware.ExhibitionID(ctx)
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermEmojiAdmin); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+
+	var req struct {
+		IsActive *bool `json:"is_active"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		middleware.WriteError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.IsActive == nil {
+		middleware.WriteError(w, http.StatusBadRequest, "is_active is required")
+		return
+	}
+
+	ct, err := h.DB.Exec(ctx, `UPDATE emoji_types SET is_active = $1 WHERE emojiid = $2`, *req.IsActive, emojiid)
+	if err != nil {
+		slog.Error("AdminUpdateType", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if ct.RowsAffected() == 0 {
+		middleware.WriteError(w, http.StatusNotFound, "emoji type not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // GET /api/v1/emoji/variants?hexcode=  — returns all skintone variants for a base emoji.
@@ -299,12 +526,18 @@ func (h *EmojisHandler) ListVariants(w http.ResponseWriter, r *http.Request, _ h
 	middleware.WriteJSON(w, http.StatusOK, map[string]any{"variants": variants})
 }
 
-// POST /api/v1/emoji/types  – upload a new custom emoji image (requires auth)
+// POST /api/v1/emoji/types  – upload a new custom emoji image (requires EmojiUpload permission)
 // Accepts multipart/form-data with fields:
 //   - image  : the image file (PNG, GIF, WebP recommended)
 //   - alttext: accessibility label (required)
 func (h *EmojisHandler) UploadType(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	_ = middleware.MustUserID(r.Context()) // any authenticated user may upload
+	ctx := r.Context()
+	userID := middleware.MustUserID(ctx)
+	exhibitionID := middleware.ExhibitionID(ctx)
+	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermEmojiUpload); err != nil || !ok {
+		middleware.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
 
 	if err := r.ParseMultipartForm(8 << 20); err != nil { // 8 MB max
 		middleware.WriteError(w, http.StatusBadRequest, "could not parse form (max 8MB)")
@@ -376,7 +609,7 @@ func (h *EmojisHandler) UploadType(w http.ResponseWriter, r *http.Request, _ htt
 	// Insert into emoji_types (inactive until an admin activates it,
 	// or set is_active=TRUE to allow immediate use — adjust per policy)
 	var emojiid string
-	err = h.DB.QueryRow(r.Context(), `
+	err = h.DB.QueryRow(ctx, `
 		INSERT INTO emoji_types (emojiid, image_url, alt_text, is_active)
 		VALUES ($1, $2, $3, TRUE)
 		RETURNING emojiid::text
@@ -389,7 +622,7 @@ func (h *EmojisHandler) UploadType(w http.ResponseWriter, r *http.Request, _ htt
 
 	middleware.WriteJSON(w, http.StatusCreated, models.EmojiTypeResponse{
 		EmojiID:  emojiid,
-		ImageURL: &imageURL,
+		ImageURL: proxyImageURLPtr(&imageURL),
 		AltText:  altText,
 		IsActive: true,
 	})

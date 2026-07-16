@@ -52,6 +52,12 @@ type Config struct {
 	FacebookClientSecret string
 	FacebookRedirectURL  string
 
+	// Microsoft Sign-In (Azure AD / Microsoft identity platform)
+	MicrosoftClientID     string
+	MicrosoftClientSecret string
+	MicrosoftRedirectURL  string
+	MicrosoftTenantID     string // "common" allows both personal and work/school accounts
+
 	// Base URL (needed to build absolute redirect URIs)
 	BaseURL string
 }
@@ -105,6 +111,10 @@ func Load() (*Config, error) {
 		FacebookClientID:     envStr("FACEBOOK_CLIENT_ID", ""),
 		FacebookClientSecret: envStr("FACEBOOK_CLIENT_SECRET", ""),
 		FacebookRedirectURL:  envStr("FACEBOOK_REDIRECT_URL", ""),
+		MicrosoftClientID:     envStr("MICROSOFT_CLIENT_ID", ""),
+		MicrosoftClientSecret: envStr("MICROSOFT_CLIENT_SECRET", ""),
+		MicrosoftRedirectURL:  envStr("MICROSOFT_REDIRECT_URL", ""),
+		MicrosoftTenantID:     envStr("MICROSOFT_TENANT_ID", "common"),
 	}, nil
 }
 

@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en" x-data="displayApp" x-init="init()">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Display — PhotoApp</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+
+  <link rel="stylesheet" href="/tailwind.css">
+  <script src="/app.js"></script>
+  <script defer src="/alpinejs.min.js"></script>
+  <link rel="stylesheet" href="/fonts.css">
+
+  <style>
+    :root {
+      --brand:  #1a1a2e;
+      --accent: #e94560;
+      --surface:#f7f5f2;
+      --card:   #ffffff;
+      --muted:  #6b7280;
+      --border: #e5e1db;
+      /* Museum board palette */
+      --board-bg:     #f0ead6;
+      --board-border: #d6ccb0;
+      --frame-bg:     #e8e3d5;
+      --placard-bg:   #faf7f0;
+      --placard-border: #d6ccb0;
+    }
+    body { font-family: 'DM Sans', sans-serif; background: var(--surface); color: var(--brand); }
+    h1,h2,h3,h4 { font-family: 'DM Serif Display', serif; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+    @keyframes fadeIn  { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes scaleIn { from { opacity:0; transform:scale(.95);      } to { opacity:1; transform:scale(1);      } }
+    .animate-fadein  { animation: fadeIn  .3s ease both; }
+    .animate-scalein { animation: scaleIn .2s  ease both; }
+    [x-cloak] { display: none !important; }
+
+    /* Board — plain layout wrapper. Framing now comes entirely from each
+       photo's own matte/frame (presentation.matte / presentation.frame),
+       so this no longer has its own decorative background or border. */
+    .board {
+      padding: 0;
+    }
+
+    /* Photo slot — positioned absolutely within .display-grid per the
+       template's slot_positions (left/top/width/height set inline via
+       slotBoxStyle(), in percent — same geometry the Template Admin preview
+       pane renders). Each slot's placard is a separate, independently
+       positioned box (see .placard-box below), not nested here — its size
+       is fixed at the gallery level so it doesn't need to fit inside the
+       photo's own slot bounds. */
+    .slot-card {
+      display: flex;
+      box-sizing: border-box;
+      background: var(--surface);
+    }
+    /* .photo-area is the flexible region the slot gives to the photo
+       (everything except the placard). The framed photo NEVER stretches to
+       fill it — it keeps its own aspect ratio (see .photo-frame) and is
+       aligned within .photo-area per presentation.align (photoAreaStyle()).
+       Any leftover space is just .photo-area's own background showing
+       through — the page background, not a fill of its own. */
+    .photo-area {
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      background: var(--surface);
+    }
+    /* .photo-frame is the outer frame border (style set inline from the
+       template's presentation.frame); .photo-matte is the mat board inside
+       it (padding + color set inline from presentation.matte). Both are
+       independently optional — see frameOuterStyle()/matteInnerStyle().
+       The frame's own size comes from the photo's aspect ratio
+       (photoFrameSizeStyle()), capped to fit inside .photo-area — it is
+       never stretched to the slot's shape. */
+    .photo-frame {
+      border-radius: 4px;
+      overflow: hidden;
+      box-sizing: border-box;
+      display: flex;
+    }
+    .photo-matte {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+    }
+    /* .photo-link fills the matte's content box so the <img>'s
+       max-width/max-height:100% still resolves against the same area it
+       did before the link wrapper was added — sizing is unchanged, it's
+       just now clickable through to the photo's own page. */
+    .photo-link {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+    }
+    .photo-matte img {
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      display: block;
+    }
+    .photo-matte.empty-matte {
+      color: #c5bfad;
+      font-size: 0.75rem;
+    }
+    /* Placard box — independently positioned within the same 16:9 canvas as
+       the slot cards (position from the template's slot_positions[i].
+       placard; size/background/border from the gallery's placard_defaults —
+       see placardBoxStyle()). Each item inside is itself absolutely
+       positioned (placardItemStyle()) so items can be arranged freely
+       within the box, e.g. via the drag-to-position editor in Gallery
+       Admin's Placard Settings. */
+    .placard-box {
+      box-sizing: border-box;
+      border-radius: 4px;
+      overflow: hidden;
+      font-family: 'DM Sans', sans-serif;
+      /* Hover-to-expand: item font sizes are shrunk to stay true to the
+         placard's physical size on a small/compressed canvas (see
+         placardFontScale() in app.js) — which can leave text too small to
+         comfortably read. Hovering the box (after a short pause, so it
+         doesn't flicker on a passing cursor) scales the *whole* box up by
+         --placard-hover-scale (1 / that same shrink factor, set inline by
+         placardBoxStyle()), which grows the box and every pixel inside it
+         — text included — back to its full, un-shrunk design size. Moving
+         the mouse away collapses it again immediately (no delay on the
+         un-hovered transition). Doesn't affect layout of surrounding slots
+         since transform doesn't reflow an absolutely-positioned element's
+         siblings — it only changes how this box itself is painted.
+         --placard-hover-shift-x/-y (set on @mouseenter, see
+         handlePlacardHover()/applyPlacardHoverShift() in app.js) nudge the
+         expanded box back within the browser window if it would otherwise
+         grow off-screen near an edge — translate() composes with scale()
+         in the same transform rather than needing a second element. */
+      transform: translate(0, 0) scale(1);
+      transform-origin: center center;
+      transition: transform 0.12s ease-out;
+    }
+    .placard-box:hover {
+      transform: translate(var(--placard-hover-shift-x, 0px), var(--placard-hover-shift-y, 0px)) scale(var(--placard-hover-scale, 1));
+      transition: transform 0.18s ease-out 0.35s; /* 0.35s hover delay before expanding */
+      z-index: 40;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+    }
+    .placard-item {
+      white-space: nowrap;
+    }
+    .placard-empty {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      opacity: 0.4;
+      font-size: 0.7rem;
+      font-style: italic;
+      white-space: nowrap;
+    }
+
+    /* Display grid — a fixed-aspect canvas that each slot is positioned
+       within by percentage (see .slot-card / slotBoxStyle()), matching the
+       Template Admin preview pane exactly. */
+    .display-grid {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+    }
+
+    /* Edge-hover prev/next navigation — tall narrow arrows that only
+       appear when the cursor is near the left/right edge of the screen. */
+    .edge-nav {
+      position: fixed;
+      top: 56px; /* below the sticky navbar */
+      bottom: 0;
+      width: 7vw;
+      min-width: 56px;
+      max-width: 140px;
+      display: flex;
+      align-items: center;
+      z-index: 30;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .edge-nav-left  { left: 0;  justify-content: flex-start; }
+    .edge-nav-right { right: 0; justify-content: flex-end; }
+    .edge-nav-disabled { pointer-events: none; }
+
+    .edge-arrow {
+      width: 2.75rem;
+      height: 9rem;
+      margin: 0 0.5rem;
+      background: rgba(255,255,255,.92);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      box-shadow: 0 4px 18px rgba(0,0,0,.15);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--brand);
+      opacity: 0;
+      transform: scale(.92);
+      transition: opacity .18s ease, transform .18s ease;
+    }
+    .edge-nav:hover .edge-arrow { opacity: 1; transform: scale(1); }
+    .edge-nav-disabled .edge-arrow { opacity: 0 !important; }
+    .edge-arrow svg { width: 1.5rem; height: 1.5rem; }
+  </style>
+</head>
+
+<body class="min-h-screen flex flex-col">
+
+<!-- ══ NAVBAR ══════════════════════════════════════════════════════════════ -->
+<nav class="sticky top-0 z-40 bg-white border-b border-[var(--border)] shadow-sm">
+  <div class="max-w-7xl mx-auto px-4 flex items-center gap-3 h-14">
+
+    <!-- Hamburger -->
+    <div class="relative" x-data="{ open: false }">
+      <button @click="open = !open" class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="Menu">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+      <div x-show="open" @click.outside="open=false" x-transition
+           class="absolute left-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-52 py-1 animate-scalein">
+        <a href="/" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Photos</a>
+
+        <div x-data="galleriesNav">
+          <span x-show="!loaded" class="block px-4 py-2.5 text-sm text-gray-300 cursor-default">Galleries</span>
+          <span x-show="loaded && galleries.length === 0"
+                class="block px-4 py-2.5 text-sm text-gray-300 cursor-default">Galleries</span>
+          <a x-show="loaded && galleries.length > 0"
+             :href="galleriesHref"
+             class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Galleries</a>
+          <div x-show="loaded && galleries.length > 1">
+            <template x-for="g in galleries" :key="g.galleryid">
+              <a :href="'/galleries.html?galleryid=' + g.galleryid"
+                 class="block pl-7 pr-4 py-1.5 text-xs text-[var(--muted)] hover:text-[var(--brand)] hover:bg-gray-50 truncate">
+                <span x-text="g.title"></span>
+              </a>
+            </template>
+          </div>
+        </div>
+
+        <a href="/gallery-admin.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Gallery Admin</a>
+        <a href="/template-admin.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Template Admin</a>
+        <a href="/admin-master.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Admin</a>
+      </div>
+    </div>
+
+    <!-- Logo -->
+    <a href="/" class="flex items-center gap-2 shrink-0">
+      <div class="w-8 h-8 rounded-lg bg-[var(--brand)] flex items-center justify-center">
+        <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/>
+        </svg>
+      </div>
+      <span class="font-serif text-lg font-bold text-[var(--brand)] hidden sm:block">Phōtos</span>
+    </a>
+  </div>
+</nav>
+
+<!-- ══ MAIN ══════════════════════════════════════════════════════════════════ -->
+<main class="flex-1 max-w-6xl mx-auto w-full px-4 py-8">
+
+  <!-- Loading -->
+  <div x-show="loading" class="flex flex-col items-center justify-center py-32 gap-4">
+    <svg class="w-8 h-8 text-[var(--accent)] animate-spin" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+    </svg>
+    <p class="text-[var(--muted)] text-sm">Loading display…</p>
+  </div>
+
+  <!-- Error -->
+  <div x-show="!loading && error" class="text-center py-32">
+    <p class="text-[var(--muted)]" x-text="error"></p>
+    <a href="/galleries.html" class="mt-4 inline-block text-sm text-[var(--accent)] hover:underline">Back to Galleries</a>
+  </div>
+
+  <!-- Museum exhibit board — photos and placards only -->
+  <div x-show="!loading && !error && display" class="animate-fadein">
+    <div class="board">
+
+      <!-- Empty display (no slots) -->
+      <div x-show="display && display.slots && display.slots.length === 0"
+           class="py-16 text-center text-[var(--muted)] text-sm">
+        This display has no photo slots yet.
+      </div>
+
+      <!-- Photo slots grid — each slot absolutely positioned per the
+           template's slot_positions (slotBoxStyle), matching the Template
+           Admin preview pane. -->
+      <div x-show="display && display.slots && display.slots.length > 0"
+           class="display-grid" x-ref="grid">
+        <template x-for="(slot, i) in (display && display.slots || [])" :key="slot.slotid">
+          <div class="slot-card" :style="slotBoxStyle(i)">
+            <!-- Photo area — the framed photo keeps its own aspect ratio and
+                 is aligned within any leftover space per presentation.align;
+                 that leftover space is always just background, never a frame
+                 that's been stretched out of shape. Frame size (width/height)
+                 is measured in JS (layoutFrames()) so the matte/frame widths
+                 stay exactly uniform on every side — see computeFrameBoxSize
+                 comment in app.js. -->
+            <div class="photo-area" :style="photoAreaStyle()">
+              <div class="photo-frame" :style="frameOuterStyle(i) + photoFrameSizeStyle(i, slot)">
+                <template x-if="slot.photo">
+                  <div class="photo-matte" :style="matteInnerStyle(i)">
+                    <a :href="'/photo.html?photoid=' + slot.photo.photoid"
+                       target="_blank"
+                       class="photo-link">
+                      <img :src="thumbUrl(slot.photo.imageurl, 600)"
+                           :alt="'Slot ' + slot.slot_index"
+                           loading="lazy" />
+                    </a>
+                  </div>
+                </template>
+                <!-- Empty slot placeholder -->
+                <template x-if="!slot.photo">
+                  <div class="photo-matte empty-matte" :style="matteInnerStyle(i)">
+                    <span>Empty</span>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- Placards — independently positioned within the same 16:9 canvas
+             (position from the template, size/appearance/content from the
+             gallery's Placard Settings). Rendered as a separate loop rather
+             than nested in .slot-card since a placard isn't confined to its
+             slot's own bounds. -->
+        <template x-for="(slot, i) in (display && display.slots || [])" :key="'placard-' + slot.slotid">
+          <div class="placard-box" :style="placardBoxStyle(i)" @mouseenter="handlePlacardHover($event)">
+            <template x-for="item in placardItemsFor(slot)" :key="item.id">
+              <div class="placard-item" :style="item.style" x-text="item.text"></div>
+            </template>
+            <span x-show="placardItemsFor(slot).length === 0" class="placard-empty">No caption</span>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- ══ EDGE-HOVER PREV / NEXT ═════════════════════════════════════════════ -->
+<a class="edge-nav edge-nav-left"
+   x-show="!loading && !error && display"
+   :class="{ 'edge-nav-disabled': !prevDisplayId }"
+   @click.prevent="goToPrev()" href="#" aria-label="Previous display">
+  <span class="edge-arrow">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+    </svg>
+  </span>
+</a>
+<a class="edge-nav edge-nav-right"
+   x-show="!loading && !error && display"
+   :class="{ 'edge-nav-disabled': !nextDisplayId }"
+   @click.prevent="goToNext()" href="#" aria-label="Next display">
+  <span class="edge-arrow">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+    </svg>
+  </span>
+</a>
+
+</body>
+</html>

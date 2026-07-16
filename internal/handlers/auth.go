@@ -79,25 +79,35 @@ func (h *AuthHandler) clearSessionCookie(w http.ResponseWriter) {
 	})
 }
 
-// LookupUserFlags returns permission flags for an authenticated user.
+// LookupUserFlags returns per-user data for an authenticated user.
 // Called once per request after the user ID is resolved.
 func (h *AuthHandler) LookupUserFlags(ctx context.Context, userID string) middleware.UserFlags {
 	var flags middleware.UserFlags
 	_ = h.DB.QueryRow(ctx, `
-		SELECT authorized_non_public, username FROM users
+		SELECT username FROM users
 		WHERE  userid = $1 AND deleted_at IS NULL
-	`, userID).Scan(&flags.AuthorizedNonPublic, &flags.Username)
+	`, userID).Scan(&flags.Username)
 	return flags
 }
 
 // LookupSession returns the userID for a valid session token, or "".
+//
+// Phase 6b: joins users.account_enabled so a disabled account's existing
+// sessions stop working the moment an admin flips the toggle, without
+// needing to hunt down and revoke every outstanding session token — this is
+// re-checked on every request since Auth middleware calls LookupSession per
+// request rather than caching it.
 func (h *AuthHandler) LookupSession(ctx context.Context, token string) string {
 	var userID string
 	err := h.DB.QueryRow(ctx, `
-		SELECT userid::text FROM sessions
-		WHERE  token_hash = $1
-		  AND  revoked_at IS NULL
-		  AND  expires_at > NOW()
+		SELECT s.userid::text
+		FROM   sessions s
+		JOIN   users    u ON u.userid = s.userid
+		WHERE  s.token_hash     = $1
+		  AND  s.revoked_at     IS NULL
+		  AND  s.expires_at     > NOW()
+		  AND  u.deleted_at     IS NULL
+		  AND  u.account_enabled = TRUE
 	`, token).Scan(&userID)
 	if err != nil {
 		return ""
@@ -221,6 +231,8 @@ func (h *AuthHandler) findOrCreateOAuthUser(ctx context.Context, provider, sub, 
 		col = "apple_id"
 	case "facebook":
 		col = "facebook_id"
+	case "microsoft":
+		col = "microsoft_id"
 	}
 
 	var userID string
@@ -321,9 +333,10 @@ func (h *AuthHandler) uniqueUsername(ctx context.Context, base string) string {
 // Public endpoint; no authentication required.
 func (h *AuthHandler) Config(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	middleware.WriteJSON(w, http.StatusOK, map[string]bool{
-		"googleEnabled":   h.Cfg.GoogleClientID != "",
-		"appleEnabled":    h.Cfg.AppleClientID != "",
-		"facebookEnabled": h.Cfg.FacebookClientID != "",
+		"googleEnabled":    h.Cfg.GoogleClientID != "",
+		"appleEnabled":     h.Cfg.AppleClientID != "",
+		"facebookEnabled":  h.Cfg.FacebookClientID != "",
+		"microsoftEnabled": h.Cfg.MicrosoftClientID != "",
 	})
 }
 
@@ -687,6 +700,109 @@ func (h *AuthHandler) FacebookCallback(w http.ResponseWriter, r *http.Request, _
 	h.finishLogin(w, r, userID)
 }
 
+// ── Microsoft Sign-In ─────────────────────────────────────────────────────────
+//
+// golang.org/x/oauth2 has no premade "microsoft" endpoint package (unlike
+// google/facebook), so the Microsoft identity platform v2.0 endpoints are
+// built directly. The "common" tenant (the default; see
+// config.MicrosoftTenantID) accepts both personal Microsoft accounts and
+// work/school (Azure AD) accounts. Set MICROSOFT_TENANT_ID to a specific
+// tenant GUID to restrict sign-in to a single organization.
+
+func microsoftEndpoint(tenant string) oauth2.Endpoint {
+	if tenant == "" {
+		tenant = "common"
+	}
+	return oauth2.Endpoint{
+		AuthURL:  fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/authorize", tenant),
+		TokenURL: fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", tenant),
+	}
+}
+
+func (h *AuthHandler) microsoftConfig() *oauth2.Config {
+	redirectURL := h.Cfg.MicrosoftRedirectURL
+	if redirectURL == "" {
+		redirectURL = h.Cfg.BaseURL + "/auth/microsoft/callback"
+	}
+	return &oauth2.Config{
+		ClientID:     h.Cfg.MicrosoftClientID,
+		ClientSecret: h.Cfg.MicrosoftClientSecret,
+		RedirectURL:  redirectURL,
+		// openid/profile/email are the standard OIDC scopes; User.Read lets us
+		// call Microsoft Graph's /me endpoint for the user's name and email.
+		Scopes:   []string{"openid", "profile", "email", "User.Read"},
+		Endpoint: microsoftEndpoint(h.Cfg.MicrosoftTenantID),
+	}
+}
+
+// GET /auth/microsoft
+func (h *AuthHandler) MicrosoftLogin(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	if h.Cfg.MicrosoftClientID == "" {
+		http.Error(w, "Microsoft login not configured", http.StatusNotImplemented)
+		return
+	}
+	state := uuid.New().String()
+	http.SetCookie(w, &http.Cookie{Name: "oauth_state", Value: state, Path: "/", HttpOnly: true, MaxAge: 600})
+	http.Redirect(w, r, h.microsoftConfig().AuthCodeURL(state, oauth2.AccessTypeOnline), http.StatusTemporaryRedirect)
+}
+
+// GET /auth/microsoft/callback
+func (h *AuthHandler) MicrosoftCallback(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	stateCookie, err := r.Cookie("oauth_state")
+	if err != nil || stateCookie.Value != r.URL.Query().Get("state") {
+		http.Error(w, "Invalid OAuth state", http.StatusBadRequest)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: "oauth_state", Value: "", MaxAge: -1, Path: "/"})
+
+	token, err := h.microsoftConfig().Exchange(r.Context(), r.URL.Query().Get("code"))
+	if err != nil {
+		slog.Error("Microsoft token exchange failed", "error", err)
+		http.Error(w, "Token exchange failed", http.StatusInternalServerError)
+		return
+	}
+
+	resp, err := h.microsoftConfig().Client(r.Context(), token).
+		Get("https://graph.microsoft.com/v1.0/me")
+	if err != nil {
+		http.Error(w, "Failed to fetch user info", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	var info struct {
+		ID                string `json:"id"`
+		DisplayName       string `json:"displayName"`
+		Mail              string `json:"mail"`
+		UserPrincipalName string `json:"userPrincipalName"`
+	}
+	if err := json.Unmarshal(body, &info); err != nil || info.ID == "" {
+		http.Error(w, "Invalid user info from Microsoft", http.StatusInternalServerError)
+		return
+	}
+
+	// Personal Microsoft accounts (and some tenants) leave "mail" null; fall
+	// back to the sign-in identifier (userPrincipalName) in that case.
+	email := info.Mail
+	if email == "" {
+		email = info.UserPrincipalName
+	}
+
+	// Microsoft Graph does not expose the profile photo as a plain URL (it's
+	// a binary endpoint requiring the user's access token), so unlike
+	// Google/Facebook we don't pass a picture here — findOrCreateOAuthUser
+	// falls back to a generated avatar, same as local/email accounts.
+	userID, err := h.findOrCreateOAuthUser(r.Context(), "microsoft", info.ID, email, info.DisplayName, "")
+	if err != nil {
+		slog.Error("findOrCreateOAuthUser failed", "error", err)
+		http.Error(w, "User creation failed", http.StatusInternalServerError)
+		return
+	}
+
+	h.finishLogin(w, r, userID)
+}
+
 // ── Local email/password auth ─────────────────────────────────────────────────
 
 type localAuthRequest struct {
@@ -778,16 +894,24 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request, _ httprouter
 	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
 
 	var userID, hash string
+	var accountEnabled bool
 	err := h.DB.QueryRow(r.Context(), `
-		SELECT userid::text, password_hash FROM users
+		SELECT userid::text, password_hash, account_enabled FROM users
 		WHERE  (email=$1 OR username=$1) AND provider='local' AND deleted_at IS NULL
-	`, req.Email).Scan(&userID, &hash)
+	`, req.Email).Scan(&userID, &hash, &accountEnabled)
 	if err != nil {
 		middleware.WriteError(w, http.StatusUnauthorized, "invalid email or password")
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)); err != nil {
 		middleware.WriteError(w, http.StatusUnauthorized, "invalid email or password")
+		return
+	}
+	// Phase 6b: give a clear reason here rather than letting the login appear
+	// to succeed only for LookupSession to immediately reject the resulting
+	// cookie on the very next request.
+	if !accountEnabled {
+		middleware.WriteError(w, http.StatusForbidden, "this account has been disabled")
 		return
 	}
 

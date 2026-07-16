@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en" x-data="galleriesApp" x-init="init()">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Galleries — PhotoApp</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+
+  <link rel="stylesheet" href="/tailwind.css">
+  <script src="/app.js"></script>
+  <script defer src="/alpinejs.min.js"></script>
+  <link rel="stylesheet" href="/fonts.css">
+
+  <style>
+    :root {
+      --brand:  #1a1a2e;
+      --accent: #e94560;
+      --surface:#f7f5f2;
+      --card:   #ffffff;
+      --muted:  #6b7280;
+      --border: #e5e1db;
+    }
+    body { font-family: 'DM Sans', sans-serif; background: var(--surface); color: var(--brand); }
+    h1,h2,h3 { font-family: 'DM Serif Display', serif; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+    @keyframes fadeIn  { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes scaleIn { from { opacity:0; transform:scale(.95);      } to { opacity:1; transform:scale(1);      } }
+    .animate-fadein  { animation: fadeIn  .25s ease both; }
+    .animate-scalein { animation: scaleIn .2s  ease both; }
+    .backdrop { background: rgba(26,26,46,.55); backdrop-filter: blur(3px); }
+    [x-cloak] { display: none !important; }
+    img.avatar { background-color: #e5e7eb; }
+
+    .gallery-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      cursor: pointer;
+      transition: box-shadow .2s, transform .15s;
+    }
+    .gallery-card:hover {
+      box-shadow: 0 4px 16px rgba(26,26,46,.12);
+      transform: translateY(-2px);
+    }
+  </style>
+</head>
+
+<body class="min-h-screen flex flex-col">
+
+<!-- ══ NAVBAR ══════════════════════════════════════════════════════════════ -->
+<nav class="sticky top-0 z-40 bg-white border-b border-[var(--border)] shadow-sm">
+  <div class="max-w-7xl mx-auto px-4 flex items-center gap-3 h-14">
+
+    <!-- Hamburger -->
+    <div class="relative" x-data="{ open: false }">
+      <button @click="open = !open" class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="Menu">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+      <div x-show="open" @click.outside="open=false" x-transition
+           class="absolute left-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-52 py-1 animate-scalein">
+        <a href="/" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Photos</a>
+
+        <div x-data="galleriesNav">
+          <span x-show="!loaded" class="block px-4 py-2.5 text-sm text-gray-300 cursor-default">Galleries</span>
+          <span x-show="loaded && galleries.length === 0"
+                class="block px-4 py-2.5 text-sm text-gray-300 cursor-default">Galleries</span>
+          <a x-show="loaded && galleries.length > 0"
+             :href="galleriesHref"
+             class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Galleries</a>
+          <div x-show="loaded && galleries.length > 1">
+            <template x-for="g in galleries" :key="g.galleryid">
+              <a :href="'/galleries.html?galleryid=' + g.galleryid"
+                 class="block pl-7 pr-4 py-1.5 text-xs text-[var(--muted)] hover:text-[var(--brand)] hover:bg-gray-50 truncate">
+                <span x-text="g.title"></span>
+              </a>
+            </template>
+          </div>
+        </div>
+
+        <a href="/gallery-admin.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Gallery Admin</a>
+        <a href="/template-admin.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Template Admin</a>
+        <a href="/admin-master.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Admin</a>
+      </div>
+    </div>
+
+    <!-- Logo -->
+    <a href="/" class="flex items-center gap-2 shrink-0">
+      <div class="w-8 h-8 rounded-lg bg-[var(--brand)] flex items-center justify-center">
+        <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/>
+        </svg>
+      </div>
+      <span class="font-serif text-lg font-bold text-[var(--brand)] hidden sm:block">Phōtos</span>
+    </a>
+
+    <div class="ml-auto">
+      <!-- auth placeholder - could add user chip here -->
+    </div>
+  </div>
+</nav>
+
+<!-- ══ MAIN ══════════════════════════════════════════════════════════════════ -->
+<main class="flex-1 max-w-5xl mx-auto w-full px-4 py-10">
+
+  <!-- Loading state (redirect in progress or data loading) -->
+  <div x-show="loading" class="flex flex-col items-center justify-center py-32 gap-4">
+    <svg class="w-8 h-8 text-[var(--accent)] animate-spin" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+    </svg>
+    <p class="text-[var(--muted)] text-sm">Loading galleries…</p>
+  </div>
+
+  <!-- Error state -->
+  <div x-show="!loading && error" class="text-center py-32">
+    <p class="text-[var(--muted)]" x-text="error"></p>
+    <a href="/" class="mt-4 inline-block text-sm text-[var(--accent)] hover:underline">Back to Photos</a>
+  </div>
+
+  <!-- Gallery list -->
+  <div x-show="!loading && !error && galleries.length > 0" class="animate-fadein">
+    <h1 class="text-3xl font-serif mb-2">Galleries</h1>
+    <p class="text-[var(--muted)] text-sm mb-8">Select a gallery to view its displays.</p>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+      <template x-for="g in galleries" :key="g.galleryid">
+        <div class="gallery-card" @click="navigateToGallery(g.galleryid)">
+          <!-- Decorative icon -->
+          <div class="w-10 h-10 rounded-lg bg-[var(--surface)] flex items-center justify-center mb-3">
+            <svg class="w-5 h-5 text-[var(--muted)]" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                    d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3 3h18M3 21h18M3 9h.008v.008H3V9z"/>
+            </svg>
+          </div>
+          <h2 class="text-lg font-serif font-semibold mb-1 leading-tight" x-text="g.title"></h2>
+          <p class="text-xs text-[var(--muted)]">
+            <span x-text="g.display_count"></span>
+            <span x-text="g.display_count === 1 ? ' display' : ' displays'"></span>
+          </p>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- Empty state -->
+  <div x-show="!loading && !error && galleries.length === 0" class="text-center py-32">
+    <svg class="w-12 h-12 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round"
+            d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3 3h18M3 21h18M3 9h.008v.008H3V9z"/>
+    </svg>
+    <p class="text-[var(--muted)] mb-2">No galleries yet.</p>
+    <a href="/gallery-admin.html" class="text-sm text-[var(--accent)] hover:underline">Create a gallery →</a>
+  </div>
+
+</main>
+
+<!-- ══ TOAST ═══════════════════════════════════════════════════════════════ -->
+<div x-show="toast.visible" x-transition
+     class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[var(--brand)] text-white text-sm px-5 py-2.5 rounded-full shadow-lg pointer-events-none"
+     x-text="toast.message">
+</div>
+
+</body>
+</html>

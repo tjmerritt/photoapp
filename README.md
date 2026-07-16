@@ -38,7 +38,7 @@ make run
 
 ## Authentication
 
-PhotoApp supports four login methods: Google, Apple, Facebook, and local email/password. Each requires configuration before use.
+PhotoApp supports five login methods: Google, Apple, Facebook, Microsoft, and local email/password. Each requires configuration before use.
 
 ### Google OAuth2 Setup
 
@@ -166,6 +166,52 @@ FACEBOOK_REDIRECT_URL=http://localhost:8080/auth/facebook/callback
 
 ---
 
+### Microsoft Sign-In Setup
+
+**1. Register an app in Azure AD**
+
+1. Go to [https://portal.azure.com](https://portal.azure.com) → **Microsoft Entra ID → App registrations → New registration**.
+2. Enter a name (e.g. `PhotoApp`).
+3. Under **Supported account types**, choose one:
+   - **Accounts in any organizational directory and personal Microsoft accounts** — the default (`common` tenant) this app is configured for; lets both work/school and personal Microsoft accounts sign in.
+   - A single-tenant option, if you want to restrict sign-in to one organization — see step 4 below.
+4. Under **Redirect URI**, select platform **Web** and enter:
+   - Development: `http://localhost:8080/auth/microsoft/callback`
+   - Production: `https://yourdomain.com/auth/microsoft/callback`
+5. Click **Register**.
+
+**2. Create a client secret**
+
+1. In the app's page, go to **Certificates & secrets → Client secrets → New client secret**.
+2. Add a description and expiry, click **Add**.
+3. Copy the secret **Value** immediately (this is your `MICROSOFT_CLIENT_SECRET`) — it is not shown again.
+
+**3. Grant the Microsoft Graph permission**
+
+1. Go to **API permissions**. `User.Read` (delegated, Microsoft Graph) is added by default — this is all PhotoApp needs (reads the signed-in user's name/email via `/me`).
+
+**4. Gather your credentials**
+
+| Value | Where to find it |
+|-------|-------------------|
+| **Application (client) ID** | App registration's **Overview** page — this is your `MICROSOFT_CLIENT_ID` |
+| **Client secret** | The **Value** copied in step 2 |
+| **Directory (tenant) ID** | Only needed to restrict sign-in to a single organization; found on the **Overview** page |
+
+**5. Set environment variables**
+
+```env
+MICROSOFT_CLIENT_ID=your-application-client-id
+MICROSOFT_CLIENT_SECRET=your-client-secret
+MICROSOFT_REDIRECT_URL=http://localhost:8080/auth/microsoft/callback
+# Optional: restrict to a single Azure AD tenant instead of "common"
+# MICROSOFT_TENANT_ID=your-directory-tenant-id
+```
+
+> **Note:** Microsoft Graph's `/me` endpoint does not return a plain profile-photo URL (the photo lives behind a separate, authenticated binary endpoint), so unlike Google/Facebook, Microsoft sign-in does not import a profile picture — new accounts get the same generated avatar as local email/password signups.
+
+---
+
 ### Local Email/Password Auth
 
 No external setup required. Registration is rate-limited per IP: the first attempt is allowed immediately, then the wait doubles on each subsequent attempt (10 s → 20 s → 40 s → …).
@@ -195,6 +241,10 @@ SESSION_SECRET=a-long-random-string-at-least-32-chars
 | `FACEBOOK_CLIENT_ID` | For Facebook login | App ID from Facebook Developer portal |
 | `FACEBOOK_CLIENT_SECRET` | For Facebook login | App Secret from Facebook Developer portal |
 | `FACEBOOK_REDIRECT_URL` | Optional | Overrides `BASE_URL + /auth/facebook/callback` |
+| `MICROSOFT_CLIENT_ID` | For Microsoft login | Application (client) ID from Azure AD app registration |
+| `MICROSOFT_CLIENT_SECRET` | For Microsoft login | Client secret from Azure AD app registration |
+| `MICROSOFT_REDIRECT_URL` | Optional | Overrides `BASE_URL + /auth/microsoft/callback` |
+| `MICROSOFT_TENANT_ID` | Optional | Defaults to `common` (personal + work/school accounts); set to a tenant GUID to restrict to one organization |
 
 ---
 

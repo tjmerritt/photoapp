@@ -9,6 +9,7 @@ import (
 	"github.com/tjmerritt/photoapp/internal/db"
 	"github.com/tjmerritt/photoapp/internal/middleware"
 	"github.com/tjmerritt/photoapp/internal/models"
+	"github.com/tjmerritt/photoapp/internal/permissions"
 )
 
 // SearchHandler handles GET /api/v1/search?q=<query>
@@ -26,7 +27,8 @@ import (
 //
 // Any remaining tokens are scored as free text across all fields.
 type SearchHandler struct {
-	DB *db.Pool
+	DB      *db.Pool
+	Checker *permissions.Checker
 }
 
 // ── Query Parsing ─────────────────────────────────────────────────────────────
@@ -143,12 +145,15 @@ func parseSearchQuery(raw string) parsedQuery {
 // Fixed parameters:
 //
 //	$1 = exhibitionID string ('' means all exhibitions)
-//	$2 = canSeeNonPublic bool
+//	$2 = canSeePrivate bool (true when caller holds PrivatePhotoView)
+//	$3 = currentUserID string ('' when anonymous) — lets a photo's own owner
+//	     find it in search even when it's private and they lack
+//	     PrivatePhotoView (see the owner exception in the WHERE clause below).
 //
-// Additional parameters are appended dynamically starting at $3.
-func buildSearchSQL(pq parsedQuery, exhibitionID string, canSeeNonPublic bool) (string, []interface{}) {
-	args := []interface{}{exhibitionID, canSeeNonPublic}
-	argN := 2
+// Additional parameters are appended dynamically starting at $4.
+func buildSearchSQL(pq parsedQuery, exhibitionID string, canSeePrivate bool, currentUserID string) (string, []interface{}) {
+	args := []interface{}{exhibitionID, canSeePrivate, currentUserID}
+	argN := 3
 
 	// next registers a new query argument and returns its placeholder.
 	next := func(v interface{}) string {
@@ -208,9 +213,9 @@ scores(photoid, total_score) AS (
 
 	// ── SELECT ────────────────────────────────────────────────────────────────
 	if len(pq.FreeTerms) > 0 {
-		b.WriteString("SELECT p.photoid::text, p.image_url, p.image_width, p.image_height, MAX(sc.total_score) AS sort_score\n")
+		b.WriteString("SELECT p.photoid::text, p.image_url, p.image_width, p.image_height, COALESCE(p.title_text, ''), MAX(sc.total_score) AS sort_score\n")
 	} else {
-		b.WriteString("SELECT p.photoid::text, p.image_url, p.image_width, p.image_height, 0 AS sort_score\n")
+		b.WriteString("SELECT p.photoid::text, p.image_url, p.image_width, p.image_height, COALESCE(p.title_text, ''), 0 AS sort_score\n")
 	}
 	b.WriteString("FROM photos p\n")
 
@@ -297,7 +302,7 @@ scores(photoid, total_score) AS (
 	// ── WHERE ─────────────────────────────────────────────────────────────────
 	b.WriteString("WHERE p.deleted_at IS NULL\n")
 	b.WriteString("  AND ($1 = '' OR p.exhibitionid::text = $1)\n")
-	b.WriteString("  AND (p.is_public OR $2)\n")
+	b.WriteString("  AND (p.is_public OR $2 OR ($3 <> '' AND p.owner_userid::text = $3))\n")
 
 	for _, tt := range pq.TitleTexts {
 		ta := next(tt)
@@ -311,7 +316,7 @@ scores(photoid, total_score) AS (
 	// ── GROUP BY + ORDER ───────────────────────────────────────────────────────
 	// GROUP BY collapses duplicate rows from multi-row JOINs (e.g. multiple labels).
 	// created_at is included so it can be used as a tiebreaker without a subquery.
-	b.WriteString("GROUP BY p.photoid, p.image_url, p.image_width, p.image_height, p.created_at\n")
+	b.WriteString("GROUP BY p.photoid, p.image_url, p.image_width, p.image_height, p.title_text, p.created_at\n")
 	b.WriteString("ORDER BY sort_score DESC, p.created_at DESC, p.photoid\n")
 	b.WriteString("LIMIT 13\n")
 
@@ -343,9 +348,10 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	exhibitionID := middleware.ExhibitionID(ctx)
-	canSeeNonPublic := middleware.AuthorizedNonPublic(ctx)
+	userID, _ := middleware.UserID(ctx)
+	canSeePrivate, _ := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermPrivatePhotoView)
 
-	sql, args := buildSearchSQL(pq, exhibitionID, canSeeNonPublic)
+	sql, args := buildSearchSQL(pq, exhibitionID, canSeePrivate, userID)
 
 	rows, err := h.DB.Query(ctx, sql, args...)
 	if err != nil {
@@ -359,7 +365,7 @@ func (h *SearchHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var sr models.SearchResult
 		var sortScore int64 // consumed for ordering, not returned to client
-		if err := rows.Scan(&sr.PhotoID, &sr.ImageURL, &sr.Width, &sr.Height, &sortScore); err != nil {
+		if err := rows.Scan(&sr.PhotoID, &sr.ImageURL, &sr.Width, &sr.Height, &sr.Title, &sortScore); err != nil {
 			slog.Error("ServeHTTP", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return

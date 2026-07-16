@@ -20,12 +20,11 @@ import (
 type ctxKey string
 
 const (
-	ctxUserID              ctxKey = "userid"
-	ctxRequestID           ctxKey = "requestid"
-	ctxExhibitionID        ctxKey = "exhibitionid"
-	ctxAuthorizedNonPublic ctxKey = "authorized_non_public"
-	ctxUsername            ctxKey = "username"
-	ctxSessionID           ctxKey = "sessionid"
+	ctxUserID       ctxKey = "userid"
+	ctxRequestID    ctxKey = "requestid"
+	ctxExhibitionID ctxKey = "exhibitionid"
+	ctxUsername     ctxKey = "username"
+	ctxSessionID    ctxKey = "sessionid"
 )
 
 // ExhibitionID retrieves the current exhibition ID from the context.
@@ -111,14 +110,6 @@ func SessionID(ctx context.Context) string {
 func UserID(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(ctxUserID).(string)
 	return v, ok && v != ""
-}
-
-// AuthorizedNonPublic reports whether the current user is allowed to see
-// non-public photos. Returns false for unauthenticated requests and for users
-// whose authorized_non_public flag is not set.
-func AuthorizedNonPublic(ctx context.Context) bool {
-	v, _ := ctx.Value(ctxAuthorizedNonPublic).(bool)
-	return v
 }
 
 // MustUserID retrieves the user ID and panics if missing.
@@ -219,8 +210,7 @@ type UserFlagsLookup func(ctx context.Context, userID string) UserFlags
 
 // UserFlags holds per-user data loaded once per request after auth resolves.
 type UserFlags struct {
-	AuthorizedNonPublic bool
-	Username            string
+	Username string
 }
 
 // Auth resolves the acting user from:
@@ -228,7 +218,7 @@ type UserFlags struct {
 //  2. The X-User-ID header (dev/test fallback), only when no cookie is present.
 //
 // If flagsLookup is non-nil it is called to load per-user flags (e.g.
-// authorized_non_public) and store them in the context.
+// username) and store them in the context.
 //
 // Unauthenticated requests pass through with an empty user ID in context.
 func Auth(headerName string, sessionLookup SessionLookup, flagsLookup UserFlagsLookup) func(http.Handler) http.Handler {
@@ -261,7 +251,6 @@ func Auth(headerName string, sessionLookup SessionLookup, flagsLookup UserFlagsL
 				}
 				if flagsLookup != nil {
 					flags := flagsLookup(ctx, uid)
-					ctx = context.WithValue(ctx, ctxAuthorizedNonPublic, flags.AuthorizedNonPublic)
 					if flags.Username != "" {
 						ctx = context.WithValue(ctx, ctxUsername, flags.Username)
 					}

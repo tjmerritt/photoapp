@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en" x-data="templateAdminApp" x-init="init()">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Template Admin — PhotoApp</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+
+  <link rel="stylesheet" href="/tailwind.css">
+  <script src="/app.js"></script>
+  <script defer src="/alpinejs.min.js"></script>
+  <link rel="stylesheet" href="/fonts.css">
+
+  <style>
+    :root {
+      --brand:  #1a1a2e;
+      --accent: #e94560;
+      --surface:#f7f5f2;
+      --card:   #ffffff;
+      --muted:  #6b7280;
+      --border: #e5e1db;
+    }
+    body { font-family: 'DM Sans', sans-serif; background: var(--surface); color: var(--brand); }
+    h1,h2,h3 { font-family: 'DM Serif Display', serif; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+    @keyframes fadeIn  { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes scaleIn { from { opacity:0; transform:scale(.95);      } to { opacity:1; transform:scale(1);      } }
+    .animate-fadein  { animation: fadeIn  .25s ease both; }
+    .animate-scalein { animation: scaleIn .2s  ease both; }
+    [x-cloak] { display: none !important; }
+    .backdrop { background: rgba(26,26,46,.55); backdrop-filter: blur(3px); }
+    .modal-card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 20px 50px rgba(0,0,0,.25);
+      width: 100%;
+      max-width: 26rem;
+      padding: 1.25rem;
+    }
+
+    .template-row {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .template-row-header {
+      padding: 1rem 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .template-editor {
+      padding: 1.25rem;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .btn-icon {
+      padding: 0.25rem;
+      border-radius: 5px;
+      color: var(--muted);
+      cursor: pointer;
+      transition: background .15s, color .15s;
+      background: none;
+      border: none;
+    }
+    .btn-icon:hover { background: var(--border); color: var(--brand); }
+    .btn-icon.danger:hover { background: #fee2e2; color: #dc2626; }
+
+    .btn-primary {
+      background: var(--brand);
+      color: #fff;
+      border: none;
+      padding: 0.5rem 1rem;
+      border-radius: 7px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity .15s;
+    }
+    .btn-primary:hover { opacity: .85; }
+    .btn-primary:disabled { opacity: .4; cursor: default; }
+
+    .btn-secondary {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--brand);
+      padding: 0.5rem 1rem;
+      border-radius: 7px;
+      font-size: 0.875rem;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .btn-secondary:hover { background: var(--surface); }
+
+    .input, textarea.input {
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.875rem;
+      background: #fff;
+      color: var(--brand);
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+      font-family: inherit;
+    }
+    textarea.input {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.75rem;
+      line-height: 1.4;
+      resize: vertical;
+    }
+    .input:focus, textarea.input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(233,69,96,.12);
+    }
+
+    .template-preview {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .preview-slot {
+      position: absolute;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.7rem;
+      color: var(--muted);
+      box-sizing: border-box;
+    }
+    .template-preview.mini {
+      aspect-ratio: 16 / 9;
+      max-width: 96px;
+    }
+    .template-preview.mini .preview-slot { font-size: 0; }
+
+    /* Drag-to-position/resize (editor preview only — the mini thumbnail in
+       each template's row header is read-only, no handlers are attached
+       there, and font-size:0 already hides its own numbering). */
+    .template-preview:not(.mini) .preview-slot {
+      cursor: move;
+      user-select: none;
+    }
+    /* Small square handles at each corner of a slot — drag one to resize,
+       the opposite corner stays fixed (see resizeSlotFromCorner() in
+       app.js). Sized/positioned to straddle the slot's own border so
+       they're easy to grab right at the corner. */
+    .resize-handle {
+      position: absolute;
+      width: 10px;
+      height: 10px;
+      background: #fff;
+      border: 1.5px solid var(--accent);
+      border-radius: 2px;
+      z-index: 3;
+    }
+    .resize-handle.nw { top: -5px;    left: -5px;   cursor: nwse-resize; }
+    .resize-handle.ne { top: -5px;    right: -5px;  cursor: nesw-resize; }
+    .resize-handle.sw { bottom: -5px; left: -5px;   cursor: nesw-resize; }
+    .resize-handle.se { bottom: -5px; right: -5px;  cursor: nwse-resize; }
+
+    /* Rough marker for each slot's placard position (slot_positions[i].
+       placard). Its real size is set at the gallery level (Gallery Admin's
+       Placard Settings), so this preview uses a fixed guess just to show
+       roughly where it'll sit relative to the slot. Draggable in the editor
+       preview (see startPlacardDrag() in app.js) — dropping it near an edge
+       re-attaches the placard to that side (placardDragToConfig()). */
+    .preview-placard {
+      position: absolute;
+      width: 16%;
+      height: 6%;
+      border: 1px dashed var(--accent);
+      background: rgba(233,69,96,.08);
+      border-radius: 3px;
+      font-size: 0.55rem;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+    }
+    .template-preview:not(.mini) .preview-placard {
+      pointer-events: auto;
+      cursor: grab;
+      user-select: none;
+    }
+    .template-preview:not(.mini) .preview-placard:active { cursor: grabbing; }
+    .template-preview.mini .preview-placard { display: none; }
+  </style>
+</head>
+
+<body class="min-h-screen flex flex-col">
+
+<!-- ══ NAVBAR ══════════════════════════════════════════════════════════════ -->
+<nav class="sticky top-0 z-40 bg-white border-b border-[var(--border)] shadow-sm">
+  <div class="max-w-7xl mx-auto px-4 flex items-center gap-3 h-14">
+
+    <!-- Hamburger -->
+    <div class="relative" x-data="{ open: false }">
+      <button @click="open = !open" class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="Menu">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+      <div x-show="open" @click.outside="open=false" x-transition
+           class="absolute left-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-52 py-1 animate-scalein">
+        <a href="/" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Photos</a>
+
+        <div x-data="galleriesNav">
+          <span x-show="!loaded" class="block px-4 py-2.5 text-sm text-gray-300 cursor-default">Galleries</span>
+          <span x-show="loaded && galleries.length === 0"
+                class="block px-4 py-2.5 text-sm text-gray-300 cursor-default">Galleries</span>
+          <a x-show="loaded && galleries.length > 0"
+             :href="galleriesHref"
+             class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Galleries</a>
+          <div x-show="loaded && galleries.length > 1">
+            <template x-for="g in galleries" :key="g.galleryid">
+              <a :href="'/galleries.html?galleryid=' + g.galleryid"
+                 class="block pl-7 pr-4 py-1.5 text-xs text-[var(--muted)] hover:text-[var(--brand)] hover:bg-gray-50 truncate">
+                <span x-text="g.title"></span>
+              </a>
+            </template>
+          </div>
+        </div>
+
+        <a href="/gallery-admin.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Gallery Admin</a>
+        <a href="/template-admin.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Template Admin</a>
+        <a href="/admin-master.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Admin</a>
+      </div>
+    </div>
+
+    <!-- Logo -->
+    <a href="/" class="flex items-center gap-2 shrink-0">
+      <div class="w-8 h-8 rounded-lg bg-[var(--brand)] flex items-center justify-center">
+        <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/>
+        </svg>
+      </div>
+      <span class="font-serif text-lg font-bold text-[var(--brand)] hidden sm:block">Phōtos</span>
+    </a>
+  </div>
+</nav>
+
+<!-- ══ MAIN ══════════════════════════════════════════════════════════════════ -->
+<main class="flex-1 max-w-3xl mx-auto w-full px-4 py-10">
+
+  <div class="flex items-start justify-between gap-4 mb-8">
+    <div>
+      <h1 class="text-3xl font-serif mb-1">Template Manager</h1>
+      <p class="text-sm text-[var(--muted)]">Manage display templates — slot count and display layout.</p>
+    </div>
+    <button class="btn-primary shrink-0" @click="openCreateModal()">Create Template</button>
+  </div>
+
+  <!-- Loading -->
+  <div x-show="loading" class="flex items-center justify-center py-24 gap-3">
+    <svg class="w-6 h-6 text-[var(--accent)] animate-spin" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+    </svg>
+    <span class="text-sm text-[var(--muted)]">Loading…</span>
+  </div>
+
+  <!-- Error / no permission -->
+  <div x-show="!loading && error"
+       class="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm mb-8"
+       x-text="error">
+  </div>
+
+  <div x-show="!loading" class="animate-fadein">
+
+    <!-- ── Template list ──────────────────────────────────────────────── -->
+    <div x-show="templates.length === 0 && !error" class="text-center py-12 text-[var(--muted)] text-sm">
+      No templates yet. Create your first template above.
+    </div>
+
+    <div class="flex flex-col gap-1">
+      <template x-for="t in templates" :key="t.templateid">
+        <div class="template-row">
+
+          <!-- Row header -->
+          <div class="template-row-header">
+
+            <!-- Mini layout preview -->
+            <div class="template-preview mini shrink-0">
+              <template x-for="(slot, i) in (t.slot_positions || [])" :key="i">
+                <div class="preview-slot"
+                     :style="'left:' + slot.x + '%; top:' + slot.y + '%; width:' + slot.w + '%; height:' + slot.h + '%;'">
+                </div>
+              </template>
+            </div>
+
+            <div class="flex-1 min-w-0">
+              <span class="font-semibold truncate block" x-text="t.name"></span>
+              <span class="text-xs text-[var(--muted)]"
+                    x-text="t.photo_count + ' photo slot' + (t.photo_count === 1 ? '' : 's')"></span>
+            </div>
+
+            <!-- Action buttons -->
+            <div class="flex items-center gap-1 shrink-0">
+              <button class="btn-icon" title="Edit"
+                      @click="expandedId === t.templateid ? cancelEdit() : startEdit(t)">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                </svg>
+              </button>
+              <button class="btn-icon danger" title="Delete template" @click="deleteTemplate(t.templateid)">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Editor -->
+          <div x-show="expandedId === t.templateid" class="template-editor">
+            <div class="grid gap-4 sm:grid-cols-2">
+
+              <!-- Left: fields -->
+              <div class="flex flex-col gap-3">
+                <label class="text-xs font-medium text-[var(--muted)]">
+                  Name
+                  <input class="input w-full mt-1" type="text" x-model="editName" />
+                </label>
+                <label class="text-xs font-medium text-[var(--muted)]">
+                  Photo count
+                  <input class="input w-full mt-1" type="number" min="1" x-model.number="editPhotoCount" />
+                </label>
+                <button class="btn-secondary text-xs self-start" @click="regenerateLayout()">
+                  Regenerate grid from photo count
+                </button>
+
+                <label class="text-xs font-medium text-[var(--muted)]">
+                  Slot positions (JSON — x/y/w/h in percent, plus each slot's placard position)
+                  <textarea class="input w-full mt-1" rows="10" x-model="editSlotPositions" spellcheck="false"></textarea>
+                </label>
+                <label class="text-xs font-medium text-[var(--muted)]">
+                  Presentation (JSON) — matte, frame, and alignment for each photo
+                  <textarea class="input w-full mt-1" rows="10" x-model="editPresentation" spellcheck="false"></textarea>
+                </label>
+                <p class="text-xs text-[var(--muted)] -mt-2">
+                  Each slot entry also takes a
+                  <code>placard: { side, align, gapIn }</code> — where that slot's
+                  placard attaches relative to the <em>photo frame itself</em> (not
+                  the slot's own, possibly larger, box). <code>side</code> is
+                  <code>"top"</code>, <code>"bottom"</code>, <code>"left"</code>, or
+                  <code>"right"</code> — which edge of the frame the placard sits
+                  against. <code>align</code> is 0–100: where along that edge, from
+                  the frame's own top/left (0) to its bottom/right (100) — 50 centers
+                  it; for a top/bottom placard this slides it left↔right, for a
+                  left/right placard it slides top↔bottom. <code>gapIn</code> is the
+                  physical distance, in inches, between the placard and the frame
+                  (same board-relative unit as the gallery's placard width/height —
+                  see Gallery Admin's Placard Settings). Placard <em>size</em>,
+                  background, and content (items, text, fonts) are configured once
+                  for the whole gallery in Gallery Admin's Placard Settings, so every
+                  display in a gallery looks consistent — only the position is set
+                  here, per slot.<br>
+                  <code>matte</code>/<code>frame</code> each take <code>enabled</code>, <code>color</code>,
+                  and <code>width</code> — a number in px, or a string like <code>"5%"</code> for a
+                  percentage of the photo's own rendered width (so the matte/frame scales with
+                  however large the photo actually appears, rather than staying a fixed pixel
+                  amount). Matte's <code>width</code> may instead be
+                  <code>{top,right,bottom,left}</code> for an uneven mat — px and percent can be
+                  mixed per side. Set either <code>enabled: false</code> to omit it. The framed
+                  photo always keeps its own aspect ratio — it's never stretched to fit the slot —
+                  so a slot shaped differently than the photo will have empty space on two sides;
+                  that space is always the page background, never a fill.<br>
+                  <code>align</code> controls where that space goes:
+                  <code>{ horizontal: "left"|"center"|"right", vertical: "top"|"center"|"bottom" }</code>.
+                </p>
+
+                <p x-show="editError" class="text-red-500 text-xs" x-text="editError"></p>
+
+                <div class="flex gap-2">
+                  <button class="btn-primary text-sm" @click="saveTemplate(t.templateid)" :disabled="saving">
+                    <span x-show="!saving">Save</span>
+                    <span x-show="saving">Saving…</span>
+                  </button>
+                  <button class="btn-secondary text-sm" @click="cancelEdit()">Cancel</button>
+                </div>
+              </div>
+
+              <!-- Right: live preview -->
+              <div>
+                <p class="text-xs font-medium text-[var(--muted)] mb-1">
+                  Preview — drag a slot to move it, its corners to resize it,
+                  or a dashed placard marker to re-attach it to a different
+                  side of the slot.
+                </p>
+                <!-- Deliberately no x-ref here: Alpine's x-ref inside this
+                     x-for (one per template row, all present in the DOM at
+                     once since x-show only hides via CSS) would collide —
+                     $refs is a single flat map keyed by name, so it'd always
+                     resolve to whichever row registered last, not the one
+                     actually being dragged in. The drag handlers in app.js
+                     instead resolve the container via
+                     event.currentTarget.closest('.template-preview'), which
+                     is unambiguous per-row. -->
+                <div class="template-preview">
+                  <template x-for="(slot, i) in previewSlots()" :key="i">
+                    <div class="preview-slot"
+                         :style="'left:' + slot.x + '%; top:' + slot.y + '%; width:' + slot.w + '%; height:' + slot.h + '%;'"
+                         @mousedown="startSlotDrag(i, $event)" @touchstart="startSlotDrag(i, $event)">
+                      <span x-text="i + 1"></span>
+                      <div class="resize-handle nw" @mousedown.stop="startSlotResize(i, 'nw', $event)" @touchstart.stop="startSlotResize(i, 'nw', $event)"></div>
+                      <div class="resize-handle ne" @mousedown.stop="startSlotResize(i, 'ne', $event)" @touchstart.stop="startSlotResize(i, 'ne', $event)"></div>
+                      <div class="resize-handle sw" @mousedown.stop="startSlotResize(i, 'sw', $event)" @touchstart.stop="startSlotResize(i, 'sw', $event)"></div>
+                      <div class="resize-handle se" @mousedown.stop="startSlotResize(i, 'se', $event)" @touchstart.stop="startSlotResize(i, 'se', $event)"></div>
+                    </div>
+                  </template>
+                  <!-- Rough marker for each slot's placard position — actual
+                       size comes from the gallery's Placard Settings, and the
+                       exact position depends on the photo frame's real
+                       measured box (which this schematic preview, with no
+                       real photos, can't reproduce), so previewPlacardStyle()
+                       approximates it using the slot's own box as a stand-in
+                       for the frame and a fixed reference *size* — gapIn
+                       itself is honored (converted from inches to percent),
+                       so the marker's distance from the slot does reflect
+                       whatever side/align/gapIn is actually stored, whether
+                       set by dragging or typed into the JSON. Draggable —
+                       see startPlacardDrag()/placardDragToConfig() in app.js. -->
+                  <template x-for="(slot, i) in previewSlots()" :key="'placard-' + i">
+                    <div x-show="slot.placard" class="preview-placard"
+                         :style="previewPlacardStyle(slot)"
+                         @mousedown="startPlacardDrag(i, $event)" @touchstart="startPlacardDrag(i, $event)">
+                      <span x-text="'P' + (i + 1)"></span>
+                    </div>
+                  </template>
+                </div>
+                <p class="text-xs text-[var(--muted)] mt-1">
+                  Dashed boxes show roughly where each slot's placard will attach
+                  (<code>slot_positions[i].placard</code> — side/align/gap relative
+                  to the photo frame). The real display resolves this against the
+                  photo's actual measured frame box, so the exact position here is
+                  an approximation — as is the placard drag's <code>gapIn</code>
+                  (it assumes a default board width, since this template isn't
+                  tied to any one gallery). Placard size, background, and content
+                  are set once for the whole gallery in Gallery Admin's Placard
+                  Settings. Dragging updates the JSON on the left live, so you can
+                  fine-tune numbers by hand afterward if needed.
+                </p>
+              </div>
+
+            </div>
+          </div>
+
+        </div>
+      </template>
+    </div>
+
+  </div>
+</main>
+
+<!-- ══ CREATE TEMPLATE MODAL ═══════════════════════════════════════════════ -->
+<div x-show="createModalOpen" x-cloak x-transition
+     class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
+     @click.self="closeCreateModal()"
+     @keydown.escape.window="closeCreateModal()">
+  <div class="modal-card animate-scalein">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-serif text-lg">Create Template</h3>
+      <button class="text-[var(--muted)] hover:text-[var(--brand)] text-xl leading-none px-1" @click="closeCreateModal()">&times;</button>
+    </div>
+
+    <div class="flex flex-col gap-3">
+      <label class="text-xs font-medium text-[var(--muted)]">
+        Name
+        <input class="input w-full mt-1"
+               type="text"
+               x-model="newName"
+               placeholder="Template name"
+               @keyup.enter="createTemplate()" />
+      </label>
+      <label class="text-xs font-medium text-[var(--muted)]">
+        Photo count
+        <input class="input w-full mt-1"
+               type="number"
+               min="1"
+               x-model.number="newPhotoCount"
+               placeholder="Photo count"
+               @keyup.enter="createTemplate()" />
+      </label>
+      <p class="text-xs text-[var(--muted)]">
+        A new template starts with an evenly-spaced grid layout for its photo count — edit the layout after creating it.
+      </p>
+      <p x-show="createError" class="text-red-500 text-xs" x-text="createError"></p>
+
+      <div class="flex gap-2 mt-1">
+        <button class="btn-primary text-sm"
+                @click="createTemplate()"
+                :disabled="creating || !newName.trim() || newPhotoCount < 1">
+          <span x-show="!creating">New</span>
+          <span x-show="creating">Creating…</span>
+        </button>
+        <button class="btn-secondary text-sm" @click="closeCreateModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ TOAST ═══════════════════════════════════════════════════════════════ -->
+<div x-show="toast.visible" x-transition
+     class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[var(--brand)] text-white text-sm px-5 py-2.5 rounded-full shadow-lg pointer-events-none"
+     x-text="toast.message">
+</div>
+
+</body>
+</html>

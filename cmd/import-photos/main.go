@@ -22,19 +22,16 @@
 //	--label           Extra label in Name=Value format; may be repeated
 //	--output          Write url,photoid results to this file
 //	--refresh-exif    Re-download images and update labels even when photoid already exists
+//	--restrict-labels Mark --label-supplied label names as restricted (EXIF-derived label names are always restricted)
 //	--dry-run         Print what would be inserted without writing to the DB
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/csv"
 	"flag"
 	"fmt"
 	"image"
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
 	"io"
 	"log/slog"
 	"net/http"
@@ -45,8 +42,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/rwcarlsen/goexif/exif"
 	"gocv.io/x/gocv"
+
+	"github.com/tjmerritt/photoapp/internal/photoimport"
 )
 
 // label is a name/value pair.
@@ -74,6 +72,7 @@ func main() {
 		titleFromURL   bool
 		dryRun         bool
 		refreshEXIF    bool
+		restrictLabels bool
 		outputFile     string
 		extraLabels    labelFlag
 		cascadeXMLPath string
@@ -86,6 +85,7 @@ func main() {
 	flag.BoolVar(&titleFromURL, "title-from-url", true, "Derive title from URL basename")
 	flag.BoolVar(&dryRun, "dry-run", false, "Print rows without inserting")
 	flag.BoolVar(&refreshEXIF, "refresh-exif", false, "Re-download images and replace labels even when photoid already exists")
+	flag.BoolVar(&restrictLabels, "restrict-labels", false, "Mark --label-supplied label names as restricted (EXIF-derived label names are always restricted regardless of this flag)")
 	flag.StringVar(&outputFile, "output", "", "Write url,photoid results to this CSV file")
 	flag.Var(&extraLabels, "label", "Extra label in Name=Value format (repeatable)")
 	flag.StringVar(&cascadeXMLPath, "cascade", os.Getenv("HAAR_CASCADE_XML"),
@@ -230,6 +230,11 @@ func main() {
 					} else {
 						action = "updated"
 						updated++
+						if restrictLabels {
+							if err := photoimport.MarkNamesRestricted(ctx, pool, names([]label(extraLabels))); err != nil {
+								slog.Warn("failed to mark label names restricted", "photoid", hintID, "error", err)
+							}
+						}
 					}
 				} else {
 					unchanged++
@@ -279,6 +284,22 @@ func main() {
 		}
 		allLabels := mergeLabels(exifLabels, computedLabels)
 		allLabels = mergeLabels(allLabels, []label(extraLabels))
+
+		// Phase 5b: EXIF-derived label names are always restricted, regardless
+		// of --restrict-labels — see internal/photoimport.MarkNamesRestricted's
+		// doc. --restrict-labels additionally restricts --label-supplied names
+		// (not the computed Resolution/Public names). Both are no-ops in
+		// --dry-run mode, since nothing else is written to the DB either.
+		if !dryRun {
+			if err := photoimport.MarkNamesRestricted(ctx, pool, names(exifLabels)); err != nil {
+				slog.Warn("failed to mark EXIF label names restricted", "url", rawURL, "error", err)
+			}
+			if restrictLabels {
+				if err := photoimport.MarkNamesRestricted(ctx, pool, names([]label(extraLabels))); err != nil {
+					slog.Warn("failed to mark label names restricted", "url", rawURL, "error", err)
+				}
+			}
+		}
 
 		if dryRun {
 			action := "insert"
@@ -466,96 +487,50 @@ func fetchImage(client *http.Client, imageURL string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-// imageDimensions decodes width/height from raw image bytes.
+// imageDimensions decodes width/height from raw image bytes. Delegates to
+// the shared internal/photoimport package (also used by the browser upload
+// endpoint) so both entry points measure dimensions identically.
 func imageDimensions(data []byte) (int, int, error) {
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
-		return 0, 0, fmt.Errorf("decode image config: %w", err)
-	}
-	return cfg.Width, cfg.Height, nil
+	return photoimport.ImageDimensions(data)
 }
 
-// exifFields lists the EXIF tags to surface as labels.
-var exifFields = []struct {
-	tag   exif.FieldName
-	label string
-}{
-	{exif.Make, "Camera Make"},
-	{exif.Model, "Camera Model"},
-	{exif.LensMake, "Lens Make"},
-	{exif.LensModel, "Lens Model"},
-	{exif.ExposureTime, "Shutter Speed"},
-	{exif.FNumber, "Aperture"},
-	{exif.ISOSpeedRatings, "ISO"},
-	{exif.FocalLength, "Focal Length"},
-	{exif.FocalLengthIn35mmFilm, "Focal Length (35mm)"},
-	{exif.Flash, "Flash"},
-	{exif.WhiteBalance, "White Balance"},
-	{exif.ExposureMode, "Exposure Mode"},
-	{exif.ExposureProgram, "Exposure Program"},
-	{exif.Artist, "Artist"},
-	{exif.Copyright, "Copyright"},
-	{exif.Software, "Software"},
-	{exif.ImageDescription, "Description"},
-}
-
-// extractEXIF returns labels parsed from EXIF metadata. Missing tags are skipped.
+// extractEXIF returns labels parsed from EXIF metadata. Missing tags are
+// skipped. Delegates to the shared internal/photoimport package (also used
+// by the browser upload endpoint) so the two entry points can never drift
+// apart on which EXIF fields get surfaced as labels.
 func extractEXIF(data []byte) []label {
-	x, err := exif.Decode(bytes.NewReader(data))
-	if err != nil && exif.IsCriticalError(err) {
-		return nil
+	pl := photoimport.ExtractEXIF(data)
+	out := make([]label, len(pl))
+	for i, l := range pl {
+		out[i] = label{l.Name, l.Value}
 	}
-	if x == nil {
-		return nil
-	}
-
-	var labels []label
-
-	for _, f := range exifFields {
-		tag, err := x.Get(f.tag)
-		if err != nil {
-			continue
-		}
-		val := strings.Trim(strings.TrimSpace(tag.String()), `"`)
-		if val == "" {
-			continue
-		}
-		labels = append(labels, label{f.label, val})
-	}
-
-	if t, err := x.DateTime(); err == nil {
-		labels = append(labels, label{"Date Taken", t.Format("2006-01-02 15:04:05")})
-	}
-
-	if lat, long, err := x.LatLong(); err == nil {
-		labels = append(labels, label{"GPS", fmt.Sprintf("%.6f, %.6f", lat, long)})
-	}
-
-	return labels
+	return out
 }
 
 // mergeLabels combines base and extra; extra overrides on duplicate names.
+// Delegates to the shared internal/photoimport package.
 func mergeLabels(base, extra []label) []label {
-	if len(extra) == 0 {
-		return base
-	}
-	override := make(map[string]string, len(extra))
-	for _, l := range extra {
-		override[strings.ToLower(l.name)] = l.value
-	}
-	out := make([]label, 0, len(base)+len(extra))
-	for _, l := range base {
-		if v, ok := override[strings.ToLower(l.name)]; ok {
-			out = append(out, label{l.name, v})
-			delete(override, strings.ToLower(l.name))
-		} else {
-			out = append(out, l)
+	toShared := func(ls []label) []photoimport.Label {
+		out := make([]photoimport.Label, len(ls))
+		for i, l := range ls {
+			out[i] = photoimport.Label{Name: l.name, Value: l.value}
 		}
+		return out
 	}
-	for _, l := range extra {
-		if _, still := override[strings.ToLower(l.name)]; still {
-			out = append(out, l)
-		}
+	merged := photoimport.MergeLabels(toShared(base), toShared(extra))
+	out := make([]label, len(merged))
+	for i, l := range merged {
+		out[i] = label{l.Name, l.Value}
+	}
+	return out
+}
+
+// names extracts just the Name field from a slice of local labels — used to
+// pass label names on to photoimport.MarkNamesRestricted.
+func names(ls []label) []string {
+	out := make([]string, len(ls))
+	for i, l := range ls {
+		out[i] = l.name
 	}
 	return out
 }

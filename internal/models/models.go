@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // ── Shared ────────────────────────────────────────────────────────────────────
 
@@ -64,6 +67,29 @@ type Label struct {
 	Value    string `json:"value"`
 	UserID   string `json:"userid"`
 	Username string `json:"username"`
+	// ColorHex is this label name's persisted color override (Phase 5a), if
+	// any — omitted entirely when unset, in which case clients fall back to
+	// a deterministic hash-based color derived from Name.
+	ColorHex *string `json:"color,omitempty"`
+	// Restricted mirrors label_names.restricted for this label's name
+	// (Phase 5b): true means only Admin/LabelAdmin may add, modify, or
+	// delete labels with this name. Existing labels remain visible to
+	// everyone regardless.
+	Restricted bool `json:"restricted"`
+}
+
+// LabelNameInfo describes a label name's shared, cross-photo attributes —
+// returned by GET /api/v1/label-names and PATCH /api/v1/label-names.
+type LabelNameInfo struct {
+	Name       string  `json:"name"`
+	ColorHex   *string `json:"color,omitempty"`
+	Restricted bool    `json:"restricted"`
+	// Enabled (Phase 6e/migration 017) defaults true for names with no
+	// label_names row at all — see fetchLabelNameInfo's COALESCE.
+	Enabled bool `json:"enabled"`
+	// UsageCount (Phase 6e) — how many non-deleted labels currently use this
+	// name; only populated by the admin listing endpoint.
+	UsageCount int `json:"usage_count,omitempty"`
 }
 
 type Emoji struct {
@@ -176,6 +202,7 @@ type SearchResult struct {
 	ImageURL string `json:"imageurl"`
 	Width    int    `json:"width"`
 	Height   int    `json:"height"`
+	Title    string `json:"title"`
 }
 
 // SearchResponse is returned by GET /api/v1/search.
@@ -184,6 +211,198 @@ type SearchResponse struct {
 	Total   int            `json:"total"`
 	Results []SearchResult `json:"results"`
 }
+
+// ── Galleries ────────────────────────────────────────────────────────────────
+
+// GallerySummary is one row in GET /api/v1/galleries.
+type GallerySummary struct {
+	GalleryID    string    `json:"galleryid"`
+	Title        string    `json:"title"`
+	SortOrder    int       `json:"sort_order"`
+	DisplayCount int       `json:"display_count"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// GalleryDetail is the full response for GET /api/v1/galleries/:galleryid.
+type GalleryDetail struct {
+	GalleryID       string           `json:"galleryid"`
+	Title           string           `json:"title"`
+	SortOrder       int              `json:"sort_order"`
+	PlacardsDefault json.RawMessage  `json:"placard_defaults,omitempty"`
+	Displays        []DisplaySummary `json:"displays"`
+	CreatedAt       time.Time        `json:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at"`
+}
+
+// GalleriesResponse is returned by GET /api/v1/galleries.
+type GalleriesResponse struct {
+	ExhibitionID string           `json:"exhibitionid"`
+	Offset       int              `json:"offset"`
+	Pages        Pages            `json:"pages"`
+	Galleries    []GallerySummary `json:"galleries"`
+}
+
+// ── Displays ─────────────────────────────────────────────────────────────────
+
+// TemplateSummary is the compact template shape embedded in display responses.
+// Presentation and SlotPositions are only populated on GET
+// /api/v1/displays/:displayid (the viewer/editor need them to render matte,
+// frame, and slot geometry; list views don't).
+type TemplateSummary struct {
+	TemplateID    string          `json:"templateid"`
+	Name          string          `json:"name"`
+	PhotoCount    int             `json:"photo_count"`
+	SlotPositions json.RawMessage `json:"slot_positions,omitempty"`
+	Presentation  json.RawMessage `json:"presentation,omitempty"`
+}
+
+// DisplaySummary is a brief display entry embedded in GalleryDetail.
+type DisplaySummary struct {
+	DisplayID   string           `json:"displayid"`
+	SortOrder   int              `json:"sort_order"`
+	Template    *TemplateSummary `json:"template,omitempty"`
+	SlotCount   int              `json:"slot_count"`
+	FilledSlots int              `json:"filled_slots"`
+	CreatedAt   time.Time        `json:"created_at"`
+	UpdatedAt   time.Time        `json:"updated_at"`
+}
+
+// SlotPhoto is the photo shape embedded inside a display slot.
+// Title is the photo's own title (distinct from the slot's rich_text
+// caption) — available as a placard field source. Labels is populated so
+// the frontend can resolve placard {LabelName} substitutions (see
+// gallery placard_defaults) without a separate fetch per photo.
+type SlotPhoto struct {
+	PhotoID  string  `json:"photoid"`
+	ImageURL string  `json:"imageurl"`
+	Width    int     `json:"width"`
+	Height   int     `json:"height"`
+	Title    string  `json:"title"`
+	Labels   []Label `json:"labels,omitempty"`
+}
+
+// DisplaySlot is one slot in a DisplayDetail.
+type DisplaySlot struct {
+	SlotID    string          `json:"slotid"`
+	SlotIndex int             `json:"slot_index"`
+	Photo     *SlotPhoto      `json:"photo,omitempty"`
+	RichText  *string         `json:"rich_text,omitempty"`
+	Placard   json.RawMessage `json:"placard,omitempty"`
+}
+
+// DisplayDetail is the full response for GET /api/v1/displays/:displayid.
+type DisplayDetail struct {
+	DisplayID string           `json:"displayid"`
+	GalleryID string           `json:"galleryid"`
+	SortOrder int              `json:"sort_order"`
+	Template  *TemplateSummary `json:"template,omitempty"`
+	Slots     []DisplaySlot    `json:"slots"`
+	CreatedAt time.Time        `json:"created_at"`
+	UpdatedAt time.Time        `json:"updated_at"`
+}
+
+// ── Display Templates ────────────────────────────────────────────────────────
+
+// DisplayTemplate is the full shape of a display template.
+type DisplayTemplate struct {
+	TemplateID    string          `json:"templateid"`
+	Name          string          `json:"name"`
+	PhotoCount    int             `json:"photo_count"`
+	SlotPositions json.RawMessage `json:"slot_positions"`
+	Presentation  json.RawMessage `json:"presentation"`
+}
+
+// TemplatesResponse is returned by GET /api/v1/display-templates.
+type TemplatesResponse struct {
+	Templates []DisplayTemplate `json:"templates"`
+}
+
+// ── Gallery / Display / Template write request bodies ────────────────────────
+
+type CreateGalleryRequest struct {
+	Title     string `json:"title"`
+	SortOrder *int   `json:"sort_order"`
+}
+
+type UpdateGalleryRequest struct {
+	Title           *string         `json:"title"`
+	SortOrder       *int            `json:"sort_order"`
+	PlacardsDefault json.RawMessage `json:"placard_defaults"` // nil/absent = no change
+	DisplayOrder    []string        `json:"display_order"`    // displayids in new order
+}
+
+type CreateDisplayRequest struct {
+	TemplateID *string `json:"templateid"`
+	SortOrder  *int    `json:"sort_order"`
+}
+
+// SlotUpdate sets the full state of one slot. PhotoID "" clears the photo.
+// RichText "" clears rich text. Placard nil/absent leaves placard unchanged;
+// Placard []byte("null") or empty clears the placard.
+type SlotUpdate struct {
+	SlotIndex int             `json:"slot_index"`
+	PhotoID   string          `json:"photoid"`   // "" to clear
+	RichText  string          `json:"rich_text"` // "" to clear
+	Placard   json.RawMessage `json:"placard"`   // null/absent to clear
+}
+
+type UpdateDisplayRequest struct {
+	TemplateID *string      `json:"templateid"` // nil = no change; "" = clear
+	SortOrder  *int         `json:"sort_order"`
+	Slots      []SlotUpdate `json:"slots"`
+}
+
+type CreateTemplateRequest struct {
+	Name          string          `json:"name"`
+	PhotoCount    int             `json:"photo_count"`
+	SlotPositions json.RawMessage `json:"slot_positions"`
+	Presentation  json.RawMessage `json:"presentation"`
+}
+
+type UpdateTemplateRequest struct {
+	Name          *string         `json:"name"`
+	PhotoCount    *int            `json:"photo_count"`
+	SlotPositions json.RawMessage `json:"slot_positions"` // nil/absent = no change
+	Presentation  json.RawMessage `json:"presentation"`   // nil/absent = no change
+}
+
+// ── Photo list (wall) ─────────────────────────────────────────────────────────
+
+// PhotoListItem is the compact photo shape returned by GET /api/v1/photos.
+type PhotoListItem struct {
+	PhotoID  string `json:"photoid"`
+	ImageURL string `json:"imageurl"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+}
+
+// PhotoListResponse is returned by GET /api/v1/photos.
+type PhotoListResponse struct {
+	Total  int             `json:"total"`
+	Offset int             `json:"offset"`
+	Limit  int             `json:"limit"`
+	Photos []PhotoListItem `json:"photos"`
+}
+
+// ── Photo upload ──────────────────────────────────────────────────────────────
+
+// UploadResult is the per-file outcome of a POST /api/v1/photos/upload request.
+// Status is "ok" or "error"; Error is populated only when Status is "error".
+type UploadResult struct {
+	Filename string `json:"filename"`
+	PhotoID  string `json:"photoid,omitempty"`
+	Status   string `json:"status"`
+	Error    string `json:"error,omitempty"`
+}
+
+// UploadPhotosResponse is returned by POST /api/v1/photos/upload. Each input
+// file gets its own result — one file failing does not fail the batch.
+type UploadPhotosResponse struct {
+	Results []UploadResult `json:"results"`
+}
+
+// ── EmojiTypeResponse ────────────────────────────────────────────────────────
 
 // EmojiTypeResponse is returned after uploading a new emoji type.
 type EmojiTypeResponse struct {
@@ -195,4 +414,5 @@ type EmojiTypeResponse struct {
 	HasSkintones bool    `json:"has_skintones,omitempty"` // true if skintone variants exist
 	Skintone     *string `json:"skintone,omitempty"`      // set on variant rows
 	Hexcode      string  `json:"hexcode,omitempty"`       // needed to fetch variants
+	UsageCount   int     `json:"usage_count,omitempty"`   // total reactions across all photos (Phase 5c popularity sort)
 }

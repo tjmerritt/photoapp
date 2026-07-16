@@ -17,12 +17,50 @@ function thumbUrl(url, cssWidth) {
   return url + '&w=' + w;
 }
 
+// sortTemplates(list) — canonical display order for display templates:
+// smallest photo_count first, then alphabetical by name. The backend already
+// returns templates in this order; this is used client-side after a
+// create/save so the in-memory list doesn't need a full reload to re-sort.
+function sortTemplates(list) {
+  return (list || []).slice().sort(function (a, b) {
+    return (a.photo_count - b.photo_count) || a.name.localeCompare(b.name);
+  });
+}
+
 function getAuthHeaders() {
   if (window._loggedIn) return {};   // cookie handles auth for real sessions
   return window._testUserID ? { 'X-User-ID': window._testUserID } : {};
 }
 function getCurrentUser() {
   return window._currentUser || null;
+}
+// window._isLabelAdmin: true when the current user holds the Admin or
+// LabelAdmin permission (see photoApp.refreshPermissions) — restricted label
+// names (Phase 5b) can only be added/modified/deleted by these users.
+function getIsLabelAdmin() {
+  return !!window._isLabelAdmin;
+}
+// window._canUploadEmoji: true when the current user holds the EmojiUpload
+// permission (see photoApp.refreshPermissions) — governs whether emojiPicker
+// shows its "Upload your own" control (Phase 5c).
+function getCanUploadEmoji() {
+  return !!window._canUploadEmoji;
+}
+
+// fetchPermissionSummary — shared by photoApp and wallApp's refreshPermissions
+// methods so both the photo page and the photo wall gate the upload icon
+// (and, for photoApp, restricted-label UI) identically, from one place.
+// authHeadersFn is a zero-arg function returning the caller's current auth
+// headers (photoApp/wallApp each have their own authHeaders() bound to their
+// own loggedInUser/testUser state, so it's passed in rather than assumed).
+async function fetchPermissionSummary(authHeadersFn) {
+  try {
+    const r = await fetch('/api/v1/permissions', { headers: authHeadersFn() });
+    const d = await r.json();
+    return d.summary || [];
+  } catch {
+    return [];
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -47,6 +85,218 @@ function avatarSrc(user) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Phase 5d — rich-text (Markdown) comments.
+//
+// Comments are stored as plain Markdown source (comment_text stays TEXT in
+// Postgres; only the validation changed — see comments.go). Rendering to
+// HTML happens entirely client-side via vendored `marked` + `DOMPurify`
+// (app/vendor/*.min.js, loaded before app.js in photo.html): marked converts
+// the Markdown (and any raw HTML the "Font" toolbar inserts) to HTML, and
+// DOMPurify strips anything not on the allow-list before it's ever assigned
+// via x-html. This is the point where "sanitize HTML on output" (PLAN.md
+// 5d) actually happens, since rendering — and therefore HTML generation —
+// only happens in the browser in this architecture.
+//
+// Emoji shorthand (:name:) is resolved via a small client-side cache keyed
+// by a normalized shortcode, backed by the existing GET /api/v1/emoji/types
+// search endpoint. Rendering is synchronous (needed for Alpine bindings), so
+// unresolved shortcodes render as literal text on first pass; resolving them
+// updates the cache and re-renders once via a callback, which is why
+// renderedComment/*PreviewHtml are plain reactive data fields refreshed
+// imperatively rather than getters.
+// ─────────────────────────────────────────────────────────────────────────────
+const _emojiShortcodeCache = {};
+function normalizeShortcode(name) {
+  return (name || '').trim().toLowerCase().replace(/\s+/g, '_');
+}
+function emojiShortcodeHtml(em) {
+  if (!em) return null;
+  if (em.imageurl) return '<img src="' + em.imageurl + '" alt=":' + em.alttext + ':" class="inline-emoji" />';
+  if (em.emoji) return em.emoji;
+  return null;
+}
+// Replaces any :shortcode: already present in the cache; anything not yet
+// cached is left untouched (as literal ":name:" text) for this render pass.
+function substituteCachedShortcodes(text) {
+  return text.replace(/:([a-z0-9_+-]+):/gi, function (match, name) {
+    const key = normalizeShortcode(name);
+    if (!(key in _emojiShortcodeCache)) return match;
+    return emojiShortcodeHtml(_emojiShortcodeCache[key]) || match;
+  });
+}
+// Finds any :shortcode: in text not yet cached, looks each up via the emoji
+// search endpoint (exact match on alt_text, case/space-insensitive), and
+// calls onDone() once — but only if something new was actually resolved, so
+// callers that re-invoke this from inside a refresh callback don't loop.
+async function resolveShortcodes(text, onDone) {
+  const names = new Set();
+  const re = /:([a-z0-9_+-]+):/gi;
+  let m;
+  while ((m = re.exec(text))) {
+    const key = normalizeShortcode(m[1]);
+    if (!(key in _emojiShortcodeCache)) names.add(key);
+  }
+  if (names.size === 0) return;
+  await Promise.all([...names].map(async (key) => {
+    try {
+      const r = await fetch(`/api/v1/emoji/types?search=${encodeURIComponent(key.replace(/_/g, ' '))}&limit=10`);
+      const d = await r.json();
+      const match = (d.emojis || []).find(e => normalizeShortcode(e.alttext) === key);
+      _emojiShortcodeCache[key] = match || null;
+    } catch { _emojiShortcodeCache[key] = null; }
+  }));
+  onDone();
+}
+// Allow-list mirrors what the "Font" toolbar and Markdown together can
+// produce: basic formatting, links, lists, and <span style="..."> for the
+// font-family/weight/size feature (PLAN.md 5d: "stored as Markdown with HTML
+// spans"). Nothing script-capable (script, iframe, event handlers, etc.) is
+// on the list, and DOMPurify strips anything not listed regardless.
+const _COMMENT_SANITIZE_OPTS = {
+  ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'del', 'a', 'ul', 'ol', 'li', 'blockquote', 'code', 'pre', 'span', 'img'],
+  ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'style', 'class', 'target', 'rel'],
+};
+function renderMarkdown(text) {
+  if (!text) return '';
+  const withEmoji = substituteCachedShortcodes(text);
+  const raw = marked.parse(withEmoji, { breaks: true });
+  return DOMPurify.sanitize(raw, _COMMENT_SANITIZE_OPTS);
+}
+
+function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+// markdownComposerMixin(field, refName) — adds Bold/Italic/Strikethrough,
+// a Font (family/weight/size) popover, :emoji: shortcode insertion, and a
+// Preview toggle for a single textarea-backed field (e.g. 'newText') to
+// whichever Alpine component spreads the result into its own returned
+// object. `field` is the reactive property holding raw Markdown source;
+// `refName` is that field's <textarea>'s x-ref name.
+//
+// This exists as a mixin factory — rather than a nested reusable
+// sub-component — because this app's Alpine build is the CSP-restricted
+// evaluator (see labelEditor/emojiPicker comments elsewhere in this file):
+// it can't parse arrow-function expressions inside directive attributes, so
+// there's no way to hand a nested component getter/setter closures from
+// x-data="...". Each composer (new comment, edit, reply) therefore gets its
+// own statically-named copies of these fields/methods instead.
+function markdownComposerMixin(field, refName) {
+  const Field          = capitalize(field);
+  const previewKey     = field + 'Preview';
+  const previewHtmlKey = field + 'PreviewHtml';
+  const fontOpenKey    = field + 'FontOpen';
+  const fontFamilyKey  = field + 'FontFamily';
+  const fontWeightKey  = field + 'FontWeight';
+  const fontSizeKey    = field + 'FontSize';
+
+  const mixin = {
+    [previewKey]:     false,
+    [previewHtmlKey]: '',
+    [fontOpenKey]:    false,
+    [fontFamilyKey]:  '',
+    [fontWeightKey]:  '',
+    [fontSizeKey]:    '',
+  };
+
+  mixin['wrap' + Field] = function (before, after) {
+    const el = this.$refs[refName];
+    const current = this[field] || '';
+    const start = el ? (el.selectionStart ?? current.length) : current.length;
+    const end   = el ? (el.selectionEnd   ?? current.length) : current.length;
+    const selected = current.slice(start, end);
+    this[field] = current.slice(0, start) + before + selected + after + current.slice(end);
+    if (el) {
+      const selStart = start + before.length;
+      const selEnd   = selStart + selected.length;
+      this.$nextTick(() => { el.focus(); el.setSelectionRange(selStart, selEnd); });
+    }
+  };
+
+  mixin['insertShortcode' + Field] = function (name) {
+    const shortcode = ':' + normalizeShortcode(name) + ':';
+    const el = this.$refs[refName];
+    const current = this[field] || '';
+    const start = el ? (el.selectionStart ?? current.length) : current.length;
+    const end   = el ? (el.selectionEnd   ?? current.length) : current.length;
+    this[field] = current.slice(0, start) + shortcode + current.slice(end);
+    if (el) {
+      const pos = start + shortcode.length;
+      this.$nextTick(() => { el.focus(); el.setSelectionRange(pos, pos); });
+    }
+  };
+
+  mixin['applyFont' + Field] = function () {
+    const family = this[fontFamilyKey], weight = this[fontWeightKey], size = this[fontSizeKey];
+    const parts = [];
+    if (family) parts.push('font-family:' + family);
+    if (weight) parts.push('font-weight:' + weight);
+    if (size)   parts.push('font-size:' + size);
+    this[fontOpenKey] = false;
+    if (parts.length === 0) return;
+    this['wrap' + Field]('<span style="' + parts.join(';') + '">', '</span>');
+  };
+
+  mixin['refreshPreview' + Field] = function () {
+    const text = this[field] || '';
+    this[previewHtmlKey] = renderMarkdown(text);
+    resolveShortcodes(text, () => { this[previewHtmlKey] = renderMarkdown(this[field] || ''); });
+  };
+
+  mixin['togglePreview' + Field] = function () {
+    this[previewKey] = !this[previewKey];
+    if (this[previewKey]) this['refreshPreview' + Field]();
+  };
+
+  return mixin;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// emojiShortcodePicker — a small search/browse popover (no reactions, no
+// skintone variants — just picking a name) used by the comment toolbar to
+// insert ":name:" shorthand. Dispatches 'insert-emoji-shortcode' with the
+// emoji's alt_text, which the composer's own @insert-emoji-shortcode
+// listener (an ancestor of this component in the DOM, so the event bubbles
+// up to it) turns into the actual shortcode insertion.
+// ─────────────────────────────────────────────────────────────────────────────
+function emojiShortcodePicker() {
+  return {
+    open: false,
+    search: '',
+    emojis: [],
+    loading: false,
+    offset: 0,
+    limit: 30,
+    total: 0,
+
+    async load() {
+      this.loading = true;
+      try {
+        const params = new URLSearchParams({ limit: this.limit, offset: this.offset });
+        if (this.search) params.set('search', this.search);
+        const resp = await fetch(`/api/v1/emoji/types?${params}`);
+        const data = await resp.json();
+        this.emojis = data.emojis || [];
+        this.total  = data.total  || 0;
+      } catch { this.emojis = []; }
+      this.loading = false;
+    },
+
+    toggle() {
+      this.open = !this.open;
+      if (this.open && this.emojis.length === 0) this.load();
+    },
+
+    doSearch() { this.offset = 0; this.load(); },
+    nextPage()  { this.offset += this.limit; this.load(); },
+    prevPage()  { this.offset = Math.max(0, this.offset - this.limit); this.load(); },
+
+    pick(em) {
+      this.$dispatch('insert-emoji-shortcode', em.alttext);
+      this.open = false;
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // commentsPanel — top-level comment list + new comment posting.
 // Takes only `photo`; auth is handled via globals.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,6 +306,7 @@ function commentsPanel(photo) {
     newText:     '',
     posting:     false,
     loadingMore: false,
+    ...markdownComposerMixin('newText', 'newTextarea'),
 
     init() {
       document.addEventListener('photoapp:comment-deleted', (e) => {
@@ -80,6 +331,8 @@ function commentsPanel(photo) {
         const c = await resp.json();
         this.comments.unshift(c);
         this.newText = '';
+        this.newTextPreview = false;
+        this.newTextFontOpen = false;
       } catch(e) {
         document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Failed to post: ${e.message}` }));
       }
@@ -124,6 +377,13 @@ function commentItem(c, photoid, depth = 0) {
     replyText:    '',
     postingReply: false,
     replies:      [],
+    ...markdownComposerMixin('editText', 'editTextarea'),
+    ...markdownComposerMixin('replyText', 'replyTextarea'),
+
+    // Rendered (Markdown → sanitized HTML) view of commentBody, refreshed
+    // imperatively via refreshRenderedComment() rather than a live getter —
+    // see the "Phase 5d" block comment above commentsPanel for why.
+    renderedComment: '',
 
     get canReply() { return !!getCurrentUser() && this.depth < 5; },
 
@@ -131,7 +391,14 @@ function commentItem(c, photoid, depth = 0) {
     // doesn't need per-level conditional logic around c.comment.
     get commentBody() { return this.c.deleted ? '[deleted]' : (this.c.comment || ''); },
 
+    refreshRenderedComment() {
+      const text = this.commentBody;
+      this.renderedComment = renderMarkdown(text);
+      resolveShortcodes(text, () => { this.renderedComment = renderMarkdown(this.commentBody); });
+    },
+
     init() {
+      this.refreshRenderedComment();
       // When a reply inside this comment's thread is deleted, mark it in the
       // replies array so it shows '[deleted]' rather than disappearing.
       document.addEventListener('photoapp:comment-deleted', (e) => {
@@ -164,6 +431,8 @@ function commentItem(c, photoid, depth = 0) {
     startEdit() {
       this.editText = this.c.comment;
       this.editing  = true;
+      this.editTextPreview = false;
+      this.editTextFontOpen = false;
     },
     cancelEdit() { this.editing = false; },
 
@@ -181,6 +450,7 @@ function commentItem(c, photoid, depth = 0) {
         const updated = await resp.json();
         this.c.comment = updated.comment;
         this.editing = false;
+        this.refreshRenderedComment();
       } catch(e) {
         document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Edit failed: ${e.message}` }));
       }
@@ -199,6 +469,7 @@ function commentItem(c, photoid, depth = 0) {
         // immediately and the replies beneath it remain visible.
         this.c = { ...this.c, deleted: true };
         this.editing = false;
+        this.refreshRenderedComment();
         document.dispatchEvent(new CustomEvent('photoapp:comment-deleted', { detail: commentid }));
       } catch(e) {
         document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Delete failed: ${e.message}` }));
@@ -234,6 +505,8 @@ function commentItem(c, photoid, depth = 0) {
         this.replies.push(reply);
         this.c.replycount = (this.c.replycount || 0) + 1;
         this.replyText    = '';
+        this.replyTextPreview = false;
+        this.replyTextFontOpen = false;
         this.replyOpen    = false;
         this.showingReplies = true;
       } catch(e) {
@@ -275,6 +548,17 @@ function emojiPicker(photo) {
     skintoneTarget:   null,
     skintoneVariants: [],
     skintoneLoading:  false,
+
+    // 5c: "Upload your own" — a small inline form (gated on EmojiUpload)
+    // exposing the existing POST /api/v1/emoji/types endpoint, which
+    // previously had no frontend UI at all.
+    showUploadForm: false,
+    uploadAltText:  '',
+    uploadFile:     null,
+    uploading:      false,
+    uploadError:    '',
+
+    get canUploadEmoji() { return getCanUploadEmoji(); },
 
     async init() {
       const uid = window._testUserID;   // set for both real sessions and test-user mode
@@ -379,6 +663,48 @@ function emojiPicker(photo) {
         document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `Reaction failed: ${e.message}` }));
       }
     },
+
+    toggleUploadForm() {
+      this.showUploadForm = !this.showUploadForm;
+      this.uploadError = '';
+    },
+
+    handleUploadFile(ev) {
+      this.uploadFile = (ev.target.files && ev.target.files[0]) || null;
+    },
+
+    async submitUpload() {
+      if (!this.uploadFile || !this.uploadAltText.trim()) return;
+      this.uploading = true;
+      this.uploadError = '';
+      try {
+        const fd = new FormData();
+        fd.append('image', this.uploadFile);
+        fd.append('alttext', this.uploadAltText.trim());
+        const resp = await fetch('/api/v1/emoji/types', {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: fd,
+        });
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.error || `HTTP ${resp.status}`);
+        }
+        const created = await resp.json();
+        // New upload goes straight to the front of the visible list — it has
+        // no reactions yet, so it wouldn't otherwise surface until page 1 of
+        // the popularity-sorted list caught up with the alphabetical tail.
+        this.emojis = [created, ...this.emojis];
+        this.total++;
+        this.showUploadForm = false;
+        this.uploadAltText  = '';
+        this.uploadFile     = null;
+        if (this.$refs.uploadFileInput) this.$refs.uploadFileInput.value = '';
+      } catch(e) {
+        this.uploadError = e.message;
+      }
+      this.uploading = false;
+    },
   };
 }
 
@@ -435,7 +761,8 @@ function labelEditor(data, photo) {
     photo,
     editingLabel: data,
 
-    knownNames:  [],
+    knownNames:   [], // dropdown list — restricted names filtered out unless isLabelAdmin
+    allNameInfos: [], // unfiltered — used to validate a manually-typed "Other…" name
     knownValues: [],
     loadingValues: false,
 
@@ -451,17 +778,40 @@ function labelEditor(data, photo) {
 
     get effectiveName()  { return this.nameIsOther  ? this.customName.trim()  : this.selectedName; },
     get effectiveValue() { return this.valueIsOther ? this.customValue.trim() : this.selectedValue; },
+    get isLabelAdmin()   { return getIsLabelAdmin(); },
+
+    // True when the manually-typed "Other…" name exactly matches a name
+    // that's restricted OR disabled (Phase 6e) and the current user isn't an
+    // Admin/LabelAdmin — lets the modal show an error immediately as the user
+    // types, rather than waiting for the 403 that would come back after
+    // clicking Add Label.
+    get customNameRestricted() {
+      if (!this.nameIsOther) return false;
+      const trimmed = this.customName.trim();
+      if (!trimmed) return false;
+      const info = this.allNameInfos.find(n => n.name === trimmed);
+      return !!(info && (info.restricted || info.enabled === false) && !this.isLabelAdmin);
+    },
 
     async init() {
       try {
         const r = await fetch('/api/v1/label-names');
         const d = await r.json();
-        this.knownNames = d.names || [];
-      } catch { this.knownNames = []; }
+        // Phase 5b/6e: each entry is {name, color, restricted, enabled}.
+        // Non-admins never even see restricted or disabled names as options —
+        // they may view labels that already exist with such a name, but
+        // shouldn't be offered them when adding a new one. allNameInfos keeps
+        // the full list around so a manually-typed "Other…" name can still be
+        // checked against it.
+        this.allNameInfos = d.names || [];
+      } catch { this.allNameInfos = []; }
+      this.knownNames = this.isLabelAdmin
+        ? this.allNameInfos
+        : this.allNameInfos.filter(n => !n.restricted && n.enabled !== false);
 
       if (this.editingLabel) {
-        if (!this.knownNames.includes(this.editingLabel.name)) {
-          this.knownNames = [this.editingLabel.name, ...this.knownNames];
+        if (!this.knownNames.some(n => n.name === this.editingLabel.name)) {
+          this.knownNames = [{ name: this.editingLabel.name, color: null, restricted: false }, ...this.knownNames];
         }
         await this.loadValues(this.editingLabel.name);
         if (this.knownValues.includes(this.editingLabel.value)) {
@@ -500,6 +850,17 @@ function labelEditor(data, photo) {
         this.selectedValue = '';
         this.customValue   = '';
         this.$nextTick(() => { if (this.$refs.customNameInput) this.$refs.customNameInput.focus(); });
+        return;
+      }
+      // Defense in depth: the backend is the source of truth on restriction
+      // and enabled/disabled (POST /api/v1/labels rejects with 403), but
+      // disabled <option>s should already prevent a non-admin from getting
+      // here for a restricted or disabled name.
+      const info = this.knownNames.find(n => n.name === this.selectedName);
+      if (info && (info.restricted || info.enabled === false) && !this.isLabelAdmin) {
+        const reason = info.enabled === false ? 'a disabled' : 'a restricted';
+        document.dispatchEvent(new CustomEvent('photoapp:toast', { detail: `"${info.name}" is ${reason} label name.` }));
+        this.selectedName = '';
         return;
       }
       this.selectedValue = '';
@@ -655,15 +1016,45 @@ function photoApp() {
     error: null,
 
     loggedInUser: null,
-    authConfig: { googleEnabled: false, appleEnabled: false },
+    authConfig: { googleEnabled: false, appleEnabled: false, facebookEnabled: false, microsoftEnabled: false },
 
     testUser: null,
+    isLabelAdmin: false,
+    canUploadPhotos: false,
+    canUploadEmoji: false,
 
     searchQuery: '',
 
     thumbUrl(url, cssWidth) { return thumbUrl(url, cssWidth); },
     labelColorFor(name) { return labelColorFor(name); },
     avatarSrc(user) { return avatarSrc(user); },
+
+    // Refreshes permission-gated UI state for the current user (real login or
+    // test-user impersonation):
+    //  - isLabelAdmin (Phase 5b): Admin or LabelAdmin, governs restricted
+    //    label add/edit/delete/recolor. window._isLabelAdmin mirrors this for
+    //    labelEditor, which runs in its own Alpine scope and can't reach
+    //    photoApp's `this`.
+    //  - canUploadPhotos: PhotoCreate, matching exactly what the backend's
+    //    POST /api/v1/photos/upload checks — governs whether the upload icon
+    //    is clickable at all (see index.html/photo.html), so a user without
+    //    it never even reaches the popup, rather than discovering the
+    //    rejection only after picking files (see Session 41 in SUMMARIES.md).
+    //  - canUploadEmoji (Phase 5c): EmojiUpload — matches exactly what the
+    //    backend's POST /api/v1/emoji/types checks (that handler doesn't
+    //    treat Admin as an implicit fallback the way the label-restriction
+    //    checks do, so this deliberately checks EmojiUpload alone). Governs
+    //    whether the "Upload your own" control shows in the Add Reaction
+    //    picker. window._canUploadEmoji mirrors this for emojiPicker, same
+    //    reason as window._isLabelAdmin above.
+    async refreshPermissions() {
+      const summary = await fetchPermissionSummary(() => this.authHeaders());
+      this.isLabelAdmin = summary.includes('Admin') || summary.includes('LabelAdmin');
+      this.canUploadPhotos = summary.includes('PhotoCreate');
+      this.canUploadEmoji = summary.includes('EmojiUpload');
+      window._isLabelAdmin = this.isLabelAdmin;
+      window._canUploadEmoji = this.canUploadEmoji;
+    },
 
     authHeaders() {
       if (this.loggedInUser) return {};
@@ -678,6 +1069,7 @@ function photoApp() {
       this.testUser = user;
       window._testUserID = user ? user.userid : null;
       window._currentUser = user;
+      this.refreshPermissions();
       if (this.photo) this.loadPhoto(this.photo.photoid);
     },
 
@@ -687,6 +1079,7 @@ function photoApp() {
       window._testUserID = null;
       window._loggedIn = false;
       window._currentUser = null;
+      this.refreshPermissions();
       if (this.photo) this.loadPhoto(this.photo.photoid);
     },
 
@@ -696,6 +1089,7 @@ function photoApp() {
     toast: { visible: false, message: '', timer: null },
 
     activeLabelID: null,
+    labelsLoadingMore: false,
 
     async init() {
       try {
@@ -715,6 +1109,7 @@ function photoApp() {
           document.dispatchEvent(new CustomEvent('photoapp:auth-ready', { detail: me }));
         }
       } catch { /* non-fatal */ }
+      await this.refreshPermissions();
 
       const params = new URLSearchParams(window.location.search);
       const photoid = params.get('photoid') || 'random';
@@ -731,6 +1126,7 @@ function photoApp() {
         window._testUserID = e.detail.userid;
         window._loggedIn = true;
         window._currentUser = e.detail;
+        this.refreshPermissions();
         if (this.photo) this.loadPhoto(this.photo.photoid);
       });
       document.addEventListener('photoapp:profile-image', (e) => {
@@ -758,6 +1154,53 @@ function photoApp() {
         window.history.replaceState(null, '', `?${qs}`);
       } catch (e) { this.error = e.message; }
       this.loading = false;
+
+      // The labels sentinel lives inside the `x-if="photo && !loading"` block,
+      // so it's destroyed and recreated on every photo load (including
+      // navigating from one photo to another) — re-observe the fresh node
+      // once Alpine has actually rendered it.
+      await this.$nextTick();
+      this._observeLabelsSentinel();
+    },
+
+    // Re-(dis)connects the IntersectionObserver that drives infinite-scroll
+    // loading of additional label pages. Safe to call repeatedly — always
+    // disconnects whatever it was previously watching first, since the
+    // sentinel element itself gets torn down and rebuilt on every photo load.
+    _observeLabelsSentinel() {
+      if (this._labelsObserver) {
+        this._labelsObserver.disconnect();
+        this._labelsObserver = null;
+      }
+      const sentinel = this.$refs.labelsSentinel;
+      if (!sentinel) return;
+      this._labelsObserver = new IntersectionObserver(([entry]) => {
+        if (entry.isIntersecting && this.photo && this.photo.labelsurl && !this.labelsLoadingMore) {
+          this.loadMoreLabels();
+        }
+      }, { rootMargin: '400px' });
+      this._labelsObserver.observe(sentinel);
+    },
+
+    // Loads the next page of labels (via photo.labelsurl, which the backend
+    // only sets when there are more labels than fit in the initial payload —
+    // see PhotoHandler.ServeHTTP) and appends them to photo.labels. Called
+    // automatically as the labels sentinel scrolls into view, so all of a
+    // photo's labels become visible by scrolling rather than being silently
+    // capped at the first page.
+    async loadMoreLabels() {
+      if (!this.photo || !this.photo.labelsurl || this.labelsLoadingMore) return;
+      this.labelsLoadingMore = true;
+      try {
+        const resp = await fetch(this.photo.labelsurl, { headers: this.authHeaders() });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        this.photo.labels.push(...(data.labels || []));
+        this.photo.labelsurl = (data.pages && data.pages.next) || null;
+      } catch (e) {
+        this.showToast(`Failed to load more labels: ${e.message}`);
+      }
+      this.labelsLoadingMore = false;
     },
 
     // ── Search ──────────────────────────────────────────────────────────────
@@ -804,7 +1247,7 @@ function photoApp() {
             related: results.slice(1).map(r => ({
               photoid:  r.photoid,
               imageurl: r.imageurl,
-              clickurl: `/?photoid=${encodeURIComponent(r.photoid)}`,
+              clickurl: `/photo.html?photoid=${encodeURIComponent(r.photoid)}`,
               width:    r.width,
               height:   r.height,
             })),
@@ -874,6 +1317,29 @@ function photoApp() {
         this.photo.labels = this.photo.labels.filter(l => l.labelid !== label.labelid);
       } catch(e) {
         this.showToast(`Delete failed: ${e.message}`);
+      }
+    },
+
+    // Phase 5a: assigns/overrides the color for every label sharing this
+    // name (color is a property of the label *name*, not an individual
+    // label row — see label_names table). Pass '' to clear an override and
+    // fall back to labelColorFor's deterministic hash color. Admin/LabelAdmin
+    // only; the backend enforces this (PATCH /api/v1/label-names).
+    async setLabelColor(label, colorHex) {
+      try {
+        const resp = await fetch(`/api/v1/label-names?name=${encodeURIComponent(label.name)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
+          body: JSON.stringify({ color_hex: colorHex }),
+        });
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.error || `HTTP ${resp.status}`);
+        }
+        const updated = await resp.json();
+        this.photo.labels.forEach(l => { if (l.name === label.name) l.color = updated.color; });
+      } catch(e) {
+        this.showToast(`Color update failed: ${e.message}`);
       }
     },
   };
@@ -1045,7 +1511,10 @@ function emojiHover() {
     },
 
     reactionTitle(em) {
-      return this.hasReacted(em) ? 'Click to remove reaction' : 'Click to react';
+      // 5c: name the emoji in the native browser tooltip, not just the click
+      // action — e.g. "thumbs up — Click to remove reaction".
+      const action = this.hasReacted(em) ? 'Click to remove reaction' : 'Click to react';
+      return em.alttext ? (em.alttext + ' — ' + action) : action;
     },
 
     onEmojiEnter(em) {
@@ -1069,6 +1538,2922 @@ function emojiHover() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// packRows — justified row-layout algorithm for the photo wall.
+//
+// Groups `photos` into rows.  Each row has an explicit height (px) and each
+// photo carries a `flexGrow` weight so that CSS flex distributes widths
+// proportionally without relying on pixel-perfect container measurement.
+// This means horizontal layout is always correct regardless of when or how
+// containerWidth is measured — only the row *height* depends on it.
+//
+// n (photos per row) is chosen from {2, 3, 4} subject to:
+//   • n never repeats from the previous row.
+//   • n=4 only when ≥2 photos in the candidate window are portrait (h > w)
+//     OR all aspect ratios are "similar" (max/min < 1.5).
+//   • The last partial row uses TARGET_ROW_H instead of filling the container.
+//
+// Returns an array of row objects:
+//   { startIndex, height,
+//     photos: [{ photoid, imageurl, width, height, flexGrow, displayWidth }] }
+//
+// flexGrow   — CSS flex-grow value; proportional to aspect-corrected width.
+// displayWidth — best-guess pixel width used only as the imgproxy size hint;
+//               the actual rendered width is determined by CSS flex.
+// ─────────────────────────────────────────────────────────────────────────────
+function packRows(photos, containerWidth) {
+  if (!photos.length) return [];
+
+  const GAP          = 4;   // px gap between photos (matches CSS gap)
+  const TARGET_ROW_H = 240; // px — height for the trailing partial row (see `stretch` below)
+
+  const rows = [];
+  let i = 0;
+  let prevN = null;
+
+  while (i < photos.length) {
+    const remaining = photos.length - i;
+
+    // ── Choose n ──────────────────────────────────────────────────────────────
+    let n;
+    const candidates = [2, 3, 4].filter(x => x !== prevN && x <= remaining);
+
+    if (candidates.length === 0) {
+      n = remaining; // forced (e.g. 1 photo left with prevN constraints)
+    } else {
+      const windowSize = Math.max(...candidates);
+      const slice      = photos.slice(i, i + windowSize);
+      const portraits  = slice.filter(p => (p.height || 1) > (p.width || 1)).length;
+      const aspects    = slice.map(p => (p.width || 1) / (p.height || 1));
+      const maxA       = Math.max(...aspects);
+      const minA       = Math.min(...aspects);
+      const similar    = (minA > 0) && (maxA / minA < 1.5);
+
+      if (candidates.includes(4) && (portraits >= 2 || similar)) {
+        n = 4;
+      } else if (candidates.includes(3)) {
+        n = 3;
+      } else {
+        n = candidates[0];
+      }
+    }
+
+    const rowPhotos = photos.slice(i, i + n);
+    const isPartial = rowPhotos.length < n;
+
+    // ── Compute aspect-corrected (nominal) widths ──────────────────────────────
+    // Scale every photo to the same height (maxNatH) so widths are comparable.
+    // This step alone is already size-invariant: two photos with the same
+    // aspect ratio always end up with the same scaledW regardless of how many
+    // native pixels each one has, since s = maxNatH/height cancels it out.
+    const maxNatH = Math.max(...rowPhotos.map(p => p.height || 1));
+    let nominalW = 0;
+    const photoScales = rowPhotos.map(p => {
+      const s = maxNatH / (p.height || 1);
+      nominalW += (p.width || 1) * s;
+      return s;
+    });
+
+    // ── Compute row height + stretch mode ─────────────────────────────────────
+    // A full row is scaled by ONE uniform factor (rowScale) applied to both
+    // width and height together, so every photo's aspect ratio is preserved
+    // exactly — this is the original algorithm's whole point. It's then
+    // rendered with CSS flex-grow so the row fills exactly containerWidth.
+    //
+    // Previously this also clamped rowHeight to a [MIN_ROW_H, MAX_ROW_H]
+    // range independently of width — but flex-grow still stretches the row to
+    // fill the full container width regardless of that clamp, so whenever the
+    // clamp actually changed rowHeight from its natural value, every photo in
+    // the row got uniformly stretched/squashed by the ratio between the
+    // natural and clamped heights, distorting aspect ratio for the whole row
+    // (worst for rows with photos of very different native sizes, since a
+    // huge size disparity is exactly what pushes the natural height to an
+    // extreme that needed clamping). Removed: rowHeight is now always exactly
+    // maxNatH * rowScale for full rows, so width and height are always scaled
+    // by the same factor, with no separate clamp to fight it.
+    //
+    // The trailing partial row doesn't have enough photos to justify
+    // stretching to the full container width without the same distortion, so
+    // it isn't stretched at all: it renders each photo at its own natural
+    // aspect-correct width for a fixed TARGET_ROW_H, left-aligned, same as any
+    // other justified-gallery layout's last row.
+    const totalGapPx = GAP * (rowPhotos.length - 1);
+    const stretch    = !isPartial && containerWidth > 0;
+    let rowHeight, finalScale;
+    if (stretch) {
+      const rowScale = (containerWidth - totalGapPx) / nominalW;
+      finalScale = rowScale;
+      rowHeight  = Math.max(1, Math.round(maxNatH * rowScale));
+    } else {
+      finalScale = TARGET_ROW_H / maxNatH;
+      rowHeight  = TARGET_ROW_H;
+    }
+
+    // ── Build row ──────────────────────────────────────────────────────────────
+    // flexGrow  = aspect-corrected nominal width (un-rounded) → CSS distributes
+    //             the row's available space proportionally when stretch=true,
+    //             always summing to exactly 100% width.
+    // widthPx   = each photo's own fixed pixel width when stretch=false, so it
+    //             renders at its true aspect ratio rather than being stretched
+    //             to fill the row.
+    // displayWidth = pixel estimate for the imgproxy size hint (not used for layout).
+    rows.push({
+      startIndex: i,
+      height:     rowHeight,
+      stretch,
+      photos: rowPhotos.map((p, idx) => {
+        const scaledW = (p.width || 1) * photoScales[idx];
+        return {
+          ...p,
+          flexGrow:      scaledW,                                        // CSS flex-grow (stretch rows)
+          widthPx:       Math.max(1, Math.round(scaledW * finalScale)),  // CSS fixed width (non-stretch rows)
+          displayHeight: rowHeight,
+          displayWidth:  Math.max(80, Math.round(scaledW * finalScale)), // thumbUrl hint
+        };
+      }),
+    });
+
+    prevN = rowPhotos.length;
+    i    += rowPhotos.length;
+  }
+
+  return rows;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// wallApp — root Alpine component for the photo wall (index.html).
+// Shares auth helpers and navbar state with photoApp but replaces the main
+// content with a paginated, lazily-loaded justified photo grid.
+// ─────────────────────────────────────────────────────────────────────────────
+function wallApp() {
+  return {
+    // ── Auth / navbar state (mirrors photoApp) ────────────────────────────────
+    loggedInUser: null,
+    testUser:     null,
+    authConfig:   { googleEnabled: false, appleEnabled: false, facebookEnabled: false, microsoftEnabled: false },
+    toast:        { visible: false, message: '', timer: null },
+    canUploadPhotos: false,
+
+    get currentUser() { return this.loggedInUser || this.testUser || null; },
+
+    thumbUrl(url, w)  { return thumbUrl(url, w); },
+    avatarSrc(user)   { return avatarSrc(user);  },
+    labelColorFor(n)  { return labelColorFor(n); },
+
+    authHeaders() {
+      if (this.loggedInUser) return {};
+      return this.testUser ? { 'X-User-ID': this.testUser.userid } : {};
+    },
+
+    // Mirrors photoApp.refreshPermissions (see there for why this exists) —
+    // wallApp only needs the upload-gating half, not the label-admin one.
+    async refreshPermissions() {
+      const summary = await fetchPermissionSummary(() => this.authHeaders());
+      this.canUploadPhotos = summary.includes('PhotoCreate');
+    },
+
+    selectTestUser(user) {
+      this.testUser           = user;
+      window._testUserID      = user ? user.userid : null;
+      window._currentUser     = user;
+      this.refreshPermissions();
+    },
+
+    async logout() {
+      await fetch('/auth/logout', { method: 'POST' });
+      this.loggedInUser   = null;
+      window._testUserID  = null;
+      window._loggedIn    = false;
+      window._currentUser = null;
+      this.refreshPermissions();
+    },
+
+    showToast(message) {
+      clearTimeout(this.toast.timer);
+      this.toast.message = message;
+      this.toast.visible = true;
+      this.toast.timer   = setTimeout(() => { this.toast.visible = false; }, 3500);
+    },
+
+    // ── Wall state ────────────────────────────────────────────────────────────
+    photos:         [],   // all loaded PhotoListItem objects
+    rows:           [],   // packed row objects from packRows()
+    loading:        false,
+    hasMore:        true,
+    offset:         0,
+    limit:          40,
+    containerWidth: 0,
+
+
+    async init() {
+      // Auth setup — same flow as photoApp.init.
+      try {
+        const [cfg, me] = await Promise.all([
+          fetch('/auth/config').then(r => r.json()),
+          fetch('/auth/me').then(r => r.json()),
+        ]);
+        this.authConfig = cfg;
+        if (me.loggedIn) {
+          this.loggedInUser       = me;
+          window._testUserID      = me.userid;
+          window._loggedIn        = true;
+          window._currentUser     = me;
+          document.dispatchEvent(new CustomEvent('photoapp:auth-ready', { detail: me }));
+        }
+      } catch { /* non-fatal */ }
+      await this.refreshPermissions();
+
+      document.addEventListener('photoapp:toast',        e => this.showToast(e.detail));
+      document.addEventListener('photoapp:auth-success', e => {
+        this.loggedInUser       = e.detail;
+        window._testUserID      = e.detail.userid;
+        window._loggedIn        = true;
+        window._currentUser     = e.detail;
+        this.refreshPermissions();
+      });
+      document.addEventListener('photoapp:profile-image', e => {
+        if (this.loggedInUser) this.loggedInUser = { ...this.loggedInUser, profileImage: e.detail };
+      });
+
+      // Wait one tick so Alpine has populated $refs, then measure container.
+      await new Promise(resolve => this.$nextTick(resolve));
+
+      const wall = this.$refs.wall;
+      if (wall) {
+        this.containerWidth = wall.clientWidth;
+        new ResizeObserver(() => {
+          const w = wall.clientWidth;
+          if (w !== this.containerWidth) {
+            this.containerWidth = w;
+            this.rows = packRows(this.photos, this.containerWidth);
+          }
+        }).observe(wall);
+      }
+
+      // Infinite-scroll sentinel.
+      const sentinel = this.$refs.sentinel;
+      if (sentinel) {
+        new IntersectionObserver(([entry]) => {
+          if (entry.isIntersecting && this.hasMore && !this.loading) {
+            this.loadMore();
+          }
+        }, { rootMargin: '600px' }).observe(sentinel);
+      }
+
+      await this.loadMore();
+    },
+
+    async loadMore() {
+      if (this.loading || !this.hasMore) return;
+      this.loading = true;
+      try {
+        const resp = await fetch(
+          `/api/v1/photos?limit=${this.limit}&offset=${this.offset}`,
+          { headers: this.authHeaders() }
+        );
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const batch = data.photos || [];
+        this.photos.push(...batch);
+        this.offset  += batch.length;
+        this.hasMore  = this.offset < data.total;
+        this.rows     = packRows(this.photos, this.containerWidth);
+      } catch(e) {
+        this.showToast(`Failed to load photos: ${e.message}`);
+      }
+      this.loading = false;
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// galleriesNav — loads gallery list for the hamburger menu.
+// Registered as a nested x-data component inside the hamburger dropdown.
+// galleriesHref is a plain data property (not a getter) so Alpine tracks it.
+// ─────────────────────────────────────────────────────────────────────────────
+function galleriesNav() {
+  return {
+    galleries:     [],
+    loaded:        false,
+    galleriesHref: '#',
+
+    async init() {
+      try {
+        const resp = await fetch('/api/v1/galleries?limit=100');
+        if (resp.ok) {
+          const data = await resp.json();
+          this.galleries = data.galleries || [];
+          if (this.galleries.length === 1) {
+            this.galleriesHref = '/galleries.html?galleryid=' + this.galleries[0].galleryid;
+          } else if (this.galleries.length > 1) {
+            this.galleriesHref = '/galleries.html';
+          }
+        }
+      } catch { /* non-fatal — menu degrades gracefully */ }
+      this.loaded = true;
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// galleriesApp — gallery list page + galleryid-based redirect.
+// If ?galleryid= is in the URL, fetches that gallery and redirects to its first
+// display.  If there is only one gallery total, also auto-redirects.
+// ─────────────────────────────────────────────────────────────────────────────
+function galleriesApp() {
+  return {
+    loggedInUser: null,
+    authConfig:   { googleEnabled: false, appleEnabled: false, facebookEnabled: false, microsoftEnabled: false },
+    toast:        { visible: false, message: '', timer: null },
+
+    galleries: [],
+    loading:   true,
+    error:     null,
+
+    avatarSrc(user)  { return avatarSrc(user); },
+
+    showToast(message) {
+      clearTimeout(this.toast.timer);
+      this.toast.message = message;
+      this.toast.visible = true;
+      this.toast.timer   = setTimeout(() => { this.toast.visible = false; }, 3500);
+    },
+
+    async _redirectToFirstDisplay(galleryid) {
+      const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(galleryid));
+      if (!resp.ok) return false;
+      const g = await resp.json();
+      if (g.displays && g.displays.length > 0) {
+        window.location.href = '/display.html?displayid=' + g.displays[0].displayid;
+        return true;
+      }
+      return false;
+    },
+
+    async init() {
+      try {
+        const [cfg, me] = await Promise.all([
+          fetch('/auth/config').then(r => r.json()),
+          fetch('/auth/me').then(r => r.json()),
+        ]);
+        this.authConfig = cfg;
+        if (me.loggedIn) {
+          this.loggedInUser       = me;
+          window._testUserID      = me.userid;
+          window._loggedIn        = true;
+          window._currentUser     = me;
+          document.dispatchEvent(new CustomEvent('photoapp:auth-ready', { detail: me }));
+        }
+      } catch { /* non-fatal */ }
+
+      document.addEventListener('photoapp:auth-success', e => {
+        this.loggedInUser   = e.detail;
+        window._testUserID  = e.detail.userid;
+        window._loggedIn    = true;
+        window._currentUser = e.detail;
+      });
+      document.addEventListener('photoapp:toast', e => this.showToast(e.detail));
+
+      const params    = new URLSearchParams(window.location.search);
+      const galleryid = params.get('galleryid');
+
+      // ?galleryid= → redirect to first display
+      if (galleryid) {
+        try {
+          const redirected = await this._redirectToFirstDisplay(galleryid);
+          if (!redirected) {
+            this.error   = 'This gallery has no displays yet.';
+            this.loading = false;
+          }
+        } catch(e) {
+          this.error   = 'Could not load gallery.';
+          this.loading = false;
+        }
+        return;
+      }
+
+      // Load full gallery list
+      try {
+        const resp = await fetch('/api/v1/galleries?limit=100');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        this.galleries = data.galleries || [];
+
+        // Single gallery → redirect straight to its first display
+        if (this.galleries.length === 1) {
+          const redirected = await this._redirectToFirstDisplay(this.galleries[0].galleryid);
+          if (redirected) return;
+        }
+      } catch(e) {
+        this.error = e.message;
+      }
+      this.loading = false;
+    },
+
+    async navigateToGallery(galleryid) {
+      try {
+        const redirected = await this._redirectToFirstDisplay(galleryid);
+        if (!redirected) this.showToast('This gallery has no displays yet.');
+      } catch(e) {
+        this.showToast('Could not load gallery.');
+      }
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slot layout geometry — shared by templateAdminApp (preview pane) and
+// displayApp/displayEditApp (actual viewer/editor). A template's
+// `slot_positions` is an array of { x, y, w, h } in percent, one entry per
+// slot, positioned absolutely within a 16:9 canvas — this is exactly what
+// the Template Admin preview renders, and the display pages must render the
+// same geometry or the "preview" is misleading.
+// defaultSlotPositions(n) generates an even grid (used both as the starting
+// layout for new templates and as a fallback if a template's slot_positions
+// is missing or doesn't match the display's slot count).
+// ─────────────────────────────────────────────────────────────────────────────
+// Each slot's position also carries a `placard: { side, align, gapIn }` —
+// where that slot's placard attaches relative to the *photo frame* itself
+// (not the slot's own, possibly-larger x/y/w/h box), so it stays correctly
+// placed however the frame ends up sized/aligned within its slot:
+//   side  — "top" | "bottom" | "left" | "right": which edge of the frame
+//           the placard sits against.
+//   align — 0-100: where along that edge, from the frame's own top/left
+//           (0) to its bottom/right (100); 50 centers it. For side
+//           top/bottom this slides the placard left<->right; for
+//           side left/right it slides top<->bottom.
+//   gapIn — physical distance (inches, same board-relative unit as the
+//           gallery's placard widthIn/heightIn/boardWidthIn — see
+//           normalizeGalleryPlacard()) between the placard's near edge and
+//           the frame's near edge.
+// See placardBoxStyle() below for how this resolves to an actual on-screen
+// position — it needs the frame's *measured* px box (computeFrameBoxSize()),
+// not just the slot's own x/y/w/h, since the frame can be smaller than (and
+// offset within) its slot depending on the photo's aspect ratio and the
+// template's align setting.
+var DEFAULT_PLACARD_GAP_IN = 0.15;
+
+function defaultSlotPositions(n) {
+  n = Math.max(1, n | 0);
+  var cols  = n <= 1 ? 1 : n <= 2 ? 2 : n <= 3 ? 3 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
+  var rows  = Math.ceil(n / cols);
+  var gap   = 2; // percent
+  var cellW = (100 - gap * (cols - 1)) / cols;
+  var cellH = (100 - gap * (rows - 1)) / rows;
+  var positions = [];
+  for (var i = 0; i < n; i++) {
+    var col = i % cols, row = Math.floor(i / cols);
+    var x = +(col * (cellW + gap)).toFixed(2);
+    var y = +(row * (cellH + gap)).toFixed(2);
+    positions.push({
+      x: x, y: y, w: +cellW.toFixed(2), h: +cellH.toFixed(2),
+      placard: { side: 'bottom', align: 50, gapIn: DEFAULT_PLACARD_GAP_IN },
+    });
+  }
+  return positions;
+}
+
+var PLACARD_SIDES = ['top', 'bottom', 'left', 'right'];
+
+// normalizeSlotPositions(raw, count) — use the template's own slot_positions
+// if it's a valid array matching the slot count, else fall back to an even
+// grid. A mismatch (e.g. a display with more/fewer slots than the template
+// currently defines) falls back rather than rendering a broken partial layout.
+function normalizeSlotPositions(raw, count) {
+  var arr = Array.isArray(raw) ? raw : [];
+  if (count <= 0) return [];
+  if (arr.length !== count) return defaultSlotPositions(count);
+  var defaults = defaultSlotPositions(count);
+  return arr.map(function (p, i) {
+    var d       = defaults[i];
+    var placard = p && p.placard;
+    return {
+      x: Number(p && p.x) || 0,
+      y: Number(p && p.y) || 0,
+      w: Number(p && p.w) || 0,
+      h: Number(p && p.h) || 0,
+      placard: {
+        side:  (placard && PLACARD_SIDES.indexOf(placard.side) !== -1) ? placard.side : d.placard.side,
+        align: (placard && typeof placard.align === 'number') ? Math.max(0, Math.min(100, placard.align)) : d.placard.align,
+        gapIn: (placard && typeof placard.gapIn === 'number') ? placard.gapIn : d.placard.gapIn,
+      },
+    };
+  });
+}
+
+function slotBoxStyle(positions, index) {
+  var p = (positions && positions[index]) || { x: 0, y: 0, w: 100, h: 100 };
+  return 'position: absolute; left: ' + p.x + '%; top: ' + p.y + '%; width: ' + p.w + '%; height: ' + p.h + '%;';
+}
+
+// ── Template Admin preview drag helpers ─────────────────────────────────────
+// Pure geometry for the Template Admin preview's drag interactions (slot
+// move, slot corner-resize, placard drag-to-attach) — kept separate from the
+// mousedown/mousemove event wiring (in templateAdminApp) so the math itself
+// is unit-testable without a real DOM. Percent-of-canvas in, percent-of-canvas
+// out throughout, same coordinate space as x/y/w/h everywhere else.
+
+// Resizing a slot by dragging one of its 4 corner handles: the OPPOSITE
+// corner stays fixed in place, and the dragged corner follows the cursor
+// (clamped to the canvas and a minimum size so a slot can't be dragged to
+// nothing or flip inside-out).
+function resizeSlotFromCorner(corner, orig, cursorX, cursorY, minSize) {
+  var min = minSize > 0 ? minSize : 4;
+  // isFinite guards: a non-finite cursorX/cursorY (e.g. NaN from a caller
+  // dividing by a zero-size rect) would otherwise poison every value below,
+  // since Math.min/Math.max propagate NaN — fall back to the box's own
+  // existing edge so a bad input just no-ops that axis instead of corrupting it.
+  if (!isFinite(cursorX)) cursorX = corner === 'nw' || corner === 'sw' ? orig.x : orig.x + orig.w;
+  if (!isFinite(cursorY)) cursorY = corner === 'nw' || corner === 'ne' ? orig.y : orig.y + orig.h;
+  cursorX = Math.max(0, Math.min(100, cursorX));
+  cursorY = Math.max(0, Math.min(100, cursorY));
+  var left = orig.x, top = orig.y, right = orig.x + orig.w, bottom = orig.y + orig.h;
+  if (corner === 'nw')      { left  = cursorX; top    = cursorY; }
+  else if (corner === 'ne') { right = cursorX; top    = cursorY; }
+  else if (corner === 'sw') { left  = cursorX; bottom = cursorY; }
+  else if (corner === 'se') { right = cursorX; bottom = cursorY; }
+  // nw/sw drag the left edge; ne/se drag the right edge — whichever one's
+  // being dragged is the one pulled back if the box got too narrow/short.
+  if (right - left < min) { if (corner === 'nw' || corner === 'sw') left = right - min; else right = left + min; }
+  if (bottom - top < min) { if (corner === 'nw' || corner === 'ne') top  = bottom - min; else bottom = top + min; }
+  return {
+    x: Math.round(left * 100) / 100,
+    y: Math.round(top  * 100) / 100,
+    w: Math.round((right  - left) * 100) / 100,
+    h: Math.round((bottom - top)  * 100) / 100,
+  };
+}
+
+// Dragging the placard marker in the preview: pick whichever side of the
+// slot's own box (used as a stand-in for the photo frame — Template Admin
+// has no real photo/frame geometry to drag against, see the comment above
+// previewPlacardStyle()) the drop point is nearest to — determined by
+// normalizing the point's offset from the slot's center by the slot's own
+// half-width/half-height, so a wide short slot doesn't bias every drop
+// toward top/bottom (or a narrow tall one toward left/right). Once a side
+// is picked, the point's position along that edge becomes `align` (0-100),
+// and its perpendicular distance past that edge becomes `gapIn` — converted
+// from percent-of-canvas using DEFAULT_BOARD_WIDTH_IN as a reference (the
+// real gallery's boardWidthIn isn't known here; a template can be reused
+// across galleries with different board widths, so this is necessarily an
+// approximation — the real display resolves gapIn precisely against
+// whichever gallery it's actually shown in). Points inside the slot (e.g.
+// dragged onto the frame itself) clamp gapIn to 0 rather than going negative.
+function placardDragToConfig(slot, px, py) {
+  var sx = slot.x || 0, sy = slot.y || 0, sw = slot.w || 0, sh = slot.h || 0;
+  var cx = sx + sw / 2, cy = sy + sh / 2;
+  // isFinite guards: a non-finite px/py (e.g. Infinity/NaN from a caller
+  // dividing by a zero-size rect) would otherwise poison every value below
+  // (gapIn especially — JSON.stringify(Infinity/NaN) silently writes `null`,
+  // which looks like corrupted data). Fall back to the slot's own center,
+  // i.e. treat a bad drop point as "no real drag data" -> gapIn 0.
+  if (!isFinite(px)) px = cx;
+  if (!isFinite(py)) py = cy;
+  var nx = sw > 0 ? (px - cx) / (sw / 2) : 0;
+  var ny = sh > 0 ? (py - cy) / (sh / 2) : 0;
+  var side, align, gapPct;
+  if (Math.abs(nx) >= Math.abs(ny)) {
+    side   = nx >= 0 ? 'right' : 'left';
+    align  = sh > 0 ? ((py - sy) / sh) * 100 : 50;
+    gapPct = side === 'right' ? (px - (sx + sw)) : (sx - px);
+  } else {
+    side   = ny >= 0 ? 'bottom' : 'top';
+    align  = sw > 0 ? ((px - sx) / sw) * 100 : 50;
+    gapPct = side === 'bottom' ? (py - (sy + sh)) : (sy - py);
+  }
+  align = Math.max(0, Math.min(100, align));
+  var boardHeightIn = DEFAULT_BOARD_WIDTH_IN * 9 / 16;
+  var gapIn = (side === 'top' || side === 'bottom')
+    ? (gapPct / 100) * boardHeightIn
+    : (gapPct / 100) * DEFAULT_BOARD_WIDTH_IN;
+  gapIn = Math.max(0, Math.round(gapIn * 100) / 100);
+  return { side: side, align: Math.round(align), gapIn: gapIn };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Matte + frame presentation helpers — shared by displayApp and displayEditApp.
+// A display template's `presentation` JSON (set in Template Admin) controls
+// how each photo slot is bordered:
+//   {
+//     "matte": { "enabled": true,  "color": "#e8e3d5", "width": 16 },
+//     "frame": { "enabled": false, "color": "#3d3424", "width": "5%" }
+//   }
+// A width may be a plain number (px) or a string like "5%" — a percentage
+// of the photo's own rendered (fitted) width, so the matte/frame scales
+// with however large the photo actually appears rather than staying a
+// fixed pixel amount. matte.width may also be a per-side object like
+// { "top": 8, "right": "4%", "bottom": "4%", "left": 8 } — px and percent
+// can be mixed freely, per side. Missing sides default to 0. Either matte
+// or frame can be turned off independently via "enabled". Absent/invalid
+// presentation falls back to a plain matte in the theme's frame color and
+// no outer frame.
+//
+// Percentages can't be resolved by CSS alone (a photo's rendered size isn't
+// known until layout), so they're resolved in two places that must agree:
+//   - computeFrameBoxSize() solves for the photo's fitted width analytically
+//     (the overhead is now a linear function of that width, see below) and
+//     exposes it as `contentW` on its result.
+//   - frameOuterStyle()/matteInnerStyle() take that same `contentW` and use
+//     it to turn any percentage sides into their final px value for the
+//     actual CSS border/padding.
+// Before the first JS layout pass measures anything, `contentW` is
+// undefined and percentage sides resolve to 0 (invisible) for one tick,
+// then snap to the correct size — the same brief fallback window
+// photoFrameFallbackStyle() already has for the frame's own size.
+// ─────────────────────────────────────────────────────────────────────────────
+function normalizeSideWidths(width) {
+  if (typeof width === 'number' || typeof width === 'string') {
+    return { top: width, right: width, bottom: width, left: width };
+  }
+  var w = width || {};
+  function pick(v) { return (typeof v === 'number' || typeof v === 'string') ? v : 0; }
+  return { top: pick(w.top), right: pick(w.right), bottom: pick(w.bottom), left: pick(w.left) };
+}
+
+// Splits one width entry into a fixed px amount and a coefficient (fraction
+// of contentW) — e.g. "5%" -> { fixed: 0, coef: 0.05 }, 16 -> { fixed: 16, coef: 0 }.
+function splitWidthValue(v) {
+  if (typeof v === 'string') {
+    var m = v.trim().match(/^(-?[\d.]+)\s*%$/);
+    if (m) return { fixed: 0, coef: parseFloat(m[1]) / 100 };
+  }
+  return { fixed: typeof v === 'number' ? v : 0, coef: 0 };
+}
+
+// Resolves one width entry to an actual px value given the photo's known
+// rendered width (contentW). Plain numbers ignore contentW entirely.
+function resolveWidthPx(v, contentW) {
+  var s = splitWidthValue(v);
+  return s.fixed + s.coef * (contentW || 0);
+}
+
+function frameOuterStyle(presentation, contentW) {
+  var p     = presentation || {};
+  var frame = Object.assign({ enabled: false, color: 'var(--board-border)', width: 8 }, p.frame || {});
+  if (!frame.enabled) return 'border: none;';
+  var px = resolveWidthPx(frame.width, contentW);
+  return 'border: ' + px + 'px solid ' + frame.color + ';';
+}
+
+function matteInnerStyle(presentation, contentW) {
+  var p     = presentation || {};
+  var matte = Object.assign({ enabled: true, color: 'var(--frame-bg)', width: 16 }, p.matte || {});
+  if (!matte.enabled) return 'background: none; padding: 0;';
+  var w      = normalizeSideWidths(matte.width);
+  var top    = resolveWidthPx(w.top,    contentW);
+  var right  = resolveWidthPx(w.right,  contentW);
+  var bottom = resolveWidthPx(w.bottom, contentW);
+  var left   = resolveWidthPx(w.left,   contentW);
+  return 'background: ' + matte.color + '; padding: ' + top + 'px ' + right + 'px ' + bottom + 'px ' + left + 'px;';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Photo alignment within its slot — also part of a template's `presentation`:
+//   { "align": { "horizontal": "center", "vertical": "center" } }
+// horizontal: "left" | "center" | "right"; vertical: "top" | "center" | "bottom".
+// The framed photo (frame + matte + image) always keeps its own aspect
+// ratio — it is never stretched to match the slot's shape — so whenever a
+// slot's aspect ratio doesn't match the photo's, there's unfilled space on
+// two opposite sides of the slot. `align` controls which edge that space
+// collects against; the unfilled space itself always renders as the page
+// background (no fill color of its own).
+// ─────────────────────────────────────────────────────────────────────────────
+function normalizeAlign(presentation) {
+  var p = presentation || {};
+  var a = p.align || {};
+  var h = ['left', 'center', 'right'].indexOf(a.horizontal) !== -1 ? a.horizontal : 'center';
+  var v = ['top', 'center', 'bottom'].indexOf(a.vertical)   !== -1 ? a.vertical   : 'center';
+  return { horizontal: h, vertical: v };
+}
+
+var ALIGN_JUSTIFY = { left: 'flex-start', center: 'center', right: 'flex-end' };
+var ALIGN_ITEMS    = { top:  'flex-start', center: 'center', bottom: 'flex-end' };
+
+function photoAreaStyle(presentation) {
+  var a = normalizeAlign(presentation);
+  return 'display: flex; justify-content: ' + ALIGN_JUSTIFY[a.horizontal] + '; align-items: ' + ALIGN_ITEMS[a.vertical] + ';';
+}
+
+// The framed photo's box size — computed in actual pixels so the matte and
+// frame widths are exactly what's configured on *every* side.
+//
+// A pure CSS approach (aspect-ratio: photoW/photoH on .photo-frame, with
+// matte/frame as padding/border inside it) looks right at first, but isn't:
+// setting the frame's aspect-ratio to the raw photo ratio, then subtracting
+// the matte's fixed-px padding from that box, leaves a content area whose
+// ratio no longer matches the photo — so object-fit:contain on the <img>
+// letterboxes inside the matte on one axis, making the visual matte gap on
+// that axis wider than the configured width even though the CSS padding
+// itself is uniform. (E.g. a 20px matte around a photo can render as ~20px
+// top/bottom but ~27px left/right, purely from that rounding.)
+//
+// computeFrameBoxSize fixes this by working backwards from the *measured*
+// available space: it subtracts the matte/frame's exact overhead first,
+// fits the photo's true aspect ratio into what's left, then adds the
+// overhead back on — so the returned box, once padded/bordered by matte and
+// frame via normal CSS, has the image filling its content area exactly with
+// no internal letterboxing, and the matte is the same width on all sides.
+//
+// Percentage-based widths (see the comment above matteInnerStyle()) make
+// the overhead itself depend on the photo's fitted width — matte/frame
+// overhead is no longer a constant, it's `fixed + coef * contentW`. Both
+// the width and height fit constraints are still linear in contentW though,
+// so this solves them directly rather than iterating:
+//   contentW + (overheadWFixed + overheadWCoef*contentW) <= availW
+//   contentW/ratio + (overheadHFixed + overheadHCoef*contentW) <= availH
+// (When nothing is percentage-based, overheadWCoef/overheadHCoef are 0 and
+// this reduces to exactly the old fixed-overhead arithmetic.)
+function computeFrameBoxSize(availW, availH, slot, presentation) {
+  if (!(availW > 0) || !(availH > 0)) return null;
+
+  var photo  = slot && slot.photo;
+  var photoW = (photo && photo.width  > 0) ? photo.width  : 4;
+  var photoH = (photo && photo.height > 0) ? photo.height : 3;
+  var ratio  = photoW / photoH;
+
+  var p     = presentation || {};
+  var matte = Object.assign({ enabled: true,  width: 16 }, p.matte || {});
+  var frame = Object.assign({ enabled: false, width: 8  }, p.frame || {});
+  var mw    = matte.enabled ? normalizeSideWidths(matte.width) : { top: 0, right: 0, bottom: 0, left: 0 };
+
+  var top    = splitWidthValue(mw.top);
+  var right  = splitWidthValue(mw.right);
+  var bottom = splitWidthValue(mw.bottom);
+  var left   = splitWidthValue(mw.left);
+  var side   = splitWidthValue(frame.enabled ? frame.width : 0);
+
+  var overheadWFixed = left.fixed + right.fixed + 2 * side.fixed;
+  var overheadWCoef  = left.coef  + right.coef  + 2 * side.coef;
+  // Percentages are always relative to the photo's WIDTH (per spec), even
+  // for top/bottom matte — so the height overhead uses the same
+  // width-based coefficients, not separate height-relative ones.
+  var overheadHFixed = top.fixed + bottom.fixed + 2 * side.fixed;
+  var overheadHCoef  = top.coef  + bottom.coef  + 2 * side.coef;
+
+  var maxW1 = (availW - overheadWFixed) / (1 + overheadWCoef);
+  var maxW2 = (availH - overheadHFixed) / (1 / ratio + overheadHCoef);
+  var contentW = Math.max(0, Math.min(maxW1, maxW2));
+  if (!isFinite(contentW)) contentW = 0;
+  var contentH = contentW / ratio;
+
+  var overheadW = overheadWFixed + overheadWCoef * contentW;
+  var overheadH = overheadHFixed + overheadHCoef * contentW;
+
+  return {
+    // Never exceed the measured available space even in extreme cases
+    // (e.g. overhead alone already larger than the slot).
+    w: Math.min(availW, contentW + overheadW),
+    h: Math.min(availH, contentH + overheadH),
+    // Exposed so frameOuterStyle()/matteInnerStyle() can resolve any
+    // percentage-based sides to their exact final px value.
+    contentW: contentW,
+  };
+}
+
+// Before the JS layout pass has measured anything (first paint), fall back
+// to the CSS-only aspect-ratio approximation so there's no flash of a
+// collapsed/unsized box. This is corrected to the exact size on the very
+// next tick via _layoutFrames() — see displayApp/displayEditApp.
+function photoFrameFallbackStyle(slot) {
+  var photo = slot && slot.photo;
+  var w = (photo && photo.width  > 0) ? photo.width  : 4;
+  var h = (photo && photo.height > 0) ? photo.height : 3;
+  return 'aspect-ratio: ' + w + ' / ' + h + '; max-width: 100%; max-height: 100%;';
+}
+
+function photoFrameSizeStyle(size, slot) {
+  if (size) return 'width: ' + size.w.toFixed(2) + 'px; height: ' + size.h.toFixed(2) + 'px;';
+  return photoFrameFallbackStyle(slot);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Placard configuration — GALLERY-level (set once in Gallery Admin's Placard
+// Settings, applies to every slot in that gallery for visual consistency).
+// Stored as gallery.placard_defaults JSON:
+//   {
+//     "width": 20, "height": 8,             // percent of the 16:9 canvas
+//     "background": "#faf7f0", "borderColor": "#d6ccb0",
+//     "items": [
+//       { "id": "photographer", "text": "Photographer: {Photographer}",
+//         "xIn": 0.3, "yIn": 0.2,           // inches from the placard's OWN
+//                                            // top-left corner (absolute —
+//                                            // NOT a percent of the placard's
+//                                            // size; see the note below)
+//         "fontFamily": "'DM Serif Display', serif", "fontSize": 12,
+//         "fontWeight": 400, "fontStyle": "normal", "color": "#3d3424",
+//         "hideIfMissing": true }
+//     ]
+//   }
+// An item's `xIn`/`yIn` is a fixed physical distance from the placard's own
+// top-left corner — deliberately NOT a percent of the placard's width/height,
+// so resizing the placard later (via Gallery Admin's Placard Settings) never
+// reflows an item's position. An item can end up outside the (resized)
+// placard's bounds this way — that's expected; the placard box clips its
+// contents (overflow: hidden), so the item just becomes invisible until the
+// placard is made large enough again or the item is dragged back in.
+// Rendering still needs a *percent* to position via CSS, so it's computed at
+// render time as xIn / placardWidthIn * 100 (see placardItemStyle()) — the
+// percent is a render-time detail, not what's stored.
+// An item's `text` may reference photo labels via `{LabelName}` — resolved
+// against the assigned photo's Labels (see resolvePlacardItemText()). If any
+// referenced label is missing and hideIfMissing is true, the whole item is
+// skipped for that slot; otherwise the token resolves to an empty string.
+// Each slot's *position* on the canvas (independent of its photo's slot box)
+// comes from the template's slot_positions[i].placard — see
+// defaultSlotPositions() above. A slot's rendered items can be overridden
+// per-item via display_slots.placard.overrides (see placardItemsFor()),
+// e.g. to correct one photo's caption without touching its labels.
+// This replaces the older template-level presentation.placard
+// (position/fields) system entirely.
+// ─────────────────────────────────────────────────────────────────────────────
+// Default position (in inches, from the placard's own top-left corner) for
+// the Nth item (0-indexed) added with no explicit xIn/yIn — wraps into a new
+// column every 4 rows so new items always start out visible inside the
+// *current* placard bounds no matter how many already exist, with a small
+// inset from each edge. Falls back to the module-level default placard size
+// if the actual current size isn't known yet (e.g. normalizing stored data
+// before any editor session has opened it).
+function defaultPlacardItemPosition(n, placardWidthIn, placardHeightIn) {
+  var w = placardWidthIn  > 0 ? placardWidthIn  : DEFAULT_PLACARD_WIDTH_IN;
+  var h = placardHeightIn > 0 ? placardHeightIn : DEFAULT_PLACARD_HEIGHT_IN;
+  var rows = 4, cols = 3;
+  var row  = n % rows;
+  var col  = Math.floor(n / rows) % cols;
+  var marginX = w * 0.08;
+  var marginY = h * 0.08;
+  var stepX = cols > 1 ? (w - 2 * marginX) / cols : 0;
+  var stepY = rows > 1 ? (h - 2 * marginY) / rows : 0;
+  return {
+    xIn: Math.round((marginX + col * stepX) * 100) / 100,
+    yIn: Math.round((marginY + row * stepY) * 100) / 100,
+  };
+}
+
+// ── Physical units ──────────────────────────────────────────────────────────
+// widthIn/heightIn (the placard's own physical size, in inches) are the
+// canonical stored fields — same convention as items' xIn/yIn, and what the
+// Gallery Admin visual editor and the raw-JSON editor both show, so the two
+// views always agree. `boardWidthIn` is the physical width, in inches, that
+// the whole 16:9 canvas is meant to represent (e.g. "this gallery's display
+// is a 48 inch wide board") — a conversion reference the editor UI uses; it
+// has no other effect on rendering. `unit` remembers which unit (in/cm) the
+// editor was last shown in. Rendering still needs percent-of-canvas (CSS
+// can't use inches directly against a canvas that scales to any screen
+// size), so percent is derived at normalize time via:
+//   width%  = (widthIn  / boardWidthIn)          * 100
+//   height% = (heightIn / (boardWidthIn * 9/16)) * 100
+// Older saved galleries (from before this field existed) only have percent
+// width/height; normalizeGalleryPlacard() falls back to converting those
+// into widthIn/heightIn so they still load correctly.
+var CM_PER_IN = 2.54;
+var DEFAULT_BOARD_WIDTH_IN   = 48;   // a reasonably-sized display board
+var DEFAULT_PLACARD_WIDTH_IN = 4;    // a small caption card
+var DEFAULT_PLACARD_HEIGHT_IN = 1.5;
+// The reference density (CSS's own definition of "1in" = 96px) that placard
+// item font sizes are assumed to be chosen against — see placardFontScale().
+var CSS_PX_PER_IN = 96;
+
+function inToCm(v) { return v * CM_PER_IN; }
+function cmToIn(v) { return v / CM_PER_IN; }
+function round2(v) { return Math.round(v * 100) / 100; }
+
+// Placard item font sizes (fontSize, letterSpacing) are stored in px as if
+// the board were rendered at exactly boardWidthIn inches wide, at CSS's
+// standard 96px/in. But the display canvas is responsive — it's shown at
+// whatever width fits the screen/window, not its "true" physical size — so
+// the same 12px item could end up looking tiny on a canvas rendered small
+// (e.g. a 96in board squeezed into a 600px-wide phone screen) or huge on one
+// rendered large. This computes the scale factor to correct for that: the
+// ratio of the canvas's *actual* on-screen pixel width to its *design*
+// pixel width (boardWidthIn * 96px/in). At scale 1, fonts render exactly as
+// specified; below/above 1, they shrink/grow with the canvas so text stays
+// proportionate to the board (and to the placard box, since the box is
+// always a fixed percent of the canvas — see the comment above
+// normalizeGalleryPlacard()).
+function placardFontScale(boardWidthIn, canvasPxWidth) {
+  if (!(boardWidthIn > 0) || !(canvasPxWidth > 0)) return 1;
+  return canvasPxWidth / (boardWidthIn * CSS_PX_PER_IN);
+}
+
+// The placard's own physical size in inches. Normalized gallery objects
+// already carry widthIn/heightIn directly (see normalizeGalleryPlacard), so
+// this just reads them back out — kept as a small helper since several call
+// sites want the pair as a unit.
+function placardPhysicalSize(g) {
+  return { widthIn: g.widthIn, heightIn: g.heightIn };
+}
+
+function normalizeGalleryPlacard(raw) {
+  var p = raw || {};
+  var boardWidthIn  = typeof p.boardWidthIn === 'number' && p.boardWidthIn > 0 ? p.boardWidthIn : DEFAULT_BOARD_WIDTH_IN;
+  var boardHeightIn = boardWidthIn * 9 / 16;
+  // widthIn/heightIn are canonical; width/height (percent) are only read
+  // here as a fallback for galleries saved before physical units existed.
+  var widthIn, heightIn;
+  if (typeof p.widthIn === 'number' && p.widthIn > 0) {
+    widthIn = p.widthIn;
+  } else if (typeof p.width === 'number') {
+    widthIn = (p.width / 100) * boardWidthIn;
+  } else {
+    widthIn = DEFAULT_PLACARD_WIDTH_IN;
+  }
+  if (typeof p.heightIn === 'number' && p.heightIn > 0) {
+    heightIn = p.heightIn;
+  } else if (typeof p.height === 'number') {
+    heightIn = (p.height / 100) * boardHeightIn;
+  } else {
+    heightIn = DEFAULT_PLACARD_HEIGHT_IN;
+  }
+  var width  = (widthIn  / boardWidthIn)  * 100;
+  var height = (heightIn / boardHeightIn) * 100;
+  return {
+    widthIn:     widthIn,
+    heightIn:    heightIn,
+    width:       width,   // derived percent-of-canvas, for CSS rendering only
+    height:      height,  // derived percent-of-canvas, for CSS rendering only
+    boardWidthIn: boardWidthIn,
+    unit:        p.unit === 'cm' ? 'cm' : 'in',
+    background:  p.background  || '#faf7f0',
+    borderColor: p.borderColor || '#d6ccb0',
+    items: Array.isArray(p.items) ? p.items.map(function (it, idx) {
+      var pos = defaultPlacardItemPosition(idx, widthIn, heightIn);
+      return {
+        id:            it.id || ('item-' + idx),
+        text:          it.text || '',
+        xIn:           typeof it.xIn === 'number' ? it.xIn : pos.xIn,
+        yIn:           typeof it.yIn === 'number' ? it.yIn : pos.yIn,
+        fontFamily:    it.fontFamily || "'DM Sans', sans-serif",
+        fontSize:      typeof it.fontSize === 'number' ? it.fontSize : 12,
+        fontWeight:    it.fontWeight || 400,
+        fontStyle:     it.fontStyle  || 'normal',
+        color:         it.color      || '#3d3424',
+        hideIfMissing: it.hideIfMissing !== false,
+      };
+    }) : [],
+  };
+}
+
+// `scale` (default 1, from placardFontScale()) corrects px-based properties
+// (fontSize, letterSpacing) for the canvas's actual on-screen size vs. its
+// physical definition — see placardFontScale(). lineHeight is unitless
+// (a multiple of fontSize), so it doesn't need scaling on its own.
+function typographyStyle(typo, scale) {
+  var t = typo || {};
+  var s = typeof scale === 'number' && scale > 0 ? scale : 1;
+  var css = '';
+  if (t.fontFamily)             css += 'font-family: ' + t.fontFamily + ';';
+  if (t.fontSize != null)       css += 'font-size: ' + (t.fontSize * s) + 'px;';
+  if (t.fontWeight)             css += 'font-weight: ' + t.fontWeight + ';';
+  if (t.fontStyle)              css += 'font-style: ' + t.fontStyle + ';';
+  if (t.color)                  css += 'color: ' + t.color + ';';
+  if (t.textAlign)              css += 'text-align: ' + t.textAlign + ';';
+  if (t.textTransform)          css += 'text-transform: ' + t.textTransform + ';';
+  if (t.letterSpacing != null)  css += 'letter-spacing: ' + (t.letterSpacing * s) + 'px;';
+  if (t.lineHeight != null)     css += 'line-height: ' + t.lineHeight + ';';
+  return css;
+}
+
+// Substitutes {LabelName} tokens in a placard item's text template against
+// a photo's labels ([{ name, value }, ...]). Returns { text, missing } —
+// missing is true if any referenced token had no matching label, so callers
+// can honor hideIfMissing.
+function resolvePlacardItemText(template, labels) {
+  var missing = false;
+  var text = String(template || '').replace(/\{([^{}]+)\}/g, function (m, name) {
+    var lbl = (labels || []).filter(function (l) { return l && l.name === name; })[0];
+    if (!lbl) { missing = true; return ''; }
+    return lbl.value;
+  });
+  return { text: text, missing: missing };
+}
+
+// The placard box's own position + appearance for one slot. Size/appearance
+// come from the gallery; position is resolved from the template's
+// slotPos.placard = { side, align, gapIn } (see the comment above
+// defaultSlotPositions()) *relative to the photo frame itself* — not the
+// slot's own, possibly larger, x/y/w/h box. That means working out where
+// the frame actually ends up on screen first:
+//   1. The slot's own box, in px, within the canvas (same math as
+//      slotBoxStyle(), just in px instead of left/top/width/height%).
+//   2. The frame's px size within that slot — `frameSize` (computeFrameBoxSize()'s
+//      { w, h }, measured by layoutFrames()) — which can be smaller than the
+//      slot if the photo's aspect ratio doesn't match it.
+//   3. Where that frame box sits *within* the slot — determined by the
+//      template's presentation.align, the same flexbox alignment
+//      photoAreaStyle() applies to the real .photo-frame element.
+// From the frame's resolved px box, side/align/gapIn place the placard
+// directly against one edge, slid along it by `align` (0 = flush with the
+// frame's own top/left, 100 = flush with its bottom/right), offset by
+// `gapIn` inches (converted to px via the canvas's actual current
+// px-per-inch, canvasPxWidth / boardWidthIn — the real on-screen scale,
+// not the fixed 96dpi reference placardFontScale() uses for font sizing).
+// The result is converted back to percent-of-canvas so it renders through
+// the same `position: absolute; left/top: %` mechanism as before.
+//
+// `canvasPxWidth` also sets `--placard-hover-scale` (see placardFontScale())
+// exactly as before — unrelated to the position math above, just piggy-backing
+// on the same style string.
+//
+// Before the first layoutFrames() measurement pass (frameSize null,
+// canvasPxWidth 0), there's nothing to compute a precise position from yet;
+// fall back to roughly where the old default position used to be (just
+// below the slot) so nothing flashes at a nonsensical 0%,0% for that one tick.
+function placardBoxStyle(gallery, slotPos, canvasPxWidth, frameSize, presentation) {
+  var g          = normalizeGalleryPlacard(gallery && gallery.placard_defaults);
+  var cfg        = (slotPos && slotPos.placard) || {};
+  var side       = PLACARD_SIDES.indexOf(cfg.side) !== -1 ? cfg.side : 'bottom';
+  var align      = typeof cfg.align === 'number' ? Math.max(0, Math.min(100, cfg.align)) : 50;
+  var gapIn      = typeof cfg.gapIn === 'number' ? cfg.gapIn : DEFAULT_PLACARD_GAP_IN;
+  var fontScale  = placardFontScale(g.boardWidthIn, canvasPxWidth);
+  var hoverScale = fontScale > 0 ? 1 / fontScale : 1;
+
+  var slotX = (slotPos && slotPos.x) || 0, slotY = (slotPos && slotPos.y) || 0;
+  var slotW = (slotPos && slotPos.w) || 0, slotH = (slotPos && slotPos.h) || 0;
+
+  if (!(canvasPxWidth > 0)) {
+    var fallbackY = Math.min(96, slotY + slotH + 1);
+    return 'position: absolute; left: ' + slotX + '%; top: ' + fallbackY + '%; width: ' + g.width + '%; height: ' + g.height + '%; background: ' + g.background + '; border: 1px solid ' + g.borderColor + '; --placard-hover-scale: 1;';
+  }
+
+  var canvasW = canvasPxWidth;
+  var canvasH = canvasW * 9 / 16;
+
+  var slotLeftPx   = (slotX / 100) * canvasW;
+  var slotTopPx    = (slotY / 100) * canvasH;
+  var slotWidthPx  = (slotW / 100) * canvasW;
+  var slotHeightPx = (slotH / 100) * canvasH;
+
+  var frameW = (frameSize && frameSize.w > 0) ? frameSize.w : slotWidthPx;
+  var frameH = (frameSize && frameSize.h > 0) ? frameSize.h : slotHeightPx;
+  var a = normalizeAlign(presentation);
+  var frameLeftPx = slotLeftPx + (a.horizontal === 'left' ? 0 : a.horizontal === 'right' ? (slotWidthPx - frameW) : (slotWidthPx - frameW) / 2);
+  var frameTopPx  = slotTopPx  + (a.vertical   === 'top'  ? 0 : a.vertical   === 'bottom' ? (slotHeightPx - frameH) : (slotHeightPx - frameH) / 2);
+
+  var placardWidthPx  = (g.width  / 100) * canvasW;
+  var placardHeightPx = (g.height / 100) * canvasH;
+  var pxPerIn = g.boardWidthIn > 0 ? canvasW / g.boardWidthIn : 0;
+  var gapPx   = gapIn * pxPerIn;
+
+  var placardLeftPx, placardTopPx;
+  if (side === 'top' || side === 'bottom') {
+    placardLeftPx = frameLeftPx + (align / 100) * (frameW - placardWidthPx);
+    placardTopPx  = side === 'top' ? (frameTopPx - gapPx - placardHeightPx) : (frameTopPx + frameH + gapPx);
+  } else {
+    placardTopPx  = frameTopPx + (align / 100) * (frameH - placardHeightPx);
+    placardLeftPx = side === 'left' ? (frameLeftPx - gapPx - placardWidthPx) : (frameLeftPx + frameW + gapPx);
+  }
+
+  var leftPct = (placardLeftPx / canvasW) * 100;
+  var topPct  = (placardTopPx  / canvasH) * 100;
+
+  return 'position: absolute; left: ' + leftPct + '%; top: ' + topPct + '%; width: ' + g.width + '%; height: ' + g.height + '%; background: ' + g.background + '; border: 1px solid ' + g.borderColor + '; --placard-hover-scale: ' + hoverScale + ';';
+}
+
+// Hover-to-expand's viewport clamp — how far to shift the expanded placard
+// box (via a `translate()` composed into the same CSS transform that scales
+// it — see .placard-box:hover in display.html/display-edit.html) so it
+// stays fully within the browser window instead of growing off-screen when
+// the placard sits near an edge. `rect` is the box's normal, un-scaled
+// getBoundingClientRect(); `scale` is --placard-hover-scale (see
+// placardBoxStyle() above). Growth is symmetric around the box's own center
+// (matches transform-origin: center center on .placard-box), so half the
+// size increase extends past each edge — that's what has to be checked
+// against the viewport, not the box's original (unscaled) bounds.
+// `topMargin` defaults to `margin` but can be set larger to also clear a
+// fixed/sticky header that a plain viewport-edge check wouldn't know about.
+var PLACARD_HOVER_MARGIN     = 12; // breathing room from the viewport edges
+var PLACARD_HOVER_TOP_MARGIN = 68; // clears the 56px sticky navbar + margin
+
+function clampPlacardHoverShift(rect, scale, viewportW, viewportH, margin, topMargin) {
+  // scale <= 1 means the box isn't actually growing on hover (e.g. the
+  // canvas is already at its full design size, so hover is a cosmetic
+  // no-op) — nothing to correct for, even if the box already happens to sit
+  // near the window edge on its own. Shifting a non-expanding box would
+  // just be a spurious jump with no size change to justify it.
+  if (!(scale > 1)) return { shiftX: 0, shiftY: 0 };
+  var m   = typeof margin === 'number' ? margin : 0;
+  var top = typeof topMargin === 'number' ? topMargin : m;
+  var growW = rect.width  * (scale - 1);
+  var growH = rect.height * (scale - 1);
+  var expLeft   = rect.left   - growW / 2;
+  var expRight  = rect.right  + growW / 2;
+  var expTop    = rect.top    - growH / 2;
+  var expBottom = rect.bottom + growH / 2;
+
+  var shiftX = 0;
+  if (expLeft < m)                        shiftX = m - expLeft;
+  else if (expRight > viewportW - m)      shiftX = (viewportW - m) - expRight;
+
+  var shiftY = 0;
+  if (expTop < top)                       shiftY = top - expTop;
+  else if (expBottom > viewportH - m)     shiftY = (viewportH - m) - expBottom;
+
+  return { shiftX: shiftX, shiftY: shiftY };
+}
+
+// Wires clampPlacardHoverShift() up to a real DOM element: reads the
+// current --placard-hover-scale custom property (set inline by
+// placardBoxStyle()) and the element's live position/size, computes the
+// clamp, and writes the result back as --placard-hover-shift-x/-y — which
+// the CSS :hover transform reads. Called on mouseenter (see @mouseenter on
+// .placard-box), synchronously, so the shift is already correct by the time
+// the CSS hover-delay transition actually becomes visible.
+function applyPlacardHoverShift(el) {
+  if (!el || typeof el.getBoundingClientRect !== 'function') return;
+  var win = el.ownerDocument && el.ownerDocument.defaultView;
+  if (!win) return;
+  var cs    = win.getComputedStyle(el);
+  var scale = parseFloat(cs.getPropertyValue('--placard-hover-scale')) || 1;
+  var rect  = el.getBoundingClientRect();
+  var shift = clampPlacardHoverShift(rect, scale, win.innerWidth, win.innerHeight, PLACARD_HOVER_MARGIN, PLACARD_HOVER_TOP_MARGIN);
+  el.style.setProperty('--placard-hover-shift-x', shift.shiftX + 'px');
+  el.style.setProperty('--placard-hover-shift-y', shift.shiftY + 'px');
+}
+
+// Converts an item's absolute inches-from-top-left position into the
+// percent CSS actually needs, against the placard's *current* physical
+// size — this is where "fixed physical position, not repositioned when the
+// placard is resized" actually happens: the stored xIn/yIn never change on
+// a resize, only this computed percent does (see the comment above
+// defaultPlacardItemPosition() for why an item can end up rendered outside
+// the box, and clipped, after a resize).
+function placardItemStyle(item, placardWidthIn, placardHeightIn, fontScale) {
+  var xPct = placardWidthIn  > 0 ? (item.xIn / placardWidthIn)  * 100 : 0;
+  var yPct = placardHeightIn > 0 ? (item.yIn / placardHeightIn) * 100 : 0;
+  return 'position: absolute; left: ' + xPct + '%; top: ' + yPct + '%;' + typographyStyle(item, fontScale);
+}
+
+// Resolved { id, text, style } list for one slot: gallery items with label
+// substitution applied, a per-slot text override (display_slots.placard.
+// overrides, keyed by item id) taking precedence when set, and items hidden
+// per hideIfMissing when their substitution can't be resolved and there's no
+// override. `canvasPxWidth` — the display grid's actual measured on-screen
+// pixel width (see layoutFrames() in displayApp/displayEditApp) — drives the
+// font-size scale factor (placardFontScale()) so item text renders true to
+// the placard's physical size regardless of how big the canvas is shown.
+function placardItemsFor(gallery, slot, canvasPxWidth) {
+  var g         = normalizeGalleryPlacard(gallery && gallery.placard_defaults);
+  var size      = placardPhysicalSize(g);
+  var fontScale = placardFontScale(g.boardWidthIn, canvasPxWidth);
+  var overrides = (slot && slot.placard && slot.placard.overrides) || {};
+  var labels    = (slot && slot.photo && slot.photo.labels) || [];
+  var out = [];
+  g.items.forEach(function (item) {
+    var ov = overrides[item.id];
+    var text;
+    if (typeof ov === 'string' && ov !== '') {
+      text = ov;
+    } else {
+      var r = resolvePlacardItemText(item.text, labels);
+      if (r.missing && item.hideIfMissing) return;
+      text = r.text;
+    }
+    if (!text) return;
+    out.push({ id: item.id, text: text, style: placardItemStyle(item, size.widthIn, size.heightIn, fontScale) });
+  });
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// displayApp — museum exhibit board viewer. Read-only, public-facing.
+// URL: /display.html?displayid=<uuid>
+// Fetches display detail (→ galleryid), then gallery detail (→ ordered display
+// list for prev/next nav).  prevDisplayId/nextDisplayId are plain data props
+// so Alpine can track them without getters.
+// No auth/editing here by design — that lives in displayEditApp (below),
+// which display-edit.html uses instead.
+// ─────────────────────────────────────────────────────────────────────────────
+function displayApp() {
+  return {
+    display:         null,
+    gallery:         null,
+    galleryDisplays: [],
+    currentIndex:    -1,
+    loading:         true,
+    error:           null,
+
+    // Plain data properties for prev/next (updated after load)
+    prevDisplayId: null,
+    nextDisplayId: null,
+    // Resolved slot geometry (one { x, y, w, h } per slot, percent-based —
+    // see slotBoxStyle() near the top of this file). Computed in init() from
+    // the template's slot_positions, falling back to an even grid.
+    slotPositions: [],
+    // Exact pixel { w, h } for each slot's framed-photo box, measured from
+    // the actual rendered .photo-area size — see computeFrameBoxSize() near
+    // the top of this file for why this can't just be done with CSS
+    // aspect-ratio. null entries (before the first measurement pass) fall
+    // back to the CSS approximation via photoFrameSizeStyle().
+    frameSizes: [],
+    // The display grid's actual rendered pixel width (its .display-grid,
+    // which is where slot/placard percent positions are relative to) —
+    // measured alongside frameSizes in layoutFrames(). Drives the placard
+    // item font-size scale factor (placardFontScale()) so text renders true
+    // to the placard's physical size regardless of how big the canvas
+    // happens to be shown on this particular screen. 0 before the first
+    // measurement pass, which placardFontScale() treats as "no scaling".
+    canvasWidthPx: 0,
+
+    thumbUrl(url, w) { return thumbUrl(url, w); },
+    // i is needed (not just the presentation) so percentage-based matte/frame
+    // widths can resolve against this specific slot's measured contentW —
+    // see the comment above matteInnerStyle() in the shared helpers above.
+    frameOuterStyle(i) {
+      const presentation = this.display && this.display.template && this.display.template.presentation;
+      const size = this.frameSizes[i];
+      return frameOuterStyle(presentation, size && size.contentW);
+    },
+    matteInnerStyle(i) {
+      const presentation = this.display && this.display.template && this.display.template.presentation;
+      const size = this.frameSizes[i];
+      return matteInnerStyle(presentation, size && size.contentW);
+    },
+    slotBoxStyle(i) { return slotBoxStyle(this.slotPositions, i); },
+    photoAreaStyle() { return photoAreaStyle(this.display && this.display.template && this.display.template.presentation); },
+    photoFrameSizeStyle(i, slot) { return photoFrameSizeStyle(this.frameSizes[i], slot); },
+    // Gallery-level placard box (position from the template, size/appearance
+    // + item content from the gallery) — see the placard helper block above.
+    placardBoxStyle(i) {
+      const presentation = this.display && this.display.template && this.display.template.presentation;
+      return placardBoxStyle(this.gallery, this.slotPositions[i], this.canvasWidthPx, this.frameSizes[i], presentation);
+    },
+    placardItemsFor(slot) { return placardItemsFor(this.gallery, slot, this.canvasWidthPx); },
+    // Keeps a hovered, expanded placard within the browser window instead
+    // of growing off-screen near an edge — see @mouseenter on .placard-box
+    // and applyPlacardHoverShift()/clampPlacardHoverShift() above.
+    handlePlacardHover(event) { applyPlacardHoverShift(event.currentTarget); },
+
+    // Measures each slot's rendered .photo-area and computes its exact
+    // frame box size (see computeFrameBoxSize()). Re-run whenever the grid
+    // resizes (ResizeObserver, set up in init()) or the display data changes.
+    layoutFrames() {
+      const grid = this.$refs.grid;
+      if (!grid) return;
+      const areas       = grid.querySelectorAll('.photo-area');
+      const slots        = (this.display && this.display.slots) || [];
+      const presentation = this.display && this.display.template && this.display.template.presentation;
+      const next = [];
+      for (let i = 0; i < areas.length; i++) {
+        next.push(computeFrameBoxSize(areas[i].clientWidth, areas[i].clientHeight, slots[i], presentation));
+      }
+      this.frameSizes    = next;
+      this.canvasWidthPx = grid.clientWidth;
+    },
+
+    goToPrev() { if (this.prevDisplayId) window.location.href = '/display.html?displayid=' + this.prevDisplayId; },
+    goToNext() { if (this.nextDisplayId) window.location.href = '/display.html?displayid=' + this.nextDisplayId; },
+
+    async init() {
+      const params    = new URLSearchParams(window.location.search);
+      const displayid = params.get('displayid');
+      if (!displayid) {
+        this.error   = 'No display specified.';
+        this.loading = false;
+        return;
+      }
+
+      try {
+        // Fetch display (returns galleryid)
+        const dResp = await fetch('/api/v1/displays/' + encodeURIComponent(displayid));
+        if (!dResp.ok) throw new Error('Display not found (' + dResp.status + ')');
+        this.display = await dResp.json();
+
+        // Fetch gallery to get title and ordered display list
+        const gResp = await fetch('/api/v1/galleries/' + encodeURIComponent(this.display.galleryid));
+        if (gResp.ok) {
+          this.gallery        = await gResp.json();
+          this.galleryDisplays = this.gallery.displays || [];
+          this.currentIndex    = this.galleryDisplays.findIndex(d => d.displayid === displayid);
+          if (this.currentIndex > 0) {
+            this.prevDisplayId = this.galleryDisplays[this.currentIndex - 1].displayid;
+          }
+          if (this.currentIndex >= 0 && this.currentIndex < this.galleryDisplays.length - 1) {
+            this.nextDisplayId = this.galleryDisplays[this.currentIndex + 1].displayid;
+          }
+        }
+
+        // Resolve slot geometry from the template's slot_positions (falls
+        // back to an even grid if missing or mismatched with slot count).
+        const n = this.display.slots ? this.display.slots.length : 0;
+        const rawPositions = this.display.template && this.display.template.slot_positions;
+        this.slotPositions = normalizeSlotPositions(rawPositions, n);
+      } catch(e) {
+        this.error = e.message;
+      }
+      this.loading = false;
+
+      // Wait for the grid to actually render, then measure it and set up a
+      // ResizeObserver so frame sizes stay exact across viewport/layout
+      // changes (font loading reflowing a placard's height, window resize).
+      await new Promise(resolve => this.$nextTick(resolve));
+      const grid = this.$refs.grid;
+      if (grid) {
+        this.layoutFrames();
+        new ResizeObserver(() => this.layoutFrames()).observe(grid);
+      }
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// displayEditApp — museum exhibit board editor.
+// URL: /display-edit.html?displayid=<uuid>
+// Same load/nav logic as displayApp (viewer), plus auth state and the photo
+// picker: a search-driven modal (opened per-slot, shown to logged-in users)
+// that assigns a photo to a display slot via PATCH. Kept as a separate
+// component (rather than a mode flag on displayApp) so the public viewer
+// never carries editing code or auth calls it doesn't need.
+// ─────────────────────────────────────────────────────────────────────────────
+function displayEditApp() {
+  return {
+    loggedInUser: null,
+    authConfig:   { googleEnabled: false, appleEnabled: false, facebookEnabled: false, microsoftEnabled: false },
+    toast:        { visible: false, message: '', timer: null },
+
+    display:         null,
+    gallery:         null,
+    galleryDisplays: [],
+    currentIndex:    -1,
+    loading:         true,
+    error:           null,
+
+    // Plain data properties for prev/next (updated after load)
+    prevDisplayId: null,
+    nextDisplayId: null,
+    // Resolved slot geometry (one { x, y, w, h } per slot, percent-based —
+    // see slotBoxStyle() near the top of this file). Computed in init() from
+    // the template's slot_positions, falling back to an even grid.
+    slotPositions: [],
+    // Exact pixel { w, h } for each slot's framed-photo box, measured from
+    // the actual rendered .photo-area size — see computeFrameBoxSize() near
+    // the top of this file for why this can't just be done with CSS
+    // aspect-ratio. null entries (before the first measurement pass) fall
+    // back to the CSS approximation via photoFrameSizeStyle().
+    frameSizes: [],
+    // The display grid's actual rendered pixel width — see the matching
+    // field/comment in displayApp above. Drives the placard item font-size
+    // scale factor (placardFontScale()).
+    canvasWidthPx: 0,
+
+    // Layout guides — a reference overlay showing the 16:9 canvas boundary
+    // and each slot's exact bounding box (from slot_positions), so a
+    // template author can see the geometry the public view page assumes
+    // while editing. Edit-only; display.html never shows this.
+    showGuides: true,
+
+    // Photo picker (search + assign a photo to a slot)
+    pickerOpen:       false,
+    pickerSlotIndex:  null,
+    pickerQuery:      '',
+    pickerResults:    [],
+    pickerLoading:    false,
+    pickerError:      '',
+    pickerSaving:     false,
+    pickerDebounce:   null,
+
+    thumbUrl(url, w) { return thumbUrl(url, w); },
+    // i is needed (not just the presentation) so percentage-based matte/frame
+    // widths can resolve against this specific slot's measured contentW —
+    // see the comment above matteInnerStyle() in the shared helpers above.
+    frameOuterStyle(i) {
+      const presentation = this.display && this.display.template && this.display.template.presentation;
+      const size = this.frameSizes[i];
+      return frameOuterStyle(presentation, size && size.contentW);
+    },
+    matteInnerStyle(i) {
+      const presentation = this.display && this.display.template && this.display.template.presentation;
+      const size = this.frameSizes[i];
+      return matteInnerStyle(presentation, size && size.contentW);
+    },
+    slotBoxStyle(i) { return slotBoxStyle(this.slotPositions, i); },
+    photoAreaStyle() { return photoAreaStyle(this.display && this.display.template && this.display.template.presentation); },
+    photoFrameSizeStyle(i, slot) { return photoFrameSizeStyle(this.frameSizes[i], slot); },
+    // Gallery-level placard box (position from the template, size/appearance
+    // + item content from the gallery) — see the placard helper block above.
+    placardBoxStyle(i) {
+      const presentation = this.display && this.display.template && this.display.template.presentation;
+      return placardBoxStyle(this.gallery, this.slotPositions[i], this.canvasWidthPx, this.frameSizes[i], presentation);
+    },
+    placardItemsFor(slot) { return placardItemsFor(this.gallery, slot, this.canvasWidthPx); },
+    // Keeps a hovered, expanded placard within the browser window instead
+    // of growing off-screen near an edge — see @mouseenter on .placard-box
+    // and applyPlacardHoverShift()/clampPlacardHoverShift() above.
+    handlePlacardHover(event) { applyPlacardHoverShift(event.currentTarget); },
+    avatarSrc(user)  { return avatarSrc(user);  },
+
+    // Label text for a slot's guide overlay — the raw x/y/w/h (percent) from
+    // slot_positions, so it's obvious this is the template's own geometry
+    // and not something derived from the photo.
+    slotGuideLabel(i) {
+      const p = this.slotPositions[i];
+      if (!p) return '';
+      return 'x:' + p.x + ' y:' + p.y + '  ' + p.w + '×' + p.h;
+    },
+
+    // Measures each slot's rendered .photo-area and computes its exact
+    // frame box size (see computeFrameBoxSize()). Re-run whenever the grid
+    // resizes (ResizeObserver, set up in init()) or the display data changes
+    // (e.g. after saveSlotPhoto() assigns a photo with a different aspect
+    // ratio, which the grid's own size won't necessarily change to reflect).
+    layoutFrames() {
+      const grid = this.$refs.grid;
+      if (!grid) return;
+      const areas       = grid.querySelectorAll('.photo-area');
+      const slots        = (this.display && this.display.slots) || [];
+      const presentation = this.display && this.display.template && this.display.template.presentation;
+      const next = [];
+      for (let i = 0; i < areas.length; i++) {
+        next.push(computeFrameBoxSize(areas[i].clientWidth, areas[i].clientHeight, slots[i], presentation));
+      }
+      this.frameSizes    = next;
+      this.canvasWidthPx = grid.clientWidth;
+    },
+
+    showToast(message) {
+      clearTimeout(this.toast.timer);
+      this.toast.message = message;
+      this.toast.visible = true;
+      this.toast.timer   = setTimeout(() => { this.toast.visible = false; }, 3500);
+    },
+
+    goToPrev() { if (this.prevDisplayId) window.location.href = '/display-edit.html?displayid=' + this.prevDisplayId; },
+    goToNext() { if (this.nextDisplayId) window.location.href = '/display-edit.html?displayid=' + this.nextDisplayId; },
+
+    async init() {
+      try {
+        const [cfg, me] = await Promise.all([
+          fetch('/auth/config').then(r => r.json()),
+          fetch('/auth/me').then(r => r.json()),
+        ]);
+        this.authConfig = cfg;
+        if (me.loggedIn) {
+          this.loggedInUser       = me;
+          window._testUserID      = me.userid;
+          window._loggedIn        = true;
+          window._currentUser     = me;
+          document.dispatchEvent(new CustomEvent('photoapp:auth-ready', { detail: me }));
+        }
+      } catch { /* non-fatal */ }
+
+      document.addEventListener('photoapp:auth-success', e => {
+        this.loggedInUser   = e.detail;
+        window._testUserID  = e.detail.userid;
+        window._loggedIn    = true;
+        window._currentUser = e.detail;
+      });
+      document.addEventListener('photoapp:toast', e => this.showToast(e.detail));
+
+      const params    = new URLSearchParams(window.location.search);
+      const displayid = params.get('displayid');
+      if (!displayid) {
+        this.error   = 'No display specified.';
+        this.loading = false;
+        return;
+      }
+
+      try {
+        // Fetch display (returns galleryid)
+        const dResp = await fetch('/api/v1/displays/' + encodeURIComponent(displayid));
+        if (!dResp.ok) throw new Error('Display not found (' + dResp.status + ')');
+        this.display = await dResp.json();
+
+        // Fetch gallery to get title and ordered display list
+        const gResp = await fetch('/api/v1/galleries/' + encodeURIComponent(this.display.galleryid));
+        if (gResp.ok) {
+          this.gallery        = await gResp.json();
+          this.galleryDisplays = this.gallery.displays || [];
+          this.currentIndex    = this.galleryDisplays.findIndex(d => d.displayid === displayid);
+          if (this.currentIndex > 0) {
+            this.prevDisplayId = this.galleryDisplays[this.currentIndex - 1].displayid;
+          }
+          if (this.currentIndex >= 0 && this.currentIndex < this.galleryDisplays.length - 1) {
+            this.nextDisplayId = this.galleryDisplays[this.currentIndex + 1].displayid;
+          }
+        }
+
+        // Resolve slot geometry from the template's slot_positions (falls
+        // back to an even grid if missing or mismatched with slot count).
+        const n = this.display.slots ? this.display.slots.length : 0;
+        const rawPositions = this.display.template && this.display.template.slot_positions;
+        this.slotPositions = normalizeSlotPositions(rawPositions, n);
+      } catch(e) {
+        this.error = e.message;
+      }
+      this.loading = false;
+
+      // Wait for the grid to actually render, then measure it and set up a
+      // ResizeObserver so frame sizes stay exact across viewport/layout
+      // changes (font loading reflowing a placard's height, window resize).
+      await new Promise(resolve => this.$nextTick(resolve));
+      const grid = this.$refs.grid;
+      if (grid) {
+        this.layoutFrames();
+        new ResizeObserver(() => this.layoutFrames()).observe(grid);
+      }
+    },
+
+    // ── Photo picker ──────────────────────────────────────────────────────────
+
+    openPicker(slotIndex) {
+      this.pickerSlotIndex = slotIndex;
+      this.pickerQuery     = '';
+      this.pickerResults   = [];
+      this.pickerError     = '';
+      this.pickerOpen      = true;
+    },
+
+    closePicker() {
+      clearTimeout(this.pickerDebounce);
+      this.pickerOpen      = false;
+      this.pickerSlotIndex = null;
+    },
+
+    onPickerInput() {
+      clearTimeout(this.pickerDebounce);
+      const q = this.pickerQuery.trim();
+      if (!q) {
+        this.pickerResults = [];
+        this.pickerLoading = false;
+        return;
+      }
+      this.pickerLoading = true;
+      this.pickerDebounce = setTimeout(() => this.runPickerSearch(q), 300);
+    },
+
+    async runPickerSearch(q) {
+      this.pickerError = '';
+      try {
+        const resp = await fetch('/api/v1/search?q=' + encodeURIComponent(q));
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        // Ignore stale responses if the query has since changed.
+        if (this.pickerQuery.trim() === q) {
+          this.pickerResults = data.results || [];
+        }
+      } catch(e) {
+        if (this.pickerQuery.trim() === q) this.pickerError = e.message;
+      }
+      if (this.pickerQuery.trim() === q) this.pickerLoading = false;
+    },
+
+    // The slot currently open in the picker, straight from the loaded display.
+    currentPickerSlot() {
+      if (!this.display || !this.display.slots || this.pickerSlotIndex === null) return null;
+      return this.display.slots.find(s => s.slot_index === this.pickerSlotIndex) || null;
+    },
+
+    selectPickerPhoto(photo) {
+      this.saveSlotPhoto(photo.photoid);
+    },
+
+    clearPickerPhoto() {
+      this.saveSlotPhoto('');
+    },
+
+    // Persists a slot's photo. The API upserts rich_text/placard from whatever
+    // is in the request, so both must be resent as-is or they'll be wiped.
+    async saveSlotPhoto(photoid) {
+      const slot = this.currentPickerSlot();
+      if (!slot || this.pickerSaving) return;
+      this.pickerSaving = true;
+      try {
+        const resp = await fetch('/api/v1/displays/' + encodeURIComponent(this.display.displayid), {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({
+            slots: [{
+              slot_index: slot.slot_index,
+              photoid:    photoid,
+              rich_text:  slot.rich_text || '',
+              placard:    slot.placard !== undefined ? slot.placard : null,
+            }],
+          }),
+        });
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.error || 'HTTP ' + resp.status);
+        }
+        this.display = await resp.json();
+        this.showToast(photoid ? 'Photo updated.' : 'Photo removed.');
+        this.closePicker();
+        // The new photo's aspect ratio may differ even if the slot's own
+        // box size on screen hasn't changed, so re-measure explicitly
+        // rather than relying solely on the ResizeObserver.
+        await new Promise(resolve => this.$nextTick(resolve));
+        this.layoutFrames();
+      } catch(e) {
+        this.showToast('Failed to update photo: ' + e.message);
+      }
+      this.pickerSaving = false;
+    },
+
+    // ── Placard caption overrides ────────────────────────────────────────────
+    // Per-slot text overrides for the gallery's placard items (e.g. fixing
+    // one photo's caption without touching its labels). Stored in
+    // display_slots.placard.overrides, keyed by item id.
+    captionModalOpen:  false,
+    captionSlotIndex:  null,
+    captionDraft:      {},
+    captionSaving:     false,
+
+    // The gallery's configured placard items (id/text/typography), for both
+    // the editor labels and to know which override keys to save.
+    galleryPlacardItems() {
+      return normalizeGalleryPlacard(this.gallery && this.gallery.placard_defaults).items;
+    },
+
+    currentCaptionSlot() {
+      if (!this.display || !this.display.slots || this.captionSlotIndex === null) return null;
+      return this.display.slots.find(s => s.slot_index === this.captionSlotIndex) || null;
+    },
+
+    openCaptionEditor(slotIndex) {
+      this.captionSlotIndex = slotIndex;
+      const slot      = this.display.slots.find(s => s.slot_index === slotIndex);
+      const overrides = (slot && slot.placard && slot.placard.overrides) || {};
+      const draft = {};
+      this.galleryPlacardItems().forEach(item => { draft[item.id] = overrides[item.id] || ''; });
+      this.captionDraft   = draft;
+      this.captionModalOpen = true;
+    },
+
+    closeCaptionEditor() {
+      this.captionModalOpen = false;
+      this.captionSlotIndex = null;
+    },
+
+    // The auto-resolved value for one item on the currently-open slot, shown
+    // as the input's placeholder so it's clear what an override replaces.
+    resolvedCaptionPlaceholder(item) {
+      const slot   = this.currentCaptionSlot();
+      const labels = (slot && slot.photo && slot.photo.labels) || [];
+      const r = resolvePlacardItemText(item.text, labels);
+      return r.missing ? '(label missing — item hidden unless overridden)' : (r.text || '(empty)');
+    },
+
+    async saveCaptionOverrides() {
+      const slot = this.currentCaptionSlot();
+      if (!slot || this.captionSaving) return;
+      this.captionSaving = true;
+      const overrides = {};
+      Object.keys(this.captionDraft).forEach(id => {
+        const v = (this.captionDraft[id] || '').trim();
+        if (v) overrides[id] = v;
+      });
+      try {
+        const resp = await fetch('/api/v1/displays/' + encodeURIComponent(this.display.displayid), {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({
+            slots: [{
+              slot_index: slot.slot_index,
+              photoid:    slot.photo ? slot.photo.photoid : '',
+              rich_text:  slot.rich_text || '',
+              placard:    Object.keys(overrides).length ? { overrides: overrides } : null,
+            }],
+          }),
+        });
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.error || 'HTTP ' + resp.status);
+        }
+        this.display = await resp.json();
+        this.showToast('Captions updated.');
+        this.closeCaptionEditor();
+      } catch(e) {
+        this.showToast('Failed to update captions: ' + e.message);
+      }
+      this.captionSaving = false;
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// galleryAdminApp — gallery administration page.
+// Requires auth + GalleryCreate/Modify/Delete permissions.
+// Features: create gallery, rename/delete gallery, expand to see displays,
+// add/remove/reorder displays within a gallery, assign/change/clear each
+// display's template.
+// ─────────────────────────────────────────────────────────────────────────────
+function galleryAdminApp() {
+  return {
+    loggedInUser: null,
+    authConfig:   { googleEnabled: false, appleEnabled: false, facebookEnabled: false, microsoftEnabled: false },
+    toast:        { visible: false, message: '', timer: null },
+
+    galleries:    [],
+    loading:      true,
+    error:        null,
+
+    // Create form
+    newTitle:    '',
+    creating:    false,
+    createError: '',
+
+    // Rename
+    editingGalleryId: null,
+    editTitle:        '',
+    savingTitle:      false,
+
+    // Expanded gallery displays
+    expandedGalleryId: null,
+    expandedDisplays:  [],
+    loadingDisplays:   false,
+    // Placard defaults for the currently-expanded gallery (raw JSON from the
+    // API, normalized on demand by normalizeGalleryPlacard()).
+    expandedGalleryPlacard: null,
+
+    // Display templates (for the "new display" and per-row template pickers)
+    templates:            [],
+    newDisplayTemplateId: '',
+
+    avatarSrc(user) { return avatarSrc(user); },
+
+    showToast(message) {
+      clearTimeout(this.toast.timer);
+      this.toast.message = message;
+      this.toast.visible = true;
+      this.toast.timer   = setTimeout(() => { this.toast.visible = false; }, 3500);
+    },
+
+    async init() {
+      try {
+        const [cfg, me] = await Promise.all([
+          fetch('/auth/config').then(r => r.json()),
+          fetch('/auth/me').then(r => r.json()),
+        ]);
+        this.authConfig = cfg;
+        if (me.loggedIn) {
+          this.loggedInUser       = me;
+          window._testUserID      = me.userid;
+          window._loggedIn        = true;
+          window._currentUser     = me;
+          document.dispatchEvent(new CustomEvent('photoapp:auth-ready', { detail: me }));
+        }
+      } catch { /* non-fatal */ }
+
+      document.addEventListener('photoapp:auth-success', e => {
+        this.loggedInUser   = e.detail;
+        window._testUserID  = e.detail.userid;
+        window._loggedIn    = true;
+        window._currentUser = e.detail;
+      });
+      document.addEventListener('photoapp:toast', e => this.showToast(e.detail));
+
+      await Promise.all([this.loadGalleries(), this.loadTemplates()]);
+    },
+
+    async loadTemplates() {
+      try {
+        const resp = await fetch('/api/v1/display-templates');
+        if (!resp.ok) return; // non-fatal — template pickers just show empty
+        const data = await resp.json();
+        this.templates = sortTemplates(data.templates || []);
+      } catch { /* non-fatal */ }
+    },
+
+    async loadGalleries() {
+      this.loading = true;
+      this.error   = null;
+      try {
+        const resp = await fetch('/api/v1/galleries?limit=100', { headers: getAuthHeaders() });
+        if (resp.status === 403) {
+          this.error = 'You do not have permission to manage galleries. Please log in as an admin.';
+          this.loading = false;
+          return;
+        }
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        this.galleries = data.galleries || [];
+      } catch(e) {
+        this.error = e.message;
+      }
+      this.loading = false;
+    },
+
+    async createGallery() {
+      if (this.creating || !this.newTitle.trim()) return;
+      this.creating    = true;
+      this.createError = '';
+      try {
+        const resp = await fetch('/api/v1/galleries', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({ title: this.newTitle.trim() }),
+        });
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.error || 'HTTP ' + resp.status);
+        }
+        const g = await resp.json();
+        this.galleries.push({ ...g, display_count: 0 });
+        this.newTitle = '';
+        this.showToast('Gallery created.');
+      } catch(e) {
+        this.createError = e.message;
+      }
+      this.creating = false;
+    },
+
+    startEdit(g) {
+      this.editingGalleryId = g.galleryid;
+      this.editTitle        = g.title;
+    },
+
+    cancelEdit() {
+      this.editingGalleryId = null;
+      this.editTitle        = '';
+    },
+
+    async saveTitle(galleryid) {
+      if (!this.editTitle.trim()) return;
+      this.savingTitle = true;
+      try {
+        const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(galleryid), {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({ title: this.editTitle.trim() }),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const idx = this.galleries.findIndex(g => g.galleryid === galleryid);
+        if (idx !== -1) this.galleries[idx] = { ...this.galleries[idx], title: this.editTitle.trim() };
+        this.cancelEdit();
+        this.showToast('Gallery renamed.');
+      } catch(e) {
+        this.showToast('Save failed: ' + e.message);
+      }
+      this.savingTitle = false;
+    },
+
+    async deleteGallery(galleryid) {
+      if (!confirm('Delete this gallery and all its displays?')) return;
+      try {
+        const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(galleryid), {
+          method: 'DELETE', headers: getAuthHeaders(),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        this.galleries = this.galleries.filter(g => g.galleryid !== galleryid);
+        if (this.expandedGalleryId === galleryid) {
+          this.expandedGalleryId = null;
+          this.expandedDisplays  = [];
+        }
+        this.showToast('Gallery deleted.');
+      } catch(e) {
+        this.showToast('Delete failed: ' + e.message);
+      }
+    },
+
+    async toggleDisplays(galleryid) {
+      if (this.expandedGalleryId === galleryid) {
+        this.expandedGalleryId = null;
+        this.expandedDisplays  = [];
+        this.expandedGalleryPlacard = null;
+        return;
+      }
+      this.expandedGalleryId    = galleryid;
+      this.loadingDisplays      = true;
+      this.expandedDisplays     = [];
+      this.expandedGalleryPlacard = null;
+      this.newDisplayTemplateId = '';
+      try {
+        const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(galleryid));
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const g = await resp.json();
+        // selectedTemplateId backs the x-model on each row's template <select> —
+        // kept as a plain field (rather than deriving :value from d.template) so
+        // the dropdown updates instantly on selection instead of waiting on a
+        // reactive re-render tied to the PATCH response.
+        this.expandedDisplays = (g.displays || []).map(d => ({
+          ...d,
+          selectedTemplateId: d.template ? d.template.templateid : '',
+        }));
+        this.expandedGalleryPlacard = g.placard_defaults || null;
+      } catch(e) {
+        this.showToast('Failed to load displays: ' + e.message);
+      }
+      this.loadingDisplays = false;
+    },
+
+    // ── Placard settings (gallery-level) ─────────────────────────────────────
+    // Placard size, background, and item content are configured once per
+    // gallery for visual consistency across every display in it. Editing
+    // happens on a deep-cloned draft so an in-progress edit doesn't affect
+    // the live preview elsewhere until Save.
+    placardModalOpen: false,
+    placardGalleryId: null,
+    placardDraft:     null,
+    placardSaving:    false,
+    placardError:     '',
+
+    // Raw-JSON escape hatch: the visual editor covers everyday adjustments,
+    // but exact numeric tweaks (e.g. nudging an item to x: 12.35 after the
+    // general layout is already right) are fiddly with drag/number inputs.
+    // Toggling this shows the exact placard_defaults JSON that gets saved —
+    // the same shape normalizeGalleryPlacard()/placardItemsFor() consume —
+    // so it's a precise view of the real data, not a separate format.
+    placardJsonMode:  false,
+    placardJsonText:  '',
+    placardJsonError: '',
+
+    // The draft's width/height are edited as physical size (inches or cm),
+    // not percent — percent has no intuitive meaning on its own since the
+    // canvas has no fixed physical size. `widthIn`/`heightIn`/`boardWidthIn`
+    // are always canonically stored in inches; `unit` just controls which
+    // unit the *Display fields (what the number inputs actually show/edit)
+    // are rendered in. Editing a *Display field converts it straight back
+    // to the canonical inches value (see placardUnitInput()); switching
+    // units re-renders the *Display fields from the canonical inches value
+    // (see refreshPlacardDisplayFields()) — nothing is ever converted
+    // through a chain of round-trips that could drift.
+    openPlacardSettings(galleryid) {
+      this.placardGalleryId = galleryid;
+      const normalized = normalizeGalleryPlacard(this.expandedGalleryPlacard);
+      this.placardDraft = {
+        boardWidthIn: normalized.boardWidthIn,
+        widthIn:      normalized.widthIn,
+        heightIn:     normalized.heightIn,
+        unit:         normalized.unit,
+        background:   normalized.background,
+        borderColor:  normalized.borderColor,
+        items:        JSON.parse(JSON.stringify(normalized.items)),
+      };
+      this.refreshPlacardDisplayFields();
+      this.placardError     = '';
+      this.placardJsonMode  = false;
+      this.placardJsonText  = '';
+      this.placardJsonError = '';
+      this.placardModalOpen = true;
+    },
+
+    closePlacardSettings() {
+      this.placardModalOpen = false;
+      this.placardDraft     = null;
+      this.placardJsonMode  = false;
+    },
+
+    // The exact placard_defaults shape that gets PATCHed to the API —
+    // widthIn/heightIn straight from the draft (the visual editor's source
+    // of truth), so the JSON view always shows the exact same numbers as
+    // the visual editor's fields, just like items' xIn/yIn already do. Used
+    // both to populate the JSON textarea and to build the real save
+    // payload, so the two paths can never drift apart from each other.
+    placardDraftToStored() {
+      const d = this.placardDraft;
+      return {
+        widthIn:      d.widthIn,
+        heightIn:     d.heightIn,
+        boardWidthIn: d.boardWidthIn,
+        unit:         d.unit,
+        background:   d.background,
+        borderColor:  d.borderColor,
+        items:        d.items,
+      };
+    },
+
+    // Applies a raw placard_defaults-shaped object (parsed from the JSON
+    // textarea) back onto the draft's physical fields, normalizing it
+    // through the same normalizeGalleryPlacard() used everywhere else so
+    // malformed/partial JSON still produces a sane draft rather than
+    // crashing the editor (and so legacy percent-only JSON still loads).
+    applyPlacardJSON(raw) {
+      const normalized = normalizeGalleryPlacard(raw);
+      const d = this.placardDraft;
+      d.boardWidthIn = normalized.boardWidthIn;
+      d.widthIn      = normalized.widthIn;
+      d.heightIn     = normalized.heightIn;
+      d.unit         = normalized.unit;
+      d.background   = normalized.background;
+      d.borderColor  = normalized.borderColor;
+      d.items        = normalized.items;
+      this.refreshPlacardDisplayFields();
+    },
+
+    // Parses placardJsonText and applies it to the draft; returns false
+    // (leaving placardJsonError set) on invalid JSON so callers can refuse
+    // to switch back to the visual editor or save until it's fixed, rather
+    // than silently discarding whatever the user typed.
+    applyPlacardJsonText() {
+      let parsed;
+      try {
+        parsed = JSON.parse(this.placardJsonText || '{}');
+      } catch (e) {
+        this.placardJsonError = 'Invalid JSON: ' + e.message;
+        return false;
+      }
+      this.applyPlacardJSON(parsed);
+      this.placardJsonError = '';
+      return true;
+    },
+
+    // Toggling into JSON mode snapshots the current draft as JSON text;
+    // toggling back out applies whatever's in the textarea first (so the
+    // visual editor and preview reflect any precise edits made there) and
+    // refuses to leave JSON mode if the text doesn't parse.
+    togglePlacardJsonMode() {
+      if (this.placardJsonMode) {
+        if (!this.applyPlacardJsonText()) return;
+        this.placardJsonMode = false;
+      } else {
+        this.placardJsonText  = JSON.stringify(this.placardDraftToStored(), null, 2);
+        this.placardJsonError = '';
+        this.placardJsonMode  = true;
+      }
+    },
+
+    // Re-renders boardWidthDisplay/widthDisplay/heightDisplay from the
+    // canonical inches values in the currently-selected unit. Called after
+    // opening the modal and whenever the unit toggle changes.
+    refreshPlacardDisplayFields() {
+      const d    = this.placardDraft;
+      const conv = d.unit === 'cm' ? inToCm : (v) => v;
+      d.boardWidthDisplay = String(round2(conv(d.boardWidthIn)));
+      d.widthDisplay      = String(round2(conv(d.widthIn)));
+      d.heightDisplay     = String(round2(conv(d.heightIn)));
+    },
+
+    onPlacardUnitChange() {
+      this.refreshPlacardDisplayFields();
+    },
+
+    // field is 'boardWidth' | 'width' | 'height'. Converts whatever the user
+    // just typed (in the current display unit) back to the canonical inches
+    // value; the *Display field itself keeps the raw typed text as-is so
+    // typing "4." or "4.5" doesn't get reformatted mid-keystroke.
+    placardUnitInput(field, rawValue) {
+      const d = this.placardDraft;
+      d[field + 'Display'] = rawValue;
+      const num  = parseFloat(rawValue);
+      const val  = isNaN(num) ? 0 : num;
+      const toIn = d.unit === 'cm' ? cmToIn : (v) => v;
+      const inches = toIn(val);
+      d[field + 'In'] = Math.max(field === 'boardWidth' ? 0.1 : 0, inches);
+    },
+
+    addPlacardItem() {
+      const n = this.placardDraft.items.length;
+      const pos = defaultPlacardItemPosition(n, this.placardDraft.widthIn, this.placardDraft.heightIn);
+      this.placardDraft.items.push({
+        id: 'item-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e6).toString(36),
+        text: '', xIn: pos.xIn, yIn: pos.yIn,
+        fontFamily: "'DM Sans', sans-serif", fontSize: 12, fontWeight: 400,
+        fontStyle: 'normal', color: '#3d3424', hideIfMissing: true,
+      });
+    },
+
+    removePlacardItem(id) {
+      this.placardDraft.items = this.placardDraft.items.filter(it => it.id !== id);
+    },
+
+    // Preview chip style — position is xIn/yIn (absolute inches from the
+    // placard's own top-left corner) converted to a percent of the
+    // *current* draft size, exactly like the real render (placardItemStyle())
+    // so this preview always matches what actually shows up on a display.
+    previewItemStyle(item) {
+      const d    = this.placardDraft;
+      const xPct = d.widthIn  > 0 ? (item.xIn / d.widthIn)  * 100 : 0;
+      const yPct = d.heightIn > 0 ? (item.yIn / d.heightIn) * 100 : 0;
+      return 'left:' + xPct + '%; top:' + yPct + '%; font-family:' + item.fontFamily +
+        '; font-size:' + item.fontSize + 'px; font-weight:' + item.fontWeight +
+        '; font-style:' + item.fontStyle + '; color:' + item.color + ';';
+    },
+
+    // Small human-readable label ("0.30in, 1.20in from top-left") shown next
+    // to each item row so it's clear the position is now a fixed physical
+    // offset, not a percentage that would shift if the placard is resized.
+    itemPositionLabel(item) {
+      const d    = this.placardDraft;
+      const conv = d.unit === 'cm' ? inToCm : (v) => v;
+      const x = round2(conv(item.xIn));
+      const y = round2(conv(item.yIn));
+      return x + d.unit + ', ' + y + d.unit + ' from top-left';
+    },
+
+    // Drag-to-position: mousedown/touchstart on an item chip in the preview
+    // canvas starts tracking pointer movement, converting it to a percent
+    // position within the canvas (clamped 0-100), then to an absolute inches
+    // offset from the placard's top-left using the draft's *current*
+    // physical size — so what's stored is a fixed physical position, not a
+    // percentage that would silently shift if the placard is resized later.
+    // Alpine's reactivity picks up the plain-object mutation and moves the
+    // chip live. Listens on window (not the chip itself) so dragging still
+    // works if the pointer leaves the chip mid-drag.
+    //
+    // The item's top-left is offset from wherever the pointer grabbed it
+    // (e.g. the middle of the text), so we capture that offset once at
+    // drag start and hold it constant through the drag — otherwise the
+    // first move snaps the item's top-left corner straight to the cursor,
+    // producing a visible jump equal to however far from the corner it was
+    // grabbed, which then has to be dragged back out by hand.
+    startItemDrag(item, event) {
+      event.preventDefault();
+      const canvas = this.$refs.placardCanvas;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const d = this.placardDraft;
+      const startPt  = event.touches ? event.touches[0] : event;
+      const itemPxX  = (d.widthIn  > 0 ? item.xIn / d.widthIn  : 0) * rect.width;
+      const itemPxY  = (d.heightIn > 0 ? item.yIn / d.heightIn : 0) * rect.height;
+      const offsetX  = startPt.clientX - rect.left - itemPxX;
+      const offsetY  = startPt.clientY - rect.top  - itemPxY;
+      const move = (e) => {
+        const pt = e.touches ? e.touches[0] : e;
+        let xPct = ((pt.clientX - rect.left - offsetX) / rect.width)  * 100;
+        let yPct = ((pt.clientY - rect.top  - offsetY) / rect.height) * 100;
+        xPct = Math.max(0, Math.min(100, xPct));
+        yPct = Math.max(0, Math.min(100, yPct));
+        item.xIn = Math.round((xPct / 100) * d.widthIn  * 100) / 100;
+        item.yIn = Math.round((yPct / 100) * d.heightIn * 100) / 100;
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        window.removeEventListener('touchmove', move);
+        window.removeEventListener('touchend', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      window.addEventListener('touchmove', move, { passive: false });
+      window.addEventListener('touchend', up);
+    },
+
+    async savePlacardSettings() {
+      if (this.placardSaving || !this.placardDraft) return;
+      // If the JSON editor is open, apply whatever's currently typed there
+      // first — otherwise Save would silently save the stale pre-JSON-edit
+      // draft instead of what's on screen. Invalid JSON blocks the save
+      // (placardJsonError is already set by applyPlacardJsonText()).
+      if (this.placardJsonMode && !this.applyPlacardJsonText()) return;
+      this.placardSaving = true;
+      this.placardError  = '';
+      try {
+        // Convert the draft's physical inches back to the percent-of-canvas
+        // values that actually drive rendering (see the comment above
+        // normalizeGalleryPlacard()) — boardWidthIn/unit are saved alongside
+        // so re-opening the editor later shows the same physical size in the
+        // same unit, without having to re-derive it from a rounded percent.
+        const payload = this.placardDraftToStored();
+        const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(this.placardGalleryId), {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({ placard_defaults: payload }),
+        });
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.error || 'HTTP ' + resp.status);
+        }
+        const g = await resp.json();
+        this.expandedGalleryPlacard = g.placard_defaults || null;
+        this.placardModalOpen = false;
+        this.showToast('Placard settings saved.');
+      } catch(e) {
+        this.placardError = e.message;
+      }
+      this.placardSaving = false;
+    },
+
+    async addDisplay(galleryid) {
+      try {
+        const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(galleryid) + '/displays', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({
+            sort_order: this.expandedDisplays.length,
+            templateid: this.newDisplayTemplateId || undefined,
+          }),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const d = await resp.json();
+        // Build a DisplaySummary-shaped object from the DisplayDetail response
+        this.expandedDisplays.push({
+          displayid:          d.displayid,
+          sort_order:         d.sort_order,
+          template:           d.template || null,
+          selectedTemplateId: d.template ? d.template.templateid : '',
+          slot_count:         d.slots ? d.slots.length : 0,
+          filled_slots:       d.slots ? d.slots.filter(s => s.photo).length : 0,
+          created_at:         d.created_at,
+          updated_at:         d.updated_at,
+        });
+        const idx = this.galleries.findIndex(g => g.galleryid === galleryid);
+        if (idx !== -1) {
+          this.galleries[idx] = { ...this.galleries[idx], display_count: this.galleries[idx].display_count + 1 };
+        }
+        this.newDisplayTemplateId = '';
+        this.showToast('Display added.');
+      } catch(e) {
+        this.showToast('Failed to add display: ' + e.message);
+      }
+    },
+
+    // Re-syncs a per-display template <select>'s DOM value on initial render.
+    // x-model's own initial binding runs before the nested x-for="t in templates"
+    // has created its <option> elements (a select's own directives are processed
+    // before Alpine walks into its children), so the browser silently falls back
+    // to the first <option> ("No template") and never corrects itself on its own.
+    // Called via x-init="syncTemplateSelect($el, d)" on the select.
+    syncTemplateSelect(el, d) {
+      this.$nextTick(() => { el.value = d.selectedTemplateId; });
+    },
+
+    // Assign, change, or clear (templateid === '') the template on an existing display.
+    // The <select> is x-model-bound to d.selectedTemplateId, so it already shows the
+    // pick instantly; here we just persist it and revert on failure.
+    async setDisplayTemplate(displayid, templateid) {
+      const idx = this.expandedDisplays.findIndex(d => d.displayid === displayid);
+      if (idx === -1) return;
+      const previousTemplateId = this.expandedDisplays[idx].template
+        ? this.expandedDisplays[idx].template.templateid : '';
+      try {
+        const resp = await fetch('/api/v1/displays/' + encodeURIComponent(displayid), {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({ templateid: templateid }),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const d = await resp.json();
+        this.expandedDisplays[idx] = {
+          ...this.expandedDisplays[idx],
+          template:           d.template || null,
+          selectedTemplateId: d.template ? d.template.templateid : '',
+          slot_count:         d.slots ? d.slots.length : 0,
+          filled_slots:       d.slots ? d.slots.filter(s => s.photo).length : 0,
+        };
+        this.showToast(templateid ? 'Template assigned.' : 'Template cleared.');
+      } catch(e) {
+        // Revert the dropdown to whatever was actually saved before this attempt.
+        this.expandedDisplays[idx] = { ...this.expandedDisplays[idx], selectedTemplateId: previousTemplateId };
+        this.showToast('Failed to update template: ' + e.message);
+      }
+    },
+
+    async deleteDisplay(displayid, galleryid) {
+      if (!confirm('Remove this display?')) return;
+      try {
+        const resp = await fetch('/api/v1/displays/' + encodeURIComponent(displayid), {
+          method: 'DELETE', headers: getAuthHeaders(),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        this.expandedDisplays = this.expandedDisplays.filter(d => d.displayid !== displayid);
+        const idx = this.galleries.findIndex(g => g.galleryid === galleryid);
+        if (idx !== -1) {
+          this.galleries[idx] = { ...this.galleries[idx], display_count: Math.max(0, this.galleries[idx].display_count - 1) };
+        }
+        this.showToast('Display removed.');
+      } catch(e) {
+        this.showToast('Delete failed: ' + e.message);
+      }
+    },
+
+    async moveDisplay(displayid, direction) {
+      const idx    = this.expandedDisplays.findIndex(d => d.displayid === displayid);
+      if (idx === -1) return;
+      const newIdx = direction === 'up' ? idx - 1 : idx + 1;
+      if (newIdx < 0 || newIdx >= this.expandedDisplays.length) return;
+
+      // Swap locally for immediate feedback
+      const arr        = [...this.expandedDisplays];
+      const tmp        = arr[idx];
+      arr[idx]         = arr[newIdx];
+      arr[newIdx]      = tmp;
+      this.expandedDisplays = arr;
+
+      // Persist new order
+      try {
+        const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(this.expandedGalleryId), {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({ display_order: arr.map(d => d.displayid) }),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      } catch(e) {
+        this.showToast('Reorder failed: ' + e.message);
+        // Reload displays to get true server state
+        try {
+          const r = await fetch('/api/v1/galleries/' + encodeURIComponent(this.expandedGalleryId));
+          if (r.ok) { const g = await r.json(); this.expandedDisplays = g.displays || []; }
+        } catch { /* leave current state */ }
+      }
+    },
+
+    displayViewHref(displayid) {
+      return '/display.html?displayid=' + displayid;
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// templateAdminApp — display template administration page.
+// Requires auth + PermAdmin (enforced server-side; 403 surfaces as an error).
+// Templates describe layout geometry (slot_positions) and styling rules
+// (presentation) for displays. Both are free-form JSON — the frontend owns
+// the schema. This editor auto-generates an even grid layout from photo_count
+// and lets that JSON be hand-edited for finer control, with a live preview.
+// ─────────────────────────────────────────────────────────────────────────────
+function templateAdminApp() {
+  return {
+    loggedInUser: null,
+    authConfig:   { googleEnabled: false, appleEnabled: false, facebookEnabled: false, microsoftEnabled: false },
+    toast:        { visible: false, message: '', timer: null },
+
+    templates: [],
+    loading:   true,
+    error:     null,
+
+    // Create form — fields live in a modal (createModalOpen), triggered by
+    // the "+ Create Template" button in the page header.
+    createModalOpen: false,
+    newName:       '',
+    newPhotoCount: 4,
+    creating:      false,
+    createError:   '',
+
+    openCreateModal() {
+      this.newName       = '';
+      this.newPhotoCount = 4;
+      this.createError   = '';
+      this.createModalOpen = true;
+    },
+    closeCreateModal() {
+      this.createModalOpen = false;
+    },
+
+    // Expanded editor (one at a time)
+    expandedId:        null,
+    editName:          '',
+    editPhotoCount:    1,
+    editSlotPositions: '',
+    editPresentation:  '',
+    editError:         '',
+    saving:            false,
+
+    showToast(message) {
+      clearTimeout(this.toast.timer);
+      this.toast.message = message;
+      this.toast.visible = true;
+      this.toast.timer   = setTimeout(() => { this.toast.visible = false; }, 3500);
+    },
+
+    async init() {
+      try {
+        const [cfg, me] = await Promise.all([
+          fetch('/auth/config').then(r => r.json()),
+          fetch('/auth/me').then(r => r.json()),
+        ]);
+        this.authConfig = cfg;
+        if (me.loggedIn) {
+          this.loggedInUser       = me;
+          window._testUserID      = me.userid;
+          window._loggedIn        = true;
+          window._currentUser     = me;
+          document.dispatchEvent(new CustomEvent('photoapp:auth-ready', { detail: me }));
+        }
+      } catch { /* non-fatal */ }
+
+      document.addEventListener('photoapp:auth-success', e => {
+        this.loggedInUser   = e.detail;
+        window._testUserID  = e.detail.userid;
+        window._loggedIn    = true;
+        window._currentUser = e.detail;
+      });
+      document.addEventListener('photoapp:toast', e => this.showToast(e.detail));
+
+      await this.loadTemplates();
+    },
+
+    async loadTemplates() {
+      this.loading = true;
+      this.error   = null;
+      try {
+        const resp = await fetch('/api/v1/display-templates');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        this.templates = sortTemplates(data.templates || []);
+      } catch(e) {
+        this.error = e.message;
+      }
+      this.loading = false;
+    },
+
+    // Even grid layout, shared with displayApp/displayEditApp (see
+    // defaultSlotPositions() near the top of this file) so a template's
+    // fallback layout is identical to what a display without custom
+    // slot_positions actually renders.
+    defaultSlotPositions(n) { return defaultSlotPositions(n); },
+
+    // Starter presentation for new templates — a plain matte in the theme's
+    // frame color, no outer frame. See app.js's matte/frame helper comment
+    // (above displayApp) for the full schema; editable per-template below.
+    // Placard appearance/content is configured at the GALLERY level (Gallery
+    // Admin's Placard Settings), not here — this template only carries each
+    // slot's placard *position* (slot_positions[i].placard).
+    defaultPresentation() {
+      return {
+        matte: { enabled: true,  color: '#e8e3d5', width: 16 },
+        frame: { enabled: false, color: '#3d3424', width: 8 },
+        align: { horizontal: 'center', vertical: 'center' },
+      };
+    },
+
+    async createTemplate() {
+      if (this.creating || !this.newName.trim() || this.newPhotoCount < 1) return;
+      this.creating    = true;
+      this.createError = '';
+      try {
+        const resp = await fetch('/api/v1/display-templates', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({
+            name:           this.newName.trim(),
+            photo_count:    this.newPhotoCount,
+            slot_positions: this.defaultSlotPositions(this.newPhotoCount),
+            presentation:   this.defaultPresentation(),
+          }),
+        });
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.error || 'HTTP ' + resp.status);
+        }
+        const t = await resp.json();
+        this.templates = sortTemplates(this.templates.concat([t]));
+        this.newName         = '';
+        this.newPhotoCount   = 4;
+        this.createModalOpen = false;
+        this.showToast('Template created.');
+      } catch(e) {
+        this.createError = e.message;
+      }
+      this.creating = false;
+    },
+
+    startEdit(t) {
+      this.expandedId        = t.templateid;
+      this.editName          = t.name;
+      this.editPhotoCount    = t.photo_count;
+      this.editSlotPositions = JSON.stringify(t.slot_positions || [], null, 2);
+      this.editPresentation  = JSON.stringify(t.presentation  || {}, null, 2);
+      this.editError         = '';
+    },
+
+    cancelEdit() {
+      this.expandedId = null;
+      this.editError   = '';
+    },
+
+    regenerateLayout() {
+      this.editSlotPositions = JSON.stringify(this.defaultSlotPositions(this.editPhotoCount), null, 2);
+    },
+
+    // Used by the live preview while editing — never throws.
+    previewSlots() {
+      try {
+        const parsed = JSON.parse(this.editSlotPositions || '[]');
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    },
+
+    // Rough preview position for a slot's placard marker — an
+    // approximation, not the real thing: the actual display resolves
+    // side/align/gapIn against the photo frame's real *measured* box (see
+    // placardBoxStyle() in the shared helpers), which depends on the photo's
+    // aspect ratio, matte/frame width, and presentation.align — none of
+    // which this schematic preview (no real photos) has. This instead
+    // treats the slot's own box as a stand-in for the frame, and uses the
+    // marker's fixed CSS size (.preview-placard: 16% x 6%). gapIn (inches)
+    // is converted to percent-of-canvas via DEFAULT_BOARD_WIDTH_IN — the
+    // exact inverse of placardDragToConfig()'s own conversion — so dragging
+    // the marker further from the slot, or typing a larger gapIn directly
+    // into the JSON, visibly moves it further away here too, rather than
+    // always rendering at some fixed guessed gap regardless of the real
+    // stored value.
+    previewPlacardStyle(slot) {
+      const cfg   = (slot && slot.placard) || {};
+      const side  = ['top', 'bottom', 'left', 'right'].indexOf(cfg.side) !== -1 ? cfg.side : 'bottom';
+      const align = typeof cfg.align === 'number' ? Math.max(0, Math.min(100, cfg.align)) : 50;
+      const gapIn = typeof cfg.gapIn === 'number' ? Math.max(0, cfg.gapIn) : DEFAULT_PLACARD_GAP_IN;
+      const pw = 16, ph = 6; // matches .preview-placard's fixed reference size
+      const boardHeightIn = DEFAULT_BOARD_WIDTH_IN * 9 / 16;
+      const gap = (side === 'top' || side === 'bottom')
+        ? (gapIn / boardHeightIn) * 100
+        : (gapIn / DEFAULT_BOARD_WIDTH_IN) * 100;
+      const sx = slot.x || 0, sy = slot.y || 0, sw = slot.w || 0, sh = slot.h || 0;
+      let left, top;
+      if (side === 'top' || side === 'bottom') {
+        left = sx + (align / 100) * (sw - pw);
+        top  = side === 'top' ? (sy - ph - gap) : (sy + sh + gap);
+      } else {
+        top  = sy + (align / 100) * (sh - ph);
+        left = side === 'left' ? (sx - pw - gap) : (sx + sw + gap);
+      }
+      return 'left:' + left + '%; top:' + top + '%;';
+    },
+
+    // ── Preview drag interactions ────────────────────────────────────────────
+    // All three handlers below share the same shape: parse editSlotPositions
+    // fresh at drag start (previewSlots() already re-parses fresh JSON on
+    // every call — see its comment — so a live object grabbed from it would
+    // just be thrown away on the next render; mutating a locally-held parsed
+    // array and writing it straight back into editSlotPositions after every
+    // move keeps the textarea and the live preview in sync, the same way
+    // regenerateLayout() already replaces editSlotPositions wholesale), then
+    // listen on window (not the dragged element) so a drag that outpaces the
+    // cursor past the element's own bounds doesn't get dropped.
+
+    // Drag a slot to reposition it. Preserves the offset between the grab
+    // point and the slot's own top-left corner (same technique as
+    // galleryAdminApp's startItemDrag() — see its comment) so the box
+    // doesn't jump to the cursor on the first move. Clamped to stay fully
+    // within the canvas — unlike a placard item, a photo slot hanging off
+    // the edge isn't a supported look.
+    startSlotDrag(i, event) {
+      event.preventDefault();
+      // NOT this.$refs.templatePreview: Alpine's x-ref inside an x-for loop
+      // registers into a single flat map on the component root keyed only by
+      // ref name (confirmed in the vendored alpinejs.min.js source) — with
+      // one template-preview per template row, all present in the DOM at
+      // once (x-show only toggles CSS display, it doesn't remove elements,
+      // so the ref is never re-registered/cleaned up on collapse), $refs
+      // would silently resolve to whichever row happened to register last,
+      // not necessarily the row actually being dragged in. Walking up from
+      // the clicked element itself is unambiguous regardless of how many
+      // templates exist.
+      const canvas = event.currentTarget.closest('.template-preview');
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      // rect is captured once here and reused for every move of this drag
+      // (re-measuring on each mousemove isn't necessary since the preview
+      // doesn't resize mid-drag) — but if it's captured as zero-size (e.g.
+      // a layout race right as the editor expands), every percent computed
+      // below divides by zero, producing Infinity/NaN that corrupts the
+      // stored slot position. Bail out rather than start a broken drag.
+      if (!(rect.width > 0) || !(rect.height > 0)) return;
+      let arr;
+      try { arr = JSON.parse(this.editSlotPositions || '[]'); } catch { return; }
+      const slot = arr[i];
+      if (!slot) return;
+      const startPt = event.touches ? event.touches[0] : event;
+      const slotPxX = (slot.x / 100) * rect.width;
+      const slotPxY = (slot.y / 100) * rect.height;
+      const offsetX = startPt.clientX - rect.left - slotPxX;
+      const offsetY = startPt.clientY - rect.top  - slotPxY;
+      const move = (e) => {
+        const pt = e.touches ? e.touches[0] : e;
+        let xPct = ((pt.clientX - rect.left - offsetX) / rect.width)  * 100;
+        let yPct = ((pt.clientY - rect.top  - offsetY) / rect.height) * 100;
+        xPct = Math.max(0, Math.min(100 - slot.w, xPct));
+        yPct = Math.max(0, Math.min(100 - slot.h, yPct));
+        arr[i].x = Math.round(xPct * 100) / 100;
+        arr[i].y = Math.round(yPct * 100) / 100;
+        this.editSlotPositions = JSON.stringify(arr, null, 2);
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        window.removeEventListener('touchmove', move);
+        window.removeEventListener('touchend', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      window.addEventListener('touchmove', move, { passive: false });
+      window.addEventListener('touchend', up);
+    },
+
+    // Drag one of a slot's 4 corner handles to resize it — the opposite
+    // corner stays fixed (see resizeSlotFromCorner()). event.stopPropagation
+    // via the @mousedown.stop/@touchstart.stop modifiers on the handle
+    // elements themselves keeps this from also triggering startSlotDrag on
+    // the parent slot.
+    startSlotResize(i, corner, event) {
+      event.preventDefault();
+      // See the $refs-in-x-for comment in startSlotDrag() above.
+      const canvas = event.currentTarget.closest('.template-preview');
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      // See the same guard/comment in startSlotDrag() above — a zero-size
+      // rect here would divide-by-zero into Infinity/NaN percentages.
+      if (!(rect.width > 0) || !(rect.height > 0)) return;
+      let arr;
+      try { arr = JSON.parse(this.editSlotPositions || '[]'); } catch { return; }
+      const orig = arr[i];
+      if (!orig) return;
+      const origBox = { x: orig.x, y: orig.y, w: orig.w, h: orig.h };
+      const move = (e) => {
+        const pt = e.touches ? e.touches[0] : e;
+        const xPct = ((pt.clientX - rect.left) / rect.width)  * 100;
+        const yPct = ((pt.clientY - rect.top)  / rect.height) * 100;
+        const next = resizeSlotFromCorner(corner, origBox, xPct, yPct, 4);
+        arr[i].x = next.x; arr[i].y = next.y; arr[i].w = next.w; arr[i].h = next.h;
+        this.editSlotPositions = JSON.stringify(arr, null, 2);
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        window.removeEventListener('touchmove', move);
+        window.removeEventListener('touchend', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      window.addEventListener('touchmove', move, { passive: false });
+      window.addEventListener('touchend', up);
+    },
+
+    // Drag the placard marker to re-attach it — computes the nearest side of
+    // the slot's own box (used as a stand-in for the frame — see
+    // previewPlacardStyle()'s comment) and expresses the drop point as
+    // { side, align, gapIn } (see placardDragToConfig()). Tracks the raw
+    // cursor position directly (no grab-offset preservation, unlike
+    // startSlotDrag()) since this is fundamentally a "where's my cursor
+    // relative to the frame" snap-to-edge interaction, not moving a fixed
+    // point — matching how snapping/alignment guides typically work in
+    // design tools.
+    startPlacardDrag(i, event) {
+      event.preventDefault();
+      // See the $refs-in-x-for comment in startSlotDrag() above.
+      const canvas = event.currentTarget.closest('.template-preview');
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      // See the same guard/comment in startSlotDrag() above — a zero-size
+      // rect here would divide-by-zero into Infinity, which then flows into
+      // gapIn and gets silently written as JSON `null` (JSON.stringify(Infinity)
+      // === 'null'), leaving the marker's config looking corrupted.
+      if (!(rect.width > 0) || !(rect.height > 0)) return;
+      let arr;
+      try { arr = JSON.parse(this.editSlotPositions || '[]'); } catch { return; }
+      const slot = arr[i];
+      if (!slot) return;
+      const move = (e) => {
+        const pt = e.touches ? e.touches[0] : e;
+        const xPct = ((pt.clientX - rect.left) / rect.width)  * 100;
+        const yPct = ((pt.clientY - rect.top)  / rect.height) * 100;
+        arr[i].placard = placardDragToConfig(slot, xPct, yPct);
+        this.editSlotPositions = JSON.stringify(arr, null, 2);
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        window.removeEventListener('touchmove', move);
+        window.removeEventListener('touchend', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      window.addEventListener('touchmove', move, { passive: false });
+      window.addEventListener('touchend', up);
+    },
+
+    async saveTemplate(templateid) {
+      if (!this.editName.trim() || this.editPhotoCount < 1) return;
+      let slotPositions, presentation;
+      try {
+        slotPositions = JSON.parse(this.editSlotPositions || '[]');
+      } catch {
+        this.editError = 'Slot positions must be valid JSON.';
+        return;
+      }
+      try {
+        presentation = JSON.parse(this.editPresentation || '{}');
+      } catch {
+        this.editError = 'Presentation must be valid JSON.';
+        return;
+      }
+      this.editError = '';
+      this.saving    = true;
+      try {
+        const resp = await fetch('/api/v1/display-templates/' + encodeURIComponent(templateid), {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({
+            name:           this.editName.trim(),
+            photo_count:    this.editPhotoCount,
+            slot_positions: slotPositions,
+            presentation:   presentation,
+          }),
+        });
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.error || 'HTTP ' + resp.status);
+        }
+        const t   = await resp.json();
+        const idx = this.templates.findIndex(x => x.templateid === templateid);
+        const next = this.templates.slice();
+        if (idx !== -1) next[idx] = t; else next.push(t);
+        this.templates = sortTemplates(next);
+        this.expandedId = null;
+        this.showToast('Template saved.');
+      } catch(e) {
+        this.editError = e.message;
+      }
+      this.saving = false;
+    },
+
+    async deleteTemplate(templateid) {
+      if (!confirm('Delete this template? Displays using it will lose their layout.')) return;
+      try {
+        const resp = await fetch('/api/v1/display-templates/' + encodeURIComponent(templateid), {
+          method: 'DELETE', headers: getAuthHeaders(),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        this.templates = this.templates.filter(t => t.templateid !== templateid);
+        if (this.expandedId === templateid) this.expandedId = null;
+        this.showToast('Template deleted.');
+      } catch(e) {
+        this.showToast('Delete failed: ' + e.message);
+      }
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// uploadStore — global Alpine store backing the title-bar upload icon and its
+// popup (Phase 7). A store (rather than a per-component Alpine.data) because
+// the queue must be reachable both from the nav icon's drag-and-drop handler
+// and from the popup itself, and should keep tracking uploads if the popup is
+// closed and reopened.
+//
+// One XHR per file (not one multipart POST for the whole batch) so each
+// queue row gets its own real upload-progress percentage from the browser;
+// the backend endpoint (POST /api/v1/photos/upload) accepts either.
+//
+// Label sync model: the initial per-file upload does NOT send batch labels
+// at all. Instead, the moment a photo finishes uploading, and again any time
+// the batch label list is edited, _syncItemLabels() reconciles that photo's
+// labels against whatever is currently shown in the popup — adding labels
+// that are missing and removing ones that were taken back out — via the
+// regular POST/DELETE /api/v1/labels API (the same one the label editor
+// elsewhere in the app uses). This is what guarantees every photo already
+// uploaded in this batch ends up matching the labels shown, not just photos
+// that happened to still be queued when a label was added or removed.
+// Each item's appliedLabels map (name value -> labelid) is the source
+// of truth for which labels this code has actually applied to that photo,
+// so a later removal always knows exactly which labelid to delete.
+// ─────────────────────────────────────────────────────────────────────────────
+function uploadStore() {
+  return {
+    open: false,
+    queue: [],           // { id, file, filename, status, progress, error, photoid, appliedLabels }
+    labels: [],          // { name, value } — kept in sync onto every photo in this batch
+    newLabelName: '',
+    newLabelValue: '',
+    activeCount: 0,
+    maxConcurrent: 3,
+
+    addFiles(fileList) {
+      const files = Array.from(fileList || []);
+      for (const file of files) {
+        if (!file.type || !file.type.startsWith('image/')) continue;
+        this.queue.push({
+          id: (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Math.random()),
+          file,
+          filename: file.name,
+          status: 'pending', // pending | uploading | done | error
+          progress: 0,
+          error: '',
+          photoid: null,
+          appliedLabels: new Map(), // name value -> labelid, for photos already uploaded
+        });
+      }
+      if (files.length) this.open = true;
+      this._pump();
+    },
+
+    addLabel() {
+      const name = this.newLabelName.trim();
+      const value = this.newLabelValue.trim();
+      if (!name || !value) return;
+      this.labels.push({ name, value });
+      this.newLabelName = '';
+      this.newLabelValue = '';
+      this._syncAllDone();
+    },
+
+    removeLabel(idx) {
+      this.labels.splice(idx, 1);
+      this._syncAllDone();
+    },
+
+    retry(item) {
+      item.status = 'pending';
+      item.progress = 0;
+      item.error = '';
+      this._pump();
+    },
+
+    removeItem(id) {
+      const idx = this.queue.findIndex((it) => it.id === id);
+      if (idx >= 0) this.queue.splice(idx, 1);
+    },
+
+    clearFinished() {
+      this.queue = this.queue.filter((it) => it.status !== 'done');
+    },
+
+    _pump() {
+      while (this.activeCount < this.maxConcurrent) {
+        const next = this.queue.find((it) => it.status === 'pending');
+        if (!next) break;
+        this._upload(next);
+      }
+    },
+
+    _upload(item) {
+      item.status = 'uploading';
+      this.activeCount++;
+
+      const form = new FormData();
+      form.append('files', item.file, item.file.name);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/v1/photos/upload');
+      const authHeaders = getAuthHeaders();
+      for (const key in authHeaders) xhr.setRequestHeader(key, authHeaders[key]);
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          item.progress = Math.round((e.loaded / e.total) * 100);
+        }
+      };
+
+      const finish = () => {
+        this.activeCount--;
+        this._pump();
+      };
+
+      xhr.onload = () => {
+        let data = null;
+        try { data = JSON.parse(xhr.responseText); } catch { /* fall through to error below */ }
+        const result = data && Array.isArray(data.results) ? data.results[0] : null;
+        if (xhr.status >= 200 && xhr.status < 300 && result && result.status === 'ok') {
+          item.progress = 100;
+          item.photoid = result.photoid;
+          // Apply whatever labels are shown right now (not necessarily what
+          // was shown when this file was queued) before marking it done.
+          this._syncItemLabels(item).finally(() => {
+            item.status = 'done';
+            finish();
+          });
+          return;
+        }
+        item.status = 'error';
+        item.error = (result && result.error) || (data && data.error) || ('Upload failed (HTTP ' + xhr.status + ')');
+        finish();
+      };
+      xhr.onerror = () => {
+        item.status = 'error';
+        item.error = 'Network error';
+        finish();
+      };
+
+      xhr.send(form);
+    },
+
+    // Reconciles one uploaded photo's labels against the current batch
+    // label list: adds whatever is missing, removes whatever this code
+    // previously applied but is no longer in the list. Best-effort — a
+    // failed add/remove is left out of appliedLabels so the next sync
+    // (triggered by the next label edit) retries it.
+    async _syncItemLabels(item) {
+      if (!item.photoid) return;
+      const authHeaders = getAuthHeaders();
+      const wanted = new Map(this.labels.map((l) => [l.name + ' ' + l.value, l]));
+
+      for (const [key, l] of wanted) {
+        if (item.appliedLabels.has(key)) continue;
+        try {
+          const resp = await fetch('/api/v1/labels?photoid=' + encodeURIComponent(item.photoid), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders },
+            body: JSON.stringify({ name: l.name, value: l.value }),
+          });
+          if (resp.ok) {
+            const created = await resp.json();
+            item.appliedLabels.set(key, created.labelid);
+          }
+        } catch { /* left unsynced; retried on the next label edit */ }
+      }
+
+      for (const [key, labelid] of Array.from(item.appliedLabels.entries())) {
+        if (wanted.has(key)) continue;
+        try {
+          const resp = await fetch('/api/v1/labels/' + encodeURIComponent(labelid), {
+            method: 'DELETE',
+            headers: authHeaders,
+          });
+          if (resp.ok || resp.status === 404) item.appliedLabels.delete(key);
+        } catch { /* left applied; retried on the next label edit */ }
+      }
+    },
+
+    // Re-applies the current batch label list to every photo already
+    // uploaded in this batch. Called whenever a label is added or removed,
+    // so photos uploaded before the edit still match what the popup shows.
+    _syncAllDone() {
+      for (const item of this.queue) {
+        if (item.status === 'done' && item.photoid) this._syncItemLabels(item);
+      }
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Alpine init — store + component registration.
 // Must run before Alpine initializes (alpine:init fires before Alpine walks DOM).
 // app.js is loaded with defer, same as alpinejs.min.js, so order matters:
@@ -1080,14 +4465,43 @@ document.addEventListener('alpine:init', () => {
     labelModal: false,
     settingsOpen: false,
   });
+  Alpine.store('upload', uploadStore());
 
-  Alpine.data('photoApp',      photoApp);
-  Alpine.data('userSwitcher',  userSwitcher);
-  Alpine.data('titleEditor',   titleEditor);
-  Alpine.data('commentsPanel', commentsPanel);
-  Alpine.data('commentItem',   commentItem);
-  Alpine.data('labelEditor',   labelEditor);
-  Alpine.data('emojiPicker',   emojiPicker);
+  // Phase 5d: the CSP build hard-disables the built-in x-html directive
+  // ("Using the x-html directive is prohibited in the CSP build") and also
+  // forbids any directive *expression* that assigns to a DOM property
+  // (so "$el.innerHTML = x" inside x-effect is blocked too) — both
+  // confirmed by exercising the actual alpinejs.min.js shipped in this app.
+  // Neither restriction applies to a *registered* directive's own handler
+  // code, though, since that's real JS executed outside the expression
+  // parser — only the bound expression string ("renderedComment" etc.,
+  // just a plain identifier) goes through the CSP evaluator. This is the
+  // one place in the whole app that needs raw HTML injection (the rest of
+  // the sanitization already happened in renderMarkdown() via DOMPurify),
+  // so x-rich-html="expr" is used everywhere a plain x-html would otherwise
+  // be needed for rendered Markdown comments.
+  Alpine.directive('rich-html', (el, { expression }, { effect, evaluateLater }) => {
+    const getValue = evaluateLater(expression);
+    effect(() => {
+      getValue((value) => { el.innerHTML = value || ''; });
+    });
+  });
+
+  Alpine.data('photoApp',        photoApp);
+  Alpine.data('wallApp',         wallApp);
+  Alpine.data('galleriesNav',    galleriesNav);
+  Alpine.data('galleriesApp',    galleriesApp);
+  Alpine.data('displayApp',      displayApp);
+  Alpine.data('displayEditApp',  displayEditApp);
+  Alpine.data('galleryAdminApp', galleryAdminApp);
+  Alpine.data('templateAdminApp', templateAdminApp);
+  Alpine.data('userSwitcher',    userSwitcher);
+  Alpine.data('titleEditor',     titleEditor);
+  Alpine.data('commentsPanel',   commentsPanel);
+  Alpine.data('commentItem',     commentItem);
+  Alpine.data('labelEditor',     labelEditor);
+  Alpine.data('emojiPicker',     emojiPicker);
+  Alpine.data('emojiShortcodePicker', emojiShortcodePicker);
   Alpine.data('emojiHover',      emojiHover);
   Alpine.data('avatarSettings',  avatarSettings);
   Alpine.data('authModal',       authModal);

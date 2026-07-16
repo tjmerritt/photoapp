@@ -5,19 +5,23 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/julienschmidt/httprouter"
 	"github.com/tjmerritt/photoapp/internal/config"
 	"github.com/tjmerritt/photoapp/internal/db"
 	"github.com/tjmerritt/photoapp/internal/middleware"
 	"github.com/tjmerritt/photoapp/internal/models"
+	"github.com/tjmerritt/photoapp/internal/permissions"
 )
 
 // PhotoHandler handles GET /api/v1/photo?photoid=<id>
 type PhotoHandler struct {
-	DB  *db.Pool
-	Cfg *config.Config
+	DB      *db.Pool
+	Cfg     *config.Config
+	Checker *permissions.Checker
 }
 
 func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -33,10 +37,16 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	currentUser, _ := middleware.UserID(r.Context())
 	exhibitionID := middleware.ExhibitionID(r.Context())
-	canSeeNonPublic := middleware.AuthorizedNonPublic(r.Context())
 	ctx := r.Context()
+	canSeePrivate, _ := h.Checker.Check(ctx, currentUser, exhibitionID, "", "", "", permissions.PermPrivatePhotoView)
 
 	// ── Core photo row ────────────────────────────────────────────────────────
+	// Visibility: public photos are visible to everyone; private ones need
+	// PermPrivatePhotoView *or* being the photo's own owner — otherwise a
+	// user without PrivatePhotoView who just uploaded a photo (browser
+	// uploads are always created private — see upload.go) would have no way
+	// to ever see their own photo again, despite the upload having actually
+	// succeeded.
 	var row pgx.Row
 	if random {
 		row = h.DB.QueryRow(ctx, `
@@ -49,10 +59,10 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			LEFT  JOIN users tu ON tu.userid = p.title_userid
 			WHERE p.deleted_at IS NULL
 			  AND ($1 = '' OR p.exhibitionid::text = $1)
-			  AND (p.is_public OR $2)
+			  AND (p.is_public OR $2 OR ($3 <> '' AND p.owner_userid::text = $3))
 			ORDER BY random()
 			LIMIT 1
-		`, exhibitionID, canSeeNonPublic)
+		`, exhibitionID, canSeePrivate, currentUser)
 	} else {
 		row = h.DB.QueryRow(ctx, `
 			SELECT
@@ -64,8 +74,8 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			LEFT  JOIN users tu ON tu.userid = p.title_userid
 			WHERE p.photoid = $1 AND p.deleted_at IS NULL
 			  AND ($2 = '' OR p.exhibitionid::text = $2)
-			  AND (p.is_public OR $3)
-		`, photoid, exhibitionID, canSeeNonPublic)
+			  AND (p.is_public OR $3 OR ($4 <> '' AND p.owner_userid::text = $4))
+		`, photoid, exhibitionID, canSeePrivate, currentUser)
 	}
 
 	var (
@@ -135,9 +145,9 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// ── Related photos ────────────────────────────────────────────────────────
 	var related []models.RelatedPhoto
 	if labelID != "" {
-		related, err = fetchRelatedByLabel(ctx, h.DB, photoid, labelID, exhibitionID, canSeeNonPublic)
+		related, err = fetchRelatedByLabel(ctx, h.DB, photoid, labelID, exhibitionID, canSeePrivate, currentUser)
 	} else {
-		related, err = fetchRelated(ctx, h.DB, photoid, exhibitionID, canSeeNonPublic)
+		related, err = fetchRelated(ctx, h.DB, photoid, exhibitionID, canSeePrivate, currentUser)
 	}
 	if err != nil {
 		slog.Error("ServeHTTP", "error", err)
@@ -161,6 +171,80 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	middleware.WriteJSON(w, http.StatusOK, photo)
+}
+
+// ListPhotosHandler handles GET /api/v1/photos?limit=N&offset=N
+// Returns a paginated list of photos for the exhibition wall.
+// Permission-checks PermPrivatePhotoView to include private photos.
+type ListPhotosHandler struct {
+	DB      *db.Pool
+	Checker *permissions.Checker
+}
+
+func (h *ListPhotosHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := middleware.ExhibitionID(ctx)
+	canSeePrivate, _ := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermPrivatePhotoView)
+
+	limit := 40
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 100 {
+			limit = v
+		}
+	}
+	offset := 0
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if v, err := strconv.Atoi(o); err == nil && v >= 0 {
+			offset = v
+		}
+	}
+
+	// Visibility: same owner-can-always-see-their-own-photo exception as
+	// PhotoHandler.ServeHTTP above — otherwise a just-uploaded (private by
+	// default) photo would never appear in the uploader's own wall/gallery
+	// view unless they separately held PermPrivatePhotoView.
+	rows, err := h.DB.Query(ctx, `
+		SELECT photoid::text, image_url, image_width, image_height,
+		       COUNT(*) OVER() AS total
+		FROM   photos
+		WHERE  deleted_at IS NULL
+		  AND  ($1 = '' OR exhibitionid::text = $1)
+		  AND  (is_public OR $2 OR ($3 <> '' AND owner_userid::text = $3))
+		ORDER  BY created_at DESC, photoid
+		LIMIT  $4 OFFSET $5
+	`, exhibitionID, canSeePrivate, userID, limit, offset)
+	if err != nil {
+		slog.Error("ListPhotos", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	defer rows.Close()
+
+	total := 0
+	photos := []models.PhotoListItem{}
+	for rows.Next() {
+		var p models.PhotoListItem
+		if err := rows.Scan(&p.PhotoID, &p.ImageURL, &p.Width, &p.Height, &total); err != nil {
+			slog.Error("ListPhotos scan", "error", err)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		p.ImageURL = proxyImageURL(p.ImageURL)
+		photos = append(photos, p)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("ListPhotos", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	middleware.WriteJSON(w, http.StatusOK, models.PhotoListResponse{
+		Total:  total,
+		Offset: offset,
+		Limit:  limit,
+		Photos: photos,
+	})
 }
 
 // UserHandler handles GET /api/v1/user?userid=<id>
@@ -200,10 +284,12 @@ func (h *UserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // PatchPhotoHandler handles PATCH /api/v1/photo?photoid=<id>
-// Allows the title owner or photo owner to update the title text.
+// Allows the title owner or photo owner to update the title/description.
+// Users holding PermPhotoDescriptionModify may edit any photo's title.
 type PatchPhotoHandler struct {
-	DB  *db.Pool
-	Cfg *config.Config
+	DB      *db.Pool
+	Cfg     *config.Config
+	Checker *permissions.Checker
 }
 
 func (h *PatchPhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -249,8 +335,11 @@ func (h *PatchPhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if currentUser != ownerID && currentUser != titleUserID {
-		middleware.WriteError(w, http.StatusForbidden, "not allowed to edit this title")
-		return
+		exhibitionID, _ := resolvePhotoExhibition(ctx, h.DB, photoid)
+		if ok, _ := h.Checker.Check(ctx, currentUser, exhibitionID, "", "", "", permissions.PermPhotoDescriptionModify); !ok {
+			middleware.WriteError(w, http.StatusForbidden, "not allowed to edit this title")
+			return
+		}
 	}
 
 	_, err = h.DB.Exec(ctx, `

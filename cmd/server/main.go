@@ -15,6 +15,7 @@ import (
 	"github.com/tjmerritt/photoapp/internal/config"
 	"github.com/tjmerritt/photoapp/internal/db"
 	"github.com/tjmerritt/photoapp/internal/handlers"
+	"github.com/tjmerritt/photoapp/internal/permissions"
 )
 
 func main() {
@@ -52,8 +53,11 @@ func main() {
 	// ── Exhibition handler ────────────────────────────────────────────────────
 	exhibitionHandler := &handlers.ExhibitionHandler{DB: pool}
 
+	// ── Permissions checker ───────────────────────────────────────────────────
+	checker := &permissions.Checker{DB: pool}
+
 	// ── Router ────────────────────────────────────────────────────────────────
-	router, err := handlers.NewRouter(pool, cfg, authHandler, exhibitionHandler)
+	router, err := handlers.NewRouter(pool, cfg, authHandler, exhibitionHandler, checker)
 	if err != nil {
 		slog.Error("failed to initialise router", "err", err)
 		os.Exit(1)

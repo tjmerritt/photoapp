@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en" x-data="displayEditApp" x-init="init()">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Edit Display — PhotoApp</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+
+  <link rel="stylesheet" href="/tailwind.css">
+  <script src="/app.js"></script>
+  <script defer src="/alpinejs.min.js"></script>
+  <link rel="stylesheet" href="/fonts.css">
+
+  <style>
+    :root {
+      --brand:  #1a1a2e;
+      --accent: #e94560;
+      --surface:#f7f5f2;
+      --card:   #ffffff;
+      --muted:  #6b7280;
+      --border: #e5e1db;
+      /* Museum board palette */
+      --board-bg:     #f0ead6;
+      --board-border: #d6ccb0;
+      --frame-bg:     #e8e3d5;
+      --placard-bg:   #faf7f0;
+      --placard-border: #d6ccb0;
+    }
+    body { font-family: 'DM Sans', sans-serif; background: var(--surface); color: var(--brand); }
+    h1,h2,h3,h4 { font-family: 'DM Serif Display', serif; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+    @keyframes fadeIn  { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes scaleIn { from { opacity:0; transform:scale(.95);      } to { opacity:1; transform:scale(1);      } }
+    .animate-fadein  { animation: fadeIn  .3s ease both; }
+    .animate-scalein { animation: scaleIn .2s  ease both; }
+    [x-cloak] { display: none !important; }
+    .backdrop { background: rgba(26,26,46,.55); backdrop-filter: blur(3px); }
+
+    /* Board — plain layout wrapper. Framing now comes entirely from each
+       photo's own matte/frame (presentation.matte / presentation.frame),
+       so this no longer has its own decorative background or border. */
+    .board {
+      padding: 0;
+    }
+
+    /* Photo slot — positioned absolutely within .display-grid per the
+       template's slot_positions (left/top/width/height set inline via
+       slotBoxStyle(), in percent — same geometry the Template Admin preview
+       pane renders). Each slot's placard is a separate, independently
+       positioned box (see .placard-box below), not nested here — its size
+       is fixed at the gallery level so it doesn't need to fit inside the
+       photo's own slot bounds. */
+    .slot-card {
+      display: flex;
+      box-sizing: border-box;
+      background: var(--surface);
+    }
+    /* .photo-area is the flexible region the slot gives to the photo
+       (everything except the placard). The framed photo NEVER stretches to
+       fill it — it keeps its own aspect ratio (see .photo-frame) and is
+       aligned within .photo-area per presentation.align (photoAreaStyle()).
+       Any leftover space is just .photo-area's own background showing
+       through — the page background, not a fill of its own. */
+    .photo-area {
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      background: var(--surface);
+    }
+    /* .photo-frame is the outer frame border (style set inline from the
+       template's presentation.frame); .photo-matte is the mat board inside
+       it (padding + color set inline from presentation.matte). Both are
+       independently optional — see frameOuterStyle()/matteInnerStyle().
+       The frame's own size comes from the photo's aspect ratio
+       (photoFrameSizeStyle()), capped to fit inside .photo-area — it is
+       never stretched to the slot's shape. position:relative anchors the
+       edit button to the photo's own corner. */
+    .photo-frame {
+      position: relative;
+      border-radius: 4px;
+      overflow: hidden;
+      box-sizing: border-box;
+      display: flex;
+    }
+    .photo-matte {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+    }
+    .photo-matte img {
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      display: block;
+    }
+    .photo-matte.empty-matte {
+      color: #c5bfad;
+      font-size: 0.75rem;
+    }
+    .slot-edit-btn {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      background: rgba(26,26,46,.75);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 0.3rem 0.55rem;
+      font-size: 0.7rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .slot-edit-btn:hover { background: rgba(26,26,46,.92); }
+    .slot-caption-btn {
+      left: 6px;
+      right: auto;
+    }
+
+    .btn-primary {
+      background: var(--brand);
+      color: #fff;
+      border: none;
+      padding: 0.5rem 1rem;
+      border-radius: 7px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity .15s;
+    }
+    .btn-primary:hover { opacity: .85; }
+    .btn-primary:disabled { opacity: .4; cursor: default; }
+    .btn-secondary {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--brand);
+      padding: 0.5rem 1rem;
+      border-radius: 7px;
+      font-size: 0.875rem;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .btn-secondary:hover { background: var(--surface); }
+    .input {
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.875rem;
+      background: #fff;
+      color: var(--brand);
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+      font-family: inherit;
+    }
+    .input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(233,69,96,.12);
+    }
+
+    /* Photo picker modal */
+    .picker-card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 20px 50px rgba(0,0,0,.25);
+      width: 100%;
+      max-width: 30rem;
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      padding: 1.25rem;
+    }
+    .picker-results {
+      overflow-y: auto;
+      flex: 1;
+    }
+    .picker-result {
+      text-align: left;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0;
+    }
+    .picker-thumb {
+      aspect-ratio: 1 / 1;
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--surface);
+      border: 1px solid var(--border);
+    }
+    .picker-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      transition: opacity .15s;
+    }
+    .picker-result:hover .picker-thumb img { opacity: .8; }
+    /* Placard box — independently positioned within the same 16:9 canvas as
+       the slot cards (position from the template's slot_positions[i].
+       placard; size/background/border from the gallery's placard_defaults —
+       see placardBoxStyle()). Each item inside is itself absolutely
+       positioned (placardItemStyle()) so items can be arranged freely
+       within the box, e.g. via the drag-to-position editor in Gallery
+       Admin's Placard Settings. */
+    .placard-box {
+      box-sizing: border-box;
+      border-radius: 4px;
+      overflow: hidden;
+      font-family: 'DM Sans', sans-serif;
+      /* Hover-to-expand — see the matching, more detailed comment in
+         display.html. Item font sizes are shrunk to stay true to the
+         placard's physical size on a small canvas (placardFontScale() in
+         app.js); hovering (after a short pause) scales the whole box up by
+         --placard-hover-scale (set inline by placardBoxStyle()) so text is
+         readable while editing, then collapses immediately on mouse-out.
+         --placard-hover-shift-x/-y (set on @mouseenter — see
+         handlePlacardHover()/applyPlacardHoverShift() in app.js) keep the
+         expanded box within the window near an edge. */
+      transform: translate(0, 0) scale(1);
+      transform-origin: center center;
+      transition: transform 0.12s ease-out;
+    }
+    .placard-box:hover {
+      transform: translate(var(--placard-hover-shift-x, 0px), var(--placard-hover-shift-y, 0px)) scale(var(--placard-hover-scale, 1));
+      transition: transform 0.18s ease-out 0.35s;
+      z-index: 40;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+    }
+    .placard-item {
+      white-space: nowrap;
+    }
+    .placard-empty {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      opacity: 0.4;
+      font-size: 0.7rem;
+      font-style: italic;
+      white-space: nowrap;
+    }
+
+    /* Display grid — a fixed-aspect canvas that each slot is positioned
+       within by percentage (see .slot-card / slotBoxStyle()), matching the
+       Template Admin preview pane exactly. */
+    .display-grid {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+    }
+
+    /* Layout guides — a reference overlay (edit page only) showing the 16:9
+       canvas boundary and each slot's exact bounding box, i.e. exactly what
+       the public view page assumes. outline (not border) so it never
+       affects box sizing/layout math. Toggled via the "Guides" control. */
+    .display-grid.guides-on {
+      outline: 2px dashed rgba(233, 69, 96, .55);
+      outline-offset: -1px;
+    }
+    .slot-card.guides-on {
+      outline: 1px dashed rgba(26, 26, 46, .4);
+      outline-offset: -1px;
+    }
+    .slot-guide-label {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      background: rgba(26, 26, 46, .72);
+      color: #fff;
+      font-size: 0.625rem;
+      line-height: 1.3;
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      pointer-events: none;
+      z-index: 5;
+      white-space: nowrap;
+    }
+    .guides-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    /* Nav arrow buttons */
+    .nav-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      padding: 0.5rem 1rem;
+      background: var(--brand);
+      color: #fff;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity .15s;
+      text-decoration: none;
+    }
+    .nav-btn:hover { opacity: .85; }
+    .nav-btn:disabled, .nav-btn[disabled] { opacity: .35; cursor: default; pointer-events: none; }
+    .nav-btn-ghost {
+      background: none;
+      color: var(--brand);
+      border: 1px solid var(--border);
+    }
+    .nav-btn-ghost:hover { opacity: 1; background: var(--surface); }
+
+    .edit-banner {
+      background: #fff7ed;
+      border: 1px solid #fdba74;
+      color: #9a3412;
+      border-radius: 8px;
+      padding: 0.5rem 0.875rem;
+      font-size: 0.8rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+  </style>
+</head>
+
+<body class="min-h-screen flex flex-col">
+
+<!-- ══ NAVBAR ══════════════════════════════════════════════════════════════ -->
+<nav class="sticky top-0 z-40 bg-white border-b border-[var(--border)] shadow-sm">
+  <div class="max-w-7xl mx-auto px-4 flex items-center gap-3 h-14">
+
+    <!-- Hamburger -->
+    <div class="relative" x-data="{ open: false }">
+      <button @click="open = !open" class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="Menu">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+      <div x-show="open" @click.outside="open=false" x-transition
+           class="absolute left-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-52 py-1 animate-scalein">
+        <a href="/" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Photos</a>
+
+        <div x-data="galleriesNav">
+          <span x-show="!loaded" class="block px-4 py-2.5 text-sm text-gray-300 cursor-default">Galleries</span>
+          <span x-show="loaded && galleries.length === 0"
+                class="block px-4 py-2.5 text-sm text-gray-300 cursor-default">Galleries</span>
+          <a x-show="loaded && galleries.length > 0"
+             :href="galleriesHref"
+             class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Galleries</a>
+          <div x-show="loaded && galleries.length > 1">
+            <template x-for="g in galleries" :key="g.galleryid">
+              <a :href="'/galleries.html?galleryid=' + g.galleryid"
+                 class="block pl-7 pr-4 py-1.5 text-xs text-[var(--muted)] hover:text-[var(--brand)] hover:bg-gray-50 truncate">
+                <span x-text="g.title"></span>
+              </a>
+            </template>
+          </div>
+        </div>
+
+        <a href="/gallery-admin.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Gallery Admin</a>
+        <a href="/template-admin.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Template Admin</a>
+        <a href="/admin-master.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Admin</a>
+      </div>
+    </div>
+
+    <!-- Logo -->
+    <a href="/" class="flex items-center gap-2 shrink-0">
+      <div class="w-8 h-8 rounded-lg bg-[var(--brand)] flex items-center justify-center">
+        <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/>
+        </svg>
+      </div>
+      <span class="font-serif text-lg font-bold text-[var(--brand)] hidden sm:block">Phōtos</span>
+    </a>
+
+    <!-- Breadcrumb: Gallery → display position -->
+    <div x-show="gallery && !loading" class="ml-4 flex items-center gap-2 text-sm text-[var(--muted)] min-w-0">
+      <a href="/galleries.html" class="hover:text-[var(--brand)] transition shrink-0">Galleries</a>
+      <span class="shrink-0">›</span>
+      <a :href="'/galleries.html?galleryid=' + (gallery && gallery.galleryid)"
+         class="hover:text-[var(--brand)] transition truncate max-w-[160px]"
+         x-text="gallery && gallery.title"></a>
+      <span class="shrink-0">›</span>
+      <span class="shrink-0" x-text="'Display ' + (currentIndex + 1) + ' of ' + galleryDisplays.length"></span>
+    </div>
+
+    <div class="ml-auto shrink-0">
+      <span class="edit-banner">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+        </svg>
+        Editing
+      </span>
+    </div>
+  </div>
+</nav>
+
+<!-- ══ MAIN ══════════════════════════════════════════════════════════════════ -->
+<main class="flex-1 max-w-6xl mx-auto w-full px-4 py-8">
+
+  <!-- Loading -->
+  <div x-show="loading" class="flex flex-col items-center justify-center py-32 gap-4">
+    <svg class="w-8 h-8 text-[var(--accent)] animate-spin" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+    </svg>
+    <p class="text-[var(--muted)] text-sm">Loading display…</p>
+  </div>
+
+  <!-- Error -->
+  <div x-show="!loading && error" class="text-center py-32">
+    <p class="text-[var(--muted)]" x-text="error"></p>
+    <a href="/galleries.html" class="mt-4 inline-block text-sm text-[var(--accent)] hover:underline">Back to Galleries</a>
+  </div>
+
+  <!-- Museum exhibit board -->
+  <div x-show="!loading && !error && display" class="animate-fadein">
+
+    <!-- Board header -->
+    <div class="mb-6 flex items-start justify-between gap-4 flex-wrap">
+      <div>
+        <h1 class="text-2xl font-serif" x-text="gallery && gallery.title"></h1>
+        <p class="text-sm text-[var(--muted)] mt-0.5"
+           x-text="'Display ' + (currentIndex + 1) + ' of ' + galleryDisplays.length"></p>
+      </div>
+      <!-- Navigation at top -->
+      <div class="flex items-center gap-2">
+        <!-- Reference overlay: the 16:9 canvas boundary + each slot's exact
+             bounds, i.e. the geometry the public view page assumes. -->
+        <label class="guides-toggle text-xs text-[var(--muted)]">
+          <input type="checkbox" x-model="showGuides" />
+          Guides
+        </label>
+        <a class="nav-btn nav-btn-ghost" :href="'/display.html?displayid=' + (display && display.displayid)">
+          View live
+        </a>
+        <button class="nav-btn" @click="goToPrev()" :disabled="!prevDisplayId">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+          </svg>
+          Prev
+        </button>
+        <button class="nav-btn" @click="goToNext()" :disabled="!nextDisplayId">
+          Next
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- The board itself -->
+    <div class="board">
+
+      <!-- Empty display (no slots) -->
+      <div x-show="display && display.slots && display.slots.length === 0"
+           class="py-16 text-center text-[var(--muted)] text-sm">
+        This display has no photo slots yet. Add a template in Gallery Admin.
+      </div>
+
+      <!-- Photo slots grid — each slot absolutely positioned per the
+           template's slot_positions (slotBoxStyle), matching the Template
+           Admin preview pane. -->
+      <div x-show="display && display.slots && display.slots.length > 0"
+           class="display-grid" x-ref="grid" :class="{ 'guides-on': showGuides }">
+        <template x-for="(slot, i) in (display && display.slots || [])" :key="slot.slotid">
+          <div class="slot-card" :style="slotBoxStyle(i)" :class="{ 'guides-on': showGuides }">
+            <!-- Guide label: this slot's raw x/y/w/h from slot_positions. -->
+            <span x-show="showGuides" class="slot-guide-label" x-text="slotGuideLabel(i)"></span>
+            <!-- Photo area — the framed photo keeps its own aspect ratio and
+                 is aligned within any leftover space per presentation.align;
+                 that leftover space is always just background, never a frame
+                 that's been stretched out of shape. Frame size (width/height)
+                 is measured in JS (layoutFrames()) so the matte/frame widths
+                 stay exactly uniform on every side — see computeFrameBoxSize
+                 comment in app.js. -->
+            <div class="photo-area" :style="photoAreaStyle()">
+              <div class="photo-frame" :style="frameOuterStyle(i) + photoFrameSizeStyle(i, slot)">
+                <template x-if="slot.photo">
+                  <div class="photo-matte" :style="matteInnerStyle(i)">
+                    <img :src="thumbUrl(slot.photo.imageurl, 600)"
+                         :alt="'Slot ' + slot.slot_index"
+                         loading="lazy" />
+                  </div>
+                </template>
+                <!-- Empty slot placeholder -->
+                <template x-if="!slot.photo">
+                  <div class="photo-matte empty-matte" :style="matteInnerStyle(i)">
+                    <span>Empty</span>
+                  </div>
+                </template>
+                <button x-show="loggedInUser" class="slot-edit-btn" @click="openPicker(slot.slot_index)"
+                        x-text="slot.photo ? 'Change photo' : 'Add photo'"></button>
+                <button x-show="loggedInUser" class="slot-edit-btn slot-caption-btn"
+                        @click="openCaptionEditor(slot.slot_index)">Edit captions</button>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- Placards — independently positioned within the same 16:9 canvas
+             (position from the template, size/appearance/content from the
+             gallery's Placard Settings). Rendered as a separate loop rather
+             than nested in .slot-card since a placard isn't confined to its
+             slot's own bounds. -->
+        <template x-for="(slot, i) in (display && display.slots || [])" :key="'placard-' + slot.slotid">
+          <div class="placard-box" :style="placardBoxStyle(i)" @mouseenter="handlePlacardHover($event)">
+            <template x-for="item in placardItemsFor(slot)" :key="item.id">
+              <div class="placard-item" :style="item.style" x-text="item.text"></div>
+            </template>
+            <span x-show="placardItemsFor(slot).length === 0" class="placard-empty">No caption</span>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Navigation at bottom -->
+    <div class="mt-6 flex justify-between items-center">
+      <button class="nav-btn" @click="goToPrev()" :disabled="!prevDisplayId">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+        </svg>
+        Previous Display
+      </button>
+      <a href="/galleries.html" class="text-sm text-[var(--muted)] hover:text-[var(--brand)] transition">
+        All Galleries
+      </a>
+      <button class="nav-btn" @click="goToNext()" :disabled="!nextDisplayId">
+        Next Display
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+        </svg>
+      </button>
+    </div>
+
+  </div>
+</main>
+
+<!-- ══ PHOTO PICKER ════════════════════════════════════════════════════════ -->
+<div x-show="pickerOpen" x-cloak x-transition
+     class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
+     @click.self="closePicker()"
+     @keydown.escape.window="closePicker()">
+  <div class="picker-card animate-scalein">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="font-serif text-lg">Choose a photo</h3>
+      <button class="text-[var(--muted)] hover:text-[var(--brand)] text-xl leading-none px-1" @click="closePicker()">&times;</button>
+    </div>
+
+    <input class="input w-full mb-3"
+           style="border:1px solid var(--border); border-radius:7px; padding:0.5rem 0.75rem; font-size:0.875rem;"
+           type="text"
+           placeholder="Search photos by title, label, @user…"
+           x-model="pickerQuery"
+           @input="onPickerInput()" />
+
+    <div class="picker-results">
+      <div x-show="pickerLoading" class="text-sm text-[var(--muted)] text-center py-8">Searching…</div>
+
+      <div x-show="!pickerLoading && pickerError" class="text-sm text-red-500 text-center py-8" x-text="pickerError"></div>
+
+      <div x-show="!pickerLoading && !pickerError && pickerQuery.trim() && pickerResults.length === 0"
+           class="text-sm text-[var(--muted)] text-center py-8">
+        No photos found.
+      </div>
+
+      <div x-show="!pickerLoading && !pickerQuery.trim()" class="text-sm text-[var(--muted)] text-center py-8">
+        Type to search photos.
+      </div>
+
+      <div x-show="!pickerLoading && pickerResults.length > 0" class="grid grid-cols-3 gap-2">
+        <template x-for="p in pickerResults" :key="p.photoid">
+          <button class="picker-result" @click="selectPickerPhoto(p)" :disabled="pickerSaving">
+            <div class="picker-thumb">
+              <img :src="thumbUrl(p.imageurl, 200)" :alt="p.title || 'Untitled photo'" loading="lazy" />
+            </div>
+            <p class="text-xs mt-1 truncate" x-text="p.title || '(untitled)'"></p>
+          </button>
+        </template>
+      </div>
+    </div>
+
+    <button x-show="currentPickerSlot() && currentPickerSlot().photo"
+            class="btn-secondary text-sm mt-3 self-start"
+            style="border:1px solid var(--border); border-radius:7px; padding:0.5rem 1rem; background:none; cursor:pointer;"
+            :disabled="pickerSaving"
+            @click="clearPickerPhoto()">
+      Remove photo from this slot
+    </button>
+  </div>
+</div>
+
+<!-- ══ CAPTION OVERRIDE EDITOR ═════════════════════════════════════════════ -->
+<div x-show="captionModalOpen" x-cloak x-transition
+     class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
+     @click.self="closeCaptionEditor()"
+     @keydown.escape.window="closeCaptionEditor()">
+  <div class="picker-card animate-scalein">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="font-serif text-lg">Edit captions</h3>
+      <button class="text-[var(--muted)] hover:text-[var(--brand)] text-xl leading-none px-1" @click="closeCaptionEditor()">&times;</button>
+    </div>
+
+    <p class="text-xs text-[var(--muted)] mb-3">
+      Overrides apply to this slot only. Leave a field blank to use the value
+      resolved from the photo's labels (shown as the placeholder).
+    </p>
+
+    <div x-show="galleryPlacardItems().length === 0" class="text-sm text-[var(--muted)] text-center py-6">
+      No placard items are configured for this gallery yet. Set them up in
+      Gallery Admin's Placard Settings.
+    </div>
+
+    <div class="flex flex-col gap-3">
+      <template x-for="item in galleryPlacardItems()" :key="item.id">
+        <label class="text-xs font-medium text-[var(--muted)]">
+          <span x-text="item.text || '(empty item)'"></span>
+          <input class="input w-full mt-1" type="text"
+                 x-model="captionDraft[item.id]"
+                 :placeholder="resolvedCaptionPlaceholder(item)" />
+        </label>
+      </template>
+    </div>
+
+    <div class="flex gap-2 mt-4">
+      <button class="btn-primary text-sm" @click="saveCaptionOverrides()" :disabled="captionSaving">
+        <span x-show="!captionSaving">Save</span>
+        <span x-show="captionSaving">Saving…</span>
+      </button>
+      <button class="btn-secondary text-sm" @click="closeCaptionEditor()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ TOAST ═══════════════════════════════════════════════════════════════ -->
+<div x-show="toast.visible" x-transition
+     class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[var(--brand)] text-white text-sm px-5 py-2.5 rounded-full shadow-lg pointer-events-none"
+     x-text="toast.message">
+</div>
+
+</body>
+</html>

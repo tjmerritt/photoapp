@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en" x-data="adminMaster" x-init="init()">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="stylesheet" href="/tailwind.css">
+  <link rel="stylesheet" href="/fonts.css">
+  <script src="/admin.js"></script>
+  <script defer src="/alpinejs.min.js"></script>
+</head>
+<body class="bg-gray-100 min-h-screen font-sans">
+
+  <!-- Header -->
+  <header class="bg-[#1a1a2e] text-white px-5 py-3.5 flex items-center justify-between gap-4">
+    <h1 class="text-lg font-bold tracking-tight shrink-0">Admin</h1>
+
+    <!-- Exhibition selector (only shown when user is in multiple exhibitions) -->
+    <div x-show="exhibitions.length > 1" class="flex items-center gap-2 flex-1 min-w-0">
+      <label class="text-xs text-white/60 shrink-0">Exhibition:</label>
+      <select x-model="selectedExhibition"
+              @change="changeExhibition()"
+              class="bg-white/10 text-white text-sm rounded-lg px-3 py-1.5 border border-white/20
+                     focus:outline-none focus:ring-2 focus:ring-accent/40 cursor-pointer
+                     min-w-0 max-w-xs truncate">
+        <template x-for="ex in exhibitions" :key="ex.exhibitionid">
+          <option :value="ex.exhibitionid" x-text="ex.name"></option>
+        </template>
+      </select>
+    </div>
+    <div x-show="exhibitions.length === 1" class="flex-1 min-w-0">
+      <span class="text-sm text-white/80 truncate" x-text="exhibitions[0] ? exhibitions[0].name : ''"></span>
+    </div>
+
+    <a href="/" class="text-xs text-white/60 hover:text-white transition shrink-0">← Back to app</a>
+  </header>
+
+  <!-- Admin page nav (shared across all admin pages) -->
+  <nav class="bg-white border-b border-gray-200 px-5 py-2.5 flex items-center gap-1 text-sm overflow-x-auto">
+    <a href="/admin-master.html" class="px-3 py-1.5 rounded-lg font-semibold bg-gray-100 whitespace-nowrap">Overview</a>
+    <a href="/admin.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Photos</a>
+    <a href="/admin-users.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Users</a>
+    <a href="/admin-teams.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Teams</a>
+    <a href="/admin-emojis.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Emojis</a>
+    <a href="/admin-labels.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Labels</a>
+    <a href="/admin-permissions.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Permissions</a>
+    <a href="/admin-roles.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Roles</a>
+    <a href="/gallery-admin.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Galleries</a>
+    <a href="/template-admin.html" class="px-3 py-1.5 rounded-lg hover:bg-gray-50 whitespace-nowrap">Templates</a>
+  </nav>
+
+  <!-- Auth error -->
+  <div x-show="authError"
+       class="max-w-md mx-auto mt-12 bg-red-50 border border-red-300 rounded-2xl p-6 text-center text-red-800 text-sm">
+    You don't have admin access, or the server needs to be rebuilt with the latest code.
+  </div>
+
+  <!-- No exhibitions -->
+  <div x-show="noExhibitions"
+       class="max-w-md mx-auto mt-12 bg-red-50 border border-red-300 rounded-2xl p-6 text-center text-red-800 text-sm">
+    You are not a member of any exhibitions. Ask an admin to add you via
+    <code class="font-mono bg-red-100 px-1 rounded">user_exhibitions</code>.
+  </div>
+
+  <!-- Loading skeleton -->
+  <div x-show="loading" class="grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-4xl mx-auto p-6">
+    <template x-for="n in [1,2,3,4]" :key="n">
+      <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 animate-pulse">
+        <div class="h-3 bg-gray-200 rounded w-2/3 mb-3"></div>
+        <div class="h-7 bg-gray-200 rounded w-1/2"></div>
+      </div>
+    </template>
+  </div>
+
+  <!-- Quick stats -->
+  <div x-show="!loading && !authError && !noExhibitions && stats"
+       class="grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-4xl mx-auto p-6">
+    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+      <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Users</p>
+      <p class="text-2xl font-bold text-[#1a1a2e] mt-1" x-text="stats ? stats.user_count : '—'"></p>
+    </div>
+    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+      <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Photos</p>
+      <p class="text-2xl font-bold text-[#1a1a2e] mt-1" x-text="stats ? stats.photo_count : '—'"></p>
+    </div>
+    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+      <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Active labels</p>
+      <p class="text-2xl font-bold text-[#1a1a2e] mt-1" x-text="stats ? stats.active_label_count : '—'"></p>
+    </div>
+    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+      <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Active emojis</p>
+      <p class="text-2xl font-bold text-[#1a1a2e] mt-1" x-text="stats ? stats.active_emoji_count : '—'"></p>
+    </div>
+  </div>
+
+  <!-- Admin page cards -->
+  <div x-show="!loading && !authError && !noExhibitions"
+       class="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-4xl mx-auto px-6 pb-10">
+    <a href="/admin.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 hover:shadow-md hover:border-accent/40 transition">
+      <p class="font-semibold text-[#1a1a2e]">Photos</p>
+      <p class="text-sm text-gray-500 mt-1">Search photos and toggle public/private visibility.</p>
+    </a>
+    <a href="/admin-users.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 hover:shadow-md hover:border-accent/40 transition">
+      <p class="font-semibold text-[#1a1a2e]">Users</p>
+      <p class="text-sm text-gray-500 mt-1">Enable/disable accounts and per-user permissions.</p>
+    </a>
+    <a href="/admin-teams.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 hover:shadow-md hover:border-accent/40 transition">
+      <p class="font-semibold text-[#1a1a2e]">Teams</p>
+      <p class="text-sm text-gray-500 mt-1">Create teams and manage their membership.</p>
+    </a>
+    <a href="/admin-emojis.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 hover:shadow-md hover:border-accent/40 transition">
+      <p class="font-semibold text-[#1a1a2e]">Emojis</p>
+      <p class="text-sm text-gray-500 mt-1">Enable/disable custom and built-in emoji types.</p>
+    </a>
+    <a href="/admin-labels.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 hover:shadow-md hover:border-accent/40 transition">
+      <p class="font-semibold text-[#1a1a2e]">Labels</p>
+      <p class="text-sm text-gray-500 mt-1">Set colors, and enable/disable or restrict label names.</p>
+    </a>
+    <a href="/admin-permissions.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 hover:shadow-md hover:border-accent/40 transition">
+      <p class="font-semibold text-[#1a1a2e]">Permissions</p>
+      <p class="text-sm text-gray-500 mt-1">View and revoke global and exhibition-specific role grants.</p>
+    </a>
+    <a href="/admin-roles.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 hover:shadow-md hover:border-accent/40 transition">
+      <p class="font-semibold text-[#1a1a2e]">Roles</p>
+      <p class="text-sm text-gray-500 mt-1">Create roles and choose which permissions each one bundles.</p>
+    </a>
+  </div>
+
+</body>
+</html>
