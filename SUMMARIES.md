@@ -1796,3 +1796,20 @@ No Go toolchain or live Postgres in this sandbox (unchanged standing constraint)
 ### Open items
 - Still needs a real Postgres + rebuild to click through editing a grant of each entity/resource combination (Public/LoggedIn/Team/User × global/whole-exhibition/Gallery/Display/Photo) end-to-end before trusting this in production.
 - `openEditModal`'s Photo-thumbnail lookup falls back to a synthesized `{photoid, title: g.resource_name, imageurl: ''}` if the exact-id search doesn't find a match; a blank `imageurl` will render a broken image icon in that fallback case rather than a real thumbnail.
+
+## Session 70 — Favicons regenerated to match the title-bar icon
+
+### What was done
+User request: make `app/favicon.ico` and `app/apple-touch-icon.png` match the icon shown in the app's own title bar, rather than whatever placeholder graphic they held previously. The title-bar icon (in `index.html`/`photo.html`'s navbar, reused identically across all pages) is a `w-8 h-8 rounded-lg bg-brand` (`#1a1a2e`) square containing a white 20px "play-circle" glyph (`viewBox="0 0 24 24"`, a circle with a triangular cutout), centered with a 6px margin on each side.
+
+Rebuilt both files from scratch to reproduce that exact composition at raster sizes: worked out the glyph's proportions as fractions of the container (white circle centered at 50%/50% with radius ≈0.26× the container size; the triangular cutout redrawn in the brand color on top of the circle, vertices at fractional coordinates derived from the original SVG path's viewBox math) and rendered with Pillow using 8× supersampling then downsampling for anti-aliasing, so the small favicon sizes stay crisp rather than jagged.
+
+`app/apple-touch-icon.png`: re-rendered at the same 256×256 size as before. `app/favicon.ico`: re-rendered as a proper multi-resolution icon (16/32/48/64px frames, each PNG-compressed inside the ICO container) — the first attempt at building this only wrote a single 16×16 frame (Pillow's `append_images` isn't honored by the ICO plugin), so the working approach instead saves from the 256px master image with `sizes=[(16,16),(32,32),(48,48),(64,64)]`, letting Pillow downsample once per requested size into one valid 4-frame `.ico`.
+
+No HTML changes were needed — all 16 pages in `app/` already reference `/favicon.ico` and `/apple-touch-icon.png` by the same fixed paths, so overwriting those two files in place updates every page at once.
+
+### Testing notes
+Verified the `.ico`'s frame count/sizes by parsing its `ICONDIR`/`ICONDIRENTRY` header with Python's `struct` (confirmed 4 frames at 16/32/48/64px, each with a valid PNG payload offset/size). Rendered the 256px master to a preview PNG and viewed it directly to visually confirm the circle/triangle proportions and brand color match the navbar icon. Grepped all of `app/*.html` for `favicon.ico`/`apple-touch-icon` references (16 of 16 files match) to confirm no per-page HTML edits were needed.
+
+### Open items
+None.
