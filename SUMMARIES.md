@@ -1813,3 +1813,48 @@ Verified the `.ico`'s frame count/sizes by parsing its `ICONDIR`/`ICONDIRENTRY` 
 
 ### Open items
 None.
+
+## Session 71 — Fixed: photo admin thumbnail links pointed at `/` instead of `photo.html`
+
+### What was done
+User report: links on the photo admin page (`app/admin.html`) didn't go anywhere useful. Each photo thumbnail was wrapped in `<a :href="'/?photoid=' + photo.photoid" target="_blank">`, pointing at `index.html` (the photo wall) with a `photoid` query param — but the wall page never reads that param, so the link just opened the wall's normal paginated view regardless of which photo was clicked. `photo.html` (the actual single-photo viewer, moved out of `index.html` back in Phase 3) is the page that reads a `photoid` query param (`app.js`: `params.get('photoid')`), so the link needed to point there instead.
+
+Changed the thumbnail link to `'/photo.html?photoid=' + photo.photoid`. This was the only broken link on the page — the header's "← Back to app" link (`href="/"`) is an intentional link to the wall/home page, not a per-photo link, so it was left as-is.
+
+### Testing notes
+Grepped `admin.html` for all `href`/`:href` occurrences to confirm this was the only per-photo link needing the fix. Re-verified HTML tag balance on `admin.html` (the naive checker's first pass flagged a false mismatch on self-closing `<path/>` SVG tags; stripping self-closing tags before checking confirmed the file is actually balanced).
+
+### Open items
+None.
+
+## Session 72 — Fixed: CSP blocked slot photos on Display view/edit (missing imgproxy wrap)
+
+### What was done
+User report: viewing a Display showed a slot's `<img>` with `src="http://do7.tj.merritts.org/scancafe/..."` — a raw external URL — and the image didn't load, correctly suspecting a CSP issue and pointing at imgproxy as the fix.
+
+Root cause: every other handler that returns a photo's `imageurl` to the frontend (`photo.go`, `admin.go`, `search.go`, `fetch.go`) rewrites it through the shared `proxyImageURL()` helper (`fetch.go`) — which turns `http://...`/`https://...` URLs into `/api/v1/imgproxy?url=...` so the browser only ever hits same-origin image URLs, satisfying the CSP's `img-src 'self'`. `internal/handlers/displays.go`'s `Get` handler (`GET /api/v1/displays/:displayid`, used by both `display.html` and `display-edit.html` to render each slot's photo) was the one place that missed this: it built `models.SlotPhoto.ImageURL` directly from the raw `image_url` column (`ImageURL: *imageURL`), bypassing the proxy entirely. `app.js`'s `thumbUrl()` only appends a `&w=` sizing param when the URL already contains `/api/v1/imgproxy` (see Session 71-adjacent code) and otherwise passes the URL through unchanged — so with the raw URL, `thumbUrl` had nothing to fix, and the browser tried to load the external origin directly and got blocked.
+
+Fix: wrapped the assignment in `proxyImageURL()`: `ImageURL: proxyImageURL(*imageURL)`. Now slot photos get the same `/api/v1/imgproxy?url=...` treatment as every other photo thumbnail in the app, and `thumbUrl()`'s width-append logic kicks in correctly on top of it.
+
+### Testing notes
+Grepped `internal/handlers/displays.go` for all `ImageURL` references (only the one construction site) and grepped the whole repo for other `models.SlotPhoto{` construction sites (none) to confirm this was the only place needing the fix. Checked `imgproxy.go` — it has no per-domain allowlist, so the proxied URL will fetch `do7.tj.merritts.org` (or any other http/https source) without further config changes. Verified brace/paren balance on `displays.go` (67/67, 153/153) after the edit.
+
+### Open items
+- No Go toolchain in this sandbox to compile-check; the change is a one-line, type-consistent wrap of an existing `string`-returning helper already used identically elsewhere in the same package, so compilation risk is minimal, but a real build should still confirm before deploying.
+
+## Session 73 — Fixed: "Invalid OAuth state" on Apple Sign-In (SameSite cookie blocked on cross-site form_post)
+
+### What was done
+User report: logging in with an Apple account fails with "Invalid OAuth state".
+
+Root cause: all four OAuth providers shared an `oauth_state` cookie set with no explicit `SameSite` attribute (`internal/handlers/auth.go`), which browsers treat as `SameSite=Lax`. Google/Facebook/Microsoft return their callbacks as top-level GET redirects, which Lax allows — so those flows worked. Apple is the odd one out: `AppleLogin` requests `response_mode=form_post`, so Apple delivers the callback as a **cross-site POST** from `appleid.apple.com`, and browsers do not send Lax cookies on cross-site POSTs. `AppleCallback`'s `r.Cookie("oauth_state")` therefore returned `ErrNoCookie`, and the handler's state check failed with "Invalid OAuth state" on every attempt.
+
+Fix (Apple-only, deliberately scoped): rather than loosening the shared cookie to `SameSite=None` for all providers, Apple got its own `apple_oauth_state` cookie set with `SameSite=None; Secure` (both required together — browsers reject `None` without `Secure`) in `AppleLogin`, and `AppleCallback` now reads/clears that cookie with matching attributes. A comment above the `SetCookie` explains why Apple alone needs the looser attributes. The other three providers are untouched and keep default (Lax) behavior on the shared `oauth_state` cookie.
+
+### Testing notes
+Grepped the whole repo for `oauth_state` — only `auth.go` references it, so the rename is self-contained (no frontend or middleware coupling). The new cookie attributes mirror the existing session-cookie pattern in the same file (`setSessionCookie` already uses `SameSite: http.SameSiteLaxMode`), so the fields are type-consistent with existing usage.
+
+### Open items
+- No Go toolchain in this sandbox to compile-check; run `go build ./...` before deploying.
+- `SameSite=None; Secure` means the Apple flow only works over HTTPS. Apple requires HTTPS redirect URIs anyway, so this doesn't lose anything, but plain-HTTP local testing of the Apple flow won't work (it didn't before either).
+- Google/Facebook/Microsoft still share the `oauth_state` cookie among themselves; two of those flows started concurrently clobber each other's state (pre-existing, benign — one login fails and can be retried). Could be split into per-provider cookies later if it ever matters.
