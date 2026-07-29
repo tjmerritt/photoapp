@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.19",
+    "vitest": "^2.1.9"
+  }
+}

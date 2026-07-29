@@ -538,6 +538,37 @@ When a photo is unchanged (URL matches, `--refresh-exif` not set), any `--label`
 | `MAX_PAGE_SIZE` | `100` | Maximum items per page |
 | `AUTH_HEADER` | `X-User-ID` | Header name used for placeholder auth |
 
+## Testing
+
+Go tests that need a database (permission checks, handler tests, ...) are
+opt-in: they call `internal/testutil.RequireDB`, which skips the test
+automatically when `TEST_DATABASE_URL` is unset. Point it at a disposable
+database — its tables are truncated before every test:
+
+```sh
+make test-db-create   # createdb photoapp_test
+TEST_DATABASE_URL=postgres://photoapp:photoapp@localhost:5432/photoapp_test?sslmode=disable make test-go
+```
+
+The first DB-backed test in a run applies every file in `migrations/`
+(via `psql -f`, skipping `*_seed.sql`) automatically — no separate
+migrate step needed for the test database.
+
+JS unit tests ([Vitest](https://vitest.dev)) cover the pure, DOM-free
+helpers exposed by `app/app.js` (see `app/__tests__/`):
+
+```sh
+npm install
+make test-js   # or: npm test
+```
+
+`make test` runs both. To run the full suite automatically before each
+commit:
+
+```sh
+git config core.hooksPath scripts/githooks
+```
+
 ## Dependencies
 
 - [`jackc/pgx/v5`](https://github.com/jackc/pgx) — PostgreSQL driver with connection pooling

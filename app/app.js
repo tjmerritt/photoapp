@@ -4459,7 +4459,10 @@ function uploadStore() {
 // app.js is loaded with defer, same as alpinejs.min.js, so order matters:
 // <script src="/app.js"></script> BEFORE <script defer src="/alpinejs.min.js">
 // ─────────────────────────────────────────────────────────────────────────────
-document.addEventListener('alpine:init', () => {
+// Guarded so Vitest can `import` this file under Node (no `document` there)
+// to unit-test the pure helpers exposed at the bottom of this file, without
+// this registration block running or throwing.
+typeof document !== 'undefined' && document.addEventListener('alpine:init', () => {
   Alpine.store('ui', {
     emojiPickerOpen: false,
     labelModal: false,
@@ -4506,3 +4509,21 @@ document.addEventListener('alpine:init', () => {
   Alpine.data('avatarSettings',  avatarSettings);
   Alpine.data('authModal',       authModal);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test hook (Node/Vitest only) — Phase 0 test infrastructure.
+//
+// Every .html page loads this file via a plain <script src="app.js">, which
+// has no module system: `typeof module` is 'undefined' there, so this block
+// never executes in the browser. Vitest runs test files under Node, where
+// `module` exists, so this exposes app.js's pure, DOM-free helper functions
+// for direct unit testing (see app/__tests__/) without turning app.js into
+// an ES module — doing that would break every page's plain <script> tag.
+//
+// Only list functions here that don't touch `document`/`window`/Alpine
+// state; UI components (wallApp, photoApp, labelEditor, ...) stay untested
+// at this layer on purpose — they're covered by browser-level testing, not
+// this Node-side unit layer.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { packRows, thumbUrl, sortTemplates, avatarSrc, labelColorFor };
+}

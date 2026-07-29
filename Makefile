@@ -1,4 +1,4 @@
-.PHONY: build run tidy migrate-up migrate-down test lint
+.PHONY: build run tidy migrate-up migrate-down test test-go test-js test-db-create test-db-drop hooks-install lint
 
 # ── Build & run ───────────────────────────────────────────────────────────────
 build:	tailwind.css
@@ -40,6 +40,8 @@ migrate-up:
 	psql "$$DATABASE_URL" -f migrations/014_galleries_displays.sql
 	psql "$$DATABASE_URL" -f migrations/015_microsoft_auth.sql
 	psql "$$DATABASE_URL" -f migrations/016_label_names.sql
+	psql "$$DATABASE_URL" -f migrations/017_admin_phase6.sql
+	psql "$$DATABASE_URL" -f migrations/018_grant_exhibitionid.sql
 
 #Commented out so that the database isn't destroyed accidentally
 #migrate-down:
@@ -49,8 +51,38 @@ seed:
 	psql "$$DATABASE_URL" -f migrations/002_seed.sql
 
 # ── Quality ───────────────────────────────────────────────────────────────────
-test:
+# Phase 0 (PLAN2.md) test infrastructure.
+#
+# Go: DB-backed tests (internal/permissions, internal/handlers, ...) skip
+# themselves automatically when TEST_DATABASE_URL is unset — see
+# internal/testutil's package doc comment. Point it at a disposable database
+# (its tables get truncated before every test):
+#
+#   make test-db-create
+#   TEST_DATABASE_URL=postgres://photoapp:photoapp@localhost:5432/photoapp_test?sslmode=disable make test-go
+#
+# JS: `npm test` (Vitest) covers the pure, DOM-free helpers exposed by
+# app/app.js (see app/__tests__/).
+test: test-go test-js
+
+test-go:
 	go test ./...
+
+test-js:
+	npm test
+
+# Convenience targets for a local throwaway test database. Requires
+# createdb/dropdb (part of the same Postgres client tools as psql) and
+# DATABASE_URL set to a superuser/owner connection for the CREATE/DROP.
+test-db-create:
+	createdb photoapp_test
+
+test-db-drop:
+	dropdb --if-exists photoapp_test
+
+# Run the test suite before every commit — see scripts/githooks/pre-commit.
+hooks-install:
+	git config core.hooksPath scripts/githooks
 
 lint:
 	golangci-lint run ./...
