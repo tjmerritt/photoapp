@@ -554,6 +554,15 @@ The first DB-backed test in a run applies every file in `migrations/`
 (via `psql -f`, skipping `*_seed.sql`) automatically — no separate
 migrate step needed for the test database.
 
+`make test-go` always passes `-p 1 -count=1` to `go test`, and if you
+ever run `go test` directly with `TEST_DATABASE_URL` set, do the same.
+Every package's tests share that one database; without `-p 1`, Go runs
+different packages concurrently by default and they'll truncate each
+other's tables mid-test, producing flaky failures with no obvious cause.
+`-count=1` bypasses Go's test cache, which has no way to know
+`TEST_DATABASE_URL` affects the result and can otherwise replay a stale
+pass/fail from before the database was configured.
+
 JS unit tests ([Vitest](https://vitest.dev)) cover the pure, DOM-free
 helpers exposed by `app/app.js` (see `app/__tests__/`):
 

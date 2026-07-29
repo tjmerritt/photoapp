@@ -61,12 +61,22 @@ seed:
 #   make test-db-create
 #   TEST_DATABASE_URL=postgres://photoapp:photoapp@localhost:5432/photoapp_test?sslmode=disable make test-go
 #
+# -p 1 is required, not optional, whenever TEST_DATABASE_URL is set: `go
+# test ./...` otherwise runs different packages' tests concurrently, and
+# every package shares the one database named by TEST_DATABASE_URL —
+# concurrent packages will truncate tables out from under each other's
+# in-flight tests (see internal/testutil.TruncateAll's doc comment) and
+# produce flaky, misleading failures that vanish under -v -run on a single
+# package. -count=1 additionally bypasses Go's test result cache, which
+# otherwise doesn't know TEST_DATABASE_URL affects the outcome and can
+# silently serve a stale result from a run before the database was set up.
+#
 # JS: `npm test` (Vitest) covers the pure, DOM-free helpers exposed by
 # app/app.js (see app/__tests__/).
 test: test-go test-js
 
 test-go:
-	go test ./...
+	go test -p 1 -count=1 ./...
 
 test-js:
 	npm test

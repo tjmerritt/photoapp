@@ -94,11 +94,49 @@ func migrationsDir() (string, error) {
 	return filepath.Join(root, "migrations"), nil
 }
 
+// migrationLockKey is an arbitrary fixed advisory-lock key used to
+// serialize migration application across concurrent processes (see
+// applyMigrations). Value has no meaning beyond being unique to this
+// project's migration-locking use — chosen once, must never change.
+const migrationLockKey = 8743028917
+
 // applyMigrations runs every migrations/*.sql file against dsn via `psql -f`,
 // in numeric filename order, skipping *_seed.sql files — those are dev-only
 // sample data (see `make seed`), not schema, and inserting them would leak
 // fake fixture rows into every test.
+//
+// `go test ./...` runs each package's tests in a separate OS process, and by
+// default runs multiple packages' processes concurrently (see `go help
+// build`'s -p flag) — so with a shared TEST_DATABASE_URL, two packages can
+// call this at the same moment. migrationsOnce (testutil.go) only dedupes
+// within a single process, not across them, so every package's process
+// re-applies every migration file independently. Each file is written to be
+// idempotent (CREATE TABLE IF NOT EXISTS, etc.), but Postgres does not make
+// "IF NOT EXISTS" DDL safe under true concurrency: two sessions can both see
+// "not exists" and both attempt the CREATE, and one loses with a duplicate
+// object error instead of silently no-op'ing. A Postgres advisory lock held
+// for the whole migration run (not just one file) closes that race by
+// ensuring only one process runs `psql -f` at a time; every other
+// concurrent process simply blocks until the lock is free, then proceeds
+// (the migrations it "re-applies" are genuine no-ops at that point).
+//
+// This does NOT make it safe to run different packages' DB-backed test
+// suites concurrently against one shared database beyond this migration
+// step — see TruncateAll's doc comment. `make test-go` passes `-p 1` for
+// exactly that reason.
 func applyMigrations(dsn string) error {
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		return fmt.Errorf("connect for migration lock: %w", err)
+	}
+	defer conn.Close(ctx)
+
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", int64(migrationLockKey)); err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	defer conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", int64(migrationLockKey))
+
 	dir, err := migrationsDir()
 	if err != nil {
 		return err
@@ -135,6 +173,17 @@ func applyMigrations(dsn string) error {
 // emoji_counts materialized view (which TRUNCATE doesn't touch, since it's a
 // view over emoji_reactions rather than a table itself). RequireDB calls
 // this before returning; tests normally don't need to call it directly.
+//
+// This is only safe when nothing else is concurrently reading or writing
+// the same database. `go test ./...` runs different packages' tests in
+// separate, concurrent OS processes by default (see `go help build`'s -p
+// flag) — with a shared TEST_DATABASE_URL, one package's TruncateAll can
+// wipe rows a different package's test is mid-assertion on, causing
+// spurious, non-reproducible failures with no useful error beyond "row not
+// found" or a permission check unexpectedly failing. `make test-go` passes
+// `-p 1` so packages run one at a time against a shared test database;
+// don't drop that flag unless every package gets its own database/schema
+// instead.
 func TruncateAll(t *testing.T, pool *db.Pool) {
 	t.Helper()
 	ctx := context.Background()

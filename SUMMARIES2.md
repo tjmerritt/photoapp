@@ -63,3 +63,37 @@ Same sandbox limitation as Session 1 — no Go toolchain here, so none of this w
 4. `auth.go` — the bulk of the remaining 0%s (`Register`/`Login`/`Me`/`Logout`/`UpdateProfile` are DB-only and tractable; the four OAuth providers' `Login`/`Callback` pairs need mocking an external IdP and are meaningfully more work for less confidence gained — lowest priority).
 5. `imgproxy.go` (`ServeHTTP`/`resizeToWidth`) — needs real image decode/resize; `db.go`'s `New`/`RefreshEmojiCounts` — trivial DB-backed test, just hasn't been written yet.
 6. `cmd/server/main.go`, `cmd/import-emojis/main.go` — entry points; typically excluded from unit coverage goals in favor of integration/smoke testing.
+
+---
+
+## Session 3 — Coverage report diagnosis + internal/db
+
+### What was done
+User re-ran with a database and reported all tests passing, but a per-package coverage table that didn't add up: `internal/permissions` 11.3%, `internal/handlers` 6.2% — numbers that look almost exactly like what you'd get if the DB-backed tests had *skipped* again, not run. Two candidate explanations, both plausible and neither confirmable from this sandbox (no Go toolchain here): (1) Go's test result cache doesn't know `TEST_DATABASE_URL` affects the outcome, so a `go test ./...` invocation without `-count=1` can silently serve a stale cached result from an earlier run that had the var unset — the "(cached)" tags next to config/handlers/middleware/permissions/photoimport in the user's output are consistent with this; (2) `psql` not being on PATH in whatever shell produced that specific coverage command would make every `testutil.RequireDB` call skip silently, which also "passes" without failing. Asked the user to re-run with `TEST_DATABASE_URL=... go test ./... -count=1 -v 2>&1 | grep -E "SKIP|FAIL"` (and `which psql`) to disambiguate definitively rather than guessing further.
+
+`internal/db` and `internal/testutil` showing 0% is separately expected and not a red flag on its own: Go's default per-package `-cover` output only attributes coverage to a package from tests *in that same package* — code in `db.go`/`testutil.go` being called from other packages' test files (which is how they're used everywhere else) doesn't count toward their own package percentage. Closed this gap directly anyway since it was on the follow-up list: added `internal/db/db_test.go` — `db.New` with a malformed DSN (pure, fast, errors on `pgxpool.ParseConfig` before touching the network) and a DB-backed round trip confirming `New`/`Ping`/`RefreshEmojiCounts` all succeed (the latter previously only ever exercised indirectly via `testutil.TruncateAll`).
+
+### Testing notes
+Same standing caveat: no Go toolchain in this sandbox, reviewed `db_test.go` by hand. Small and low-risk (two tests, one with zero DB dependency).
+
+### Open items
+- Waiting on the diagnostic command output above to confirm whether the low permissions/handlers numbers were a caching artifact, a missing-`psql` skip, or something else.
+- Follow-up list from Session 2 (galleries/displays/roles CRUD, admin.go/admin_grants.go, upload.go/search.go end-to-end, auth.go non-OAuth paths, imgproxy.go) is unchanged.
+
+---
+
+## Session 4 — Found and fixed the real bug: concurrent packages racing on one shared test database
+
+### What was done
+User ran the diagnostic (`psql` present, `-count=1 -v` to bypass caching) and every DB-backed test in `internal/handlers`, `internal/permissions`, and `internal/photoimport` failed — but `internal/db`'s own new DB-backed test didn't. That split is the tell: `go test ./...` runs each package's tests as a separate OS process, and **runs multiple packages concurrently by default** (the `-p` flag). All of these packages were pointed at the same `TEST_DATABASE_URL`, so several processes were hitting one physical database at once. Two races follow from that: (1) `testutil`'s `migrationsOnce` only dedupes *within* one process — every package's process independently re-ran all 17 migration files via `psql -f` against the same database at the same time, and Postgres's `CREATE TABLE IF NOT EXISTS` is not actually safe under true concurrency (two sessions can both see "not exists" and race to create it, one loses with a duplicate-object error); (2) even past migrations, `TruncateAll` running in one package's test would wipe tables a different package's test was mid-assertion on. `internal/db` likely just won that race often enough (small, fast-compiling package) to look clean, while the bigger packages collided — consistent with a nondeterministic race rather than a deterministic bug.
+
+Fixed both layers:
+- `internal/testutil/testutil.go`'s `applyMigrations` now opens one `pgx.Connect` and holds a Postgres advisory lock (`pg_advisory_lock`) for the entire migration run, serializing that specific step across any number of concurrent processes as defense in depth.
+- The real fix: `Makefile`'s `test-go` now runs `go test -p 1 -count=1 ./...` — `-p 1` serializes package execution so only one package's tests (and therefore only one process's worth of truncation) touch the shared database at a time; `-count=1` bypasses Go's test cache, which has no way to know `TEST_DATABASE_URL` affects the outcome and would otherwise keep serving a stale result. Propagated the same flags into `scripts/githooks/pre-commit` and documented the *why* (not just the *what*) in both `TruncateAll`'s and `applyMigrations`'s doc comments and in `README.md`'s Testing section, since dropping `-p 1` silently reintroduces this exact bug.
+
+### Testing notes
+Same sandbox limitation as every prior session — no Go toolchain here. This one I'm more confident about than usual, though: the symptom (every test in a package fails uniformly and instantly, but not every package, and it wasn't reproducible from a single-package run) is close to a textbook description of a cross-process race, `pgx.Connect` + `pg_advisory_lock`/`pg_advisory_unlock` is a standard, well-worn pattern for exactly this problem, and `-p 1` is Go's documented, supported way to serialize package test execution. Please re-run — `make test-go` now bakes in both flags, or manually: `TEST_DATABASE_URL=... go test -p 1 -count=1 ./...`.
+
+### Open items
+- Confirm the fix actually resolves it — if `internal/handlers`/`internal/permissions`/`internal/photoimport` still fail under `-p 1 -count=1`, that rules out the race theory and points at something else (please paste the actual error text this time, not just the SKIP/FAIL summary, if it recurs).
+- Follow-up list from Session 2 is otherwise unchanged.
