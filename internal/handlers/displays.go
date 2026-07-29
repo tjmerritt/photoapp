@@ -120,7 +120,7 @@ func (h *DisplaysHandler) Get(w http.ResponseWriter, r *http.Request, ps httprou
 		if photoID != nil {
 			s.Photo = &models.SlotPhoto{
 				PhotoID:  *photoID,
-				ImageURL: *imageURL,
+				ImageURL: proxyImageURL(*imageURL),
 				Width:    *width,
 				Height:   *height,
 			}

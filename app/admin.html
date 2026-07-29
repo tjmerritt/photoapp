@@ -102,7 +102,7 @@
            :class="photo.is_public ? 'border-gray-200' : 'border-red-300 bg-red-50/40'">
 
         <!-- Thumbnail -->
-        <a :href="'/?photoid=' + photo.photoid" target="_blank" class="block">
+        <a :href="'/photo.html?photoid=' + photo.photoid" target="_blank" class="block">
           <img :src="thumbUrl(photo.imageurl, 220)"
                :alt="photo.title || photo.photoid"
                loading="lazy"

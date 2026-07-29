@@ -475,7 +475,20 @@ func (h *AuthHandler) AppleLogin(w http.ResponseWriter, r *http.Request, _ httpr
 		return
 	}
 	state := uuid.New().String()
-	http.SetCookie(w, &http.Cookie{Name: "oauth_state", Value: state, Path: "/", HttpOnly: true, MaxAge: 600})
+	// Apple returns the callback as a cross-site POST (response_mode=form_post),
+	// and browsers only send cookies on cross-site POSTs when SameSite=None and
+	// Secure are set. The other providers use top-level GET redirects, where the
+	// default (Lax) suffices — so Apple gets its own cookie with the looser
+	// attributes rather than weakening the shared oauth_state cookie.
+	http.SetCookie(w, &http.Cookie{
+		Name:     "apple_oauth_state",
+		Value:    state,
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   600,
+		SameSite: http.SameSiteNoneMode,
+		Secure:   true,
+	})
 
 	redirectURL := h.Cfg.AppleRedirectURL
 	if redirectURL == "" {
@@ -498,12 +511,20 @@ func (h *AuthHandler) AppleCallback(w http.ResponseWriter, r *http.Request, _ ht
 		http.Error(w, "Invalid form data", http.StatusBadRequest)
 		return
 	}
-	stateCookie, err := r.Cookie("oauth_state")
+	stateCookie, err := r.Cookie("apple_oauth_state")
 	if err != nil || stateCookie.Value != r.FormValue("state") {
 		http.Error(w, "Invalid OAuth state", http.StatusBadRequest)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "oauth_state", Value: "", MaxAge: -1, Path: "/"})
+	http.SetCookie(w, &http.Cookie{
+		Name:     "apple_oauth_state",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   -1,
+		SameSite: http.SameSiteNoneMode,
+		Secure:   true,
+	})
 
 	idToken := r.FormValue("id_token")
 	if idToken == "" {
