@@ -65,3 +65,19 @@ func max(a, b int) int {
 	}
 	return b
 }
+
+// nullableUUID converts an empty string to a real Go nil so pgx sends a SQL
+// NULL on the wire for that query parameter instead of the literal string
+// "". Any parameter whose only uses in a query are inside a ::uuid cast gets
+// its inferred parameter type set to uuid itself by Postgres — meaning the
+// empty string has to be parsed as a uuid the instant pgx binds it, before
+// the query body (and any in-SQL guard, including NULLIF) ever runs. This is
+// the same fix applied to permissions.Checker.Check/UserPermissions after
+// the guard/NULLIF approaches both still threw "invalid input syntax for
+// type uuid" in production — see SUMMARIES2.md Sessions 23-24.
+func nullableUUID(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}

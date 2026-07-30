@@ -295,9 +295,22 @@ type Checker struct {
 // same way an exhibitionid grant covers every gallery/display/photo within
 // that one exhibition. The LEFT JOIN below resolves exhibitionID's owning
 // organization once per call so the org-level OR branch can compare against
-// it; it deliberately only joins when exhibitionID is non-empty (mirroring
-// the "$3 <> ''" guards used everywhere else in this query) so unauthenticated/
-// resourceless checks (exhibitionID = "") never match an org-level grant.
+// it.
+//
+// exhibitionID is passed to Postgres via nullableUUID, not as a plain string,
+// and NOT behind a "$3 <> '' AND ... = $3::uuid"-style SQL guard or a
+// NULLIF($3, '')::uuid trick — both of those were tried (see SUMMARIES2.md
+// Sessions 23-24) and both still threw "invalid input syntax for type uuid"
+// for an empty exhibitionID. The reason: every occurrence of $3 in this query
+// sits inside a uuid-cast expression, so Postgres infers $3's parameter type
+// as uuid itself; the empty string then has to be parsed as a uuid the moment
+// pgx binds it, which happens before the query — and any SQL-level guard
+// inside it — ever executes. Passing an actual Go nil (via nullableUUID)
+// makes pgx send a true SQL NULL on the wire for that parameter, which never
+// goes through the uuid input parser at all, sidestepping the problem
+// entirely regardless of query plan or parameter type inference. The same
+// applies to every other "$N::uuid" cast of a value that may be "" in this
+// file and in emojis.go.
 func (c *Checker) Check(
 	ctx context.Context,
 	userID, exhibitionID, galleryID,
@@ -311,7 +324,7 @@ func (c *Checker) Check(
 			FROM   entity_role_grants erg
 			JOIN   role_permissions   rp  ON rp.roleid = erg.roleid
 			JOIN   roles              r   ON r.roleid  = erg.roleid
-			LEFT   JOIN exhibitions   ex  ON $3 <> '' AND ex.exhibitionid = $3::uuid
+			LEFT   JOIN exhibitions   ex  ON ex.exhibitionid = $3::uuid
 			WHERE  rp.permission = $1
 			  AND  r.deleted_at  IS NULL
 			  AND  (
@@ -332,7 +345,7 @@ func (c *Checker) Check(
 			           -- Organization-level grant: covers every exhibition under that org
 			        OR (erg.organizationid IS NOT NULL AND erg.organizationid = ex.organizationid)
 			           -- Exhibition-level grant: covers all galleries/displays/photos within
-			        OR ($3 <> '' AND erg.exhibitionid = $3::uuid
+			        OR (erg.exhibitionid = $3::uuid
 			                     AND erg.resource_type IS NULL)
 			           -- Gallery-level grant: covers all displays within this gallery
 			        OR ($4 <> '' AND erg.resource_type = 'Gallery'
@@ -343,8 +356,21 @@ func (c *Checker) Check(
 			                     AND erg.resource_ref  = $6)
 			       )
 		)
-	`, permission, userID, exhibitionID, galleryID, resourceType, resourceRef).Scan(&exists)
+	`, permission, userID, nullableUUID(exhibitionID), galleryID, resourceType, resourceRef).Scan(&exists)
 	return exists, err
+}
+
+// nullableUUID converts an empty string to a real Go nil so that pgx sends
+// a SQL NULL on the wire for that query parameter, rather than the literal
+// string "" — which fails "invalid input syntax for type uuid" the moment
+// Postgres binds it to a uuid-typed parameter, before the query body (and any
+// guard inside it) ever runs. Use this for any string that represents "no
+// value" but is compared against a uuid column via an explicit ::uuid cast.
+func nullableUUID(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // MustCheck is like Check but panics on database error. Use only in contexts
@@ -384,7 +410,7 @@ func (c *Checker) UserPermissions(
 		FROM   entity_role_grants erg
 		JOIN   role_permissions   rp ON rp.roleid = erg.roleid
 		JOIN   roles              r  ON r.roleid  = erg.roleid
-		LEFT   JOIN exhibitions   ex ON $2 <> '' AND ex.exhibitionid = $2::uuid
+		LEFT   JOIN exhibitions   ex ON ex.exhibitionid = $2::uuid
 		WHERE  r.deleted_at IS NULL
 		  AND  (
 		           erg.entity_type = 'Public'
@@ -404,16 +430,16 @@ func (c *Checker) UserPermissions(
 		           -- Organization-level grants: this exhibition's organization
 		        OR (erg.organizationid IS NOT NULL AND erg.organizationid = ex.organizationid)
 		           -- Exhibition-level grants
-		        OR ($2 <> '' AND erg.exhibitionid = $2::uuid
+		        OR (erg.exhibitionid = $2::uuid
 		                     AND erg.resource_type IS NULL)
 		           -- Gallery, Display, and Photo grants within this exhibition.
 		           -- We include all resource-scoped grants whose role belongs to
 		           -- this exhibition so the frontend has the complete picture.
-		        OR ($2 <> '' AND erg.resource_type IN ('Gallery', 'Display', 'Photo')
+		        OR (erg.resource_type IN ('Gallery', 'Display', 'Photo')
 		                     AND r.exhibitionid = $2::uuid)
 		       )
 		ORDER  BY rp.permission, COALESCE(erg.resource_type, ''), COALESCE(erg.resource_ref, '')
-	`, userID, exhibitionID)
+	`, userID, nullableUUID(exhibitionID))
 	if err != nil {
 		return nil, err
 	}

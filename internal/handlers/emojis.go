@@ -277,8 +277,8 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 		args = append(args, group)
 		n++
 	}
-	where += fmt.Sprintf(" AND (organizationid IS NULL OR ($%d <> '' AND organizationid = $%d::uuid))", n, n)
-	args = append(args, organizationID)
+	where += fmt.Sprintf(" AND (organizationid IS NULL OR organizationid = $%d::uuid)", n)
+	args = append(args, nullableUUID(organizationID))
 	n++
 
 	// Total count.
@@ -428,8 +428,8 @@ func (h *EmojisHandler) AdminListTypes(w http.ResponseWriter, r *http.Request, _
 		n++
 	}
 
-	where += fmt.Sprintf(" AND (et.organizationid IS NULL OR ($%d <> '' AND et.organizationid = $%d::uuid))", n, n)
-	args = append(args, organizationID)
+	where += fmt.Sprintf(" AND (et.organizationid IS NULL OR et.organizationid = $%d::uuid)", n)
+	args = append(args, nullableUUID(organizationID))
 	n++
 
 	var total int
@@ -586,15 +586,15 @@ func (h *EmojisHandler) ListVariants(w http.ResponseWriter, r *http.Request, _ h
 		       COALESCE(hexcode,''), COALESCE(skintone,''), organizationid::text, sort_order, created_at
 		FROM   emoji_types
 		WHERE  hexcode = $1 AND base_hexcode IS NULL AND is_active = TRUE
-		  AND  (organizationid IS NULL OR ($2 <> '' AND organizationid = $2::uuid))
+		  AND  (organizationid IS NULL OR organizationid = $2::uuid)
 		UNION ALL
 		SELECT emojiid::text, emoji_char, image_url, alt_text, is_active,
 		       COALESCE(hexcode,''), COALESCE(skintone,''), organizationid::text, sort_order, created_at
 		FROM   emoji_types
 		WHERE  base_hexcode = $1 AND is_active = TRUE
-		  AND  (organizationid IS NULL OR ($2 <> '' AND organizationid = $2::uuid))
+		  AND  (organizationid IS NULL OR organizationid = $2::uuid)
 		ORDER  BY sort_order, created_at
-	`, hexcode, organizationID)
+	`, hexcode, nullableUUID(organizationID))
 	if err != nil {
 		slog.Error("ListVariants", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -727,9 +727,9 @@ func (h *EmojisHandler) UploadType(w http.ResponseWriter, r *http.Request, _ htt
 	var emojiid string
 	err = h.DB.QueryRow(ctx, `
 		INSERT INTO emoji_types (emojiid, image_url, alt_text, is_active, organizationid)
-		VALUES ($1, $2, $3, TRUE, NULLIF($4, '')::uuid)
+		VALUES ($1, $2, $3, TRUE, $4::uuid)
 		RETURNING emojiid::text
-	`, newID, imageURL, altText, organizationID).Scan(&emojiid)
+	`, newID, imageURL, altText, nullableUUID(organizationID)).Scan(&emojiid)
 	if err != nil {
 		slog.Error("UploadType", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")

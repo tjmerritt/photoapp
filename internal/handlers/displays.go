@@ -324,10 +324,16 @@ func (h *DisplaysHandler) Update(w http.ResponseWriter, r *http.Request, ps http
 	}
 
 	// Apply template change (nil = no change; "" = clear template).
+	// templateid is passed via nullableUUID (a Go nil, not the bare string
+	// "") rather than relying on NULLIF($1,'')::uuid in SQL — when a
+	// parameter's only use in a query is inside a ::uuid cast, Postgres
+	// infers its type as uuid itself and fails to bind the empty string
+	// before NULLIF or anything else in the query even runs. See
+	// permissions.nullableUUID's doc comment and SUMMARIES2.md Session 24.
 	if req.TemplateID != nil {
 		if _, err := h.DB.Exec(ctx, `
-			UPDATE displays SET templateid=NULLIF($1,'')::uuid WHERE displayid=$2
-		`, *req.TemplateID, displayID); err != nil {
+			UPDATE displays SET templateid=$1::uuid WHERE displayid=$2
+		`, nullableUUID(*req.TemplateID), displayID); err != nil {
 			slog.Error("Update display templateid", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
@@ -360,12 +366,12 @@ func (h *DisplaysHandler) Update(w http.ResponseWriter, r *http.Request, ps http
 		}
 		if _, err := h.DB.Exec(ctx, `
 			INSERT INTO display_slots (displayid, slot_index, photoid, rich_text, placard)
-			VALUES ($1, $2, NULLIF($3,'')::uuid, NULLIF($4,''), $5::jsonb)
+			VALUES ($1, $2, $3::uuid, NULLIF($4,''), $5::jsonb)
 			ON CONFLICT (displayid, slot_index) DO UPDATE SET
 			    photoid   = EXCLUDED.photoid,
 			    rich_text = EXCLUDED.rich_text,
 			    placard   = EXCLUDED.placard
-		`, displayID, slot.SlotIndex, slot.PhotoID, slot.RichText, placardArg); err != nil {
+		`, displayID, slot.SlotIndex, nullableUUID(slot.PhotoID), slot.RichText, placardArg); err != nil {
 			slog.Error("Update display slot upsert", "slot_index", slot.SlotIndex, "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return

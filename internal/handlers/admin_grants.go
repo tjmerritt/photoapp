@@ -414,14 +414,20 @@ func (h *GrantsHandler) Create(w http.ResponseWriter, r *http.Request, _ httprou
 		return
 	}
 
+	// exhibitionid and granted_by go through nullableUUID rather than SQL-side
+	// NULLIF: an organization-level or global grant legitimately has an empty
+	// ExhibitionID, and when a parameter's only use in a query is inside a
+	// ::uuid cast, Postgres infers its type as uuid itself and fails to bind
+	// the empty string before NULLIF ever runs. See permissions.nullableUUID's
+	// doc comment and SUMMARIES2.md Session 24.
 	var grantID string
 	err := h.DB.QueryRow(ctx, `
 		INSERT INTO entity_role_grants
 		    (roleid, entity_type, entity_ref, exhibitionid, resource_type, resource_ref, granted_by)
 		VALUES
-		    ($1::uuid, $2, NULLIF($3, ''), NULLIF($4, '')::uuid, NULLIF($5, ''), NULLIF($6, ''), NULLIF($7, '')::uuid)
+		    ($1::uuid, $2, NULLIF($3, ''), $4::uuid, NULLIF($5, ''), NULLIF($6, ''), $7::uuid)
 		RETURNING id::text
-	`, req.RoleID, req.EntityType, req.EntityRef, req.ExhibitionID, req.ResourceType, req.ResourceRef, userID).Scan(&grantID)
+	`, req.RoleID, req.EntityType, req.EntityRef, nullableUUID(req.ExhibitionID), req.ResourceType, req.ResourceRef, nullableUUID(userID)).Scan(&grantID)
 	if err != nil {
 		slog.Error("Grants.Create", "error", err, "roleid", req.RoleID, "entity_type", req.EntityType)
 		middleware.WriteError(w, http.StatusBadRequest, "could not create grant — check that the role and entity/resource all exist")
@@ -463,11 +469,11 @@ func (h *GrantsHandler) Update(w http.ResponseWriter, r *http.Request, ps httpro
 		    roleid        = $1::uuid,
 		    entity_type   = $2,
 		    entity_ref    = NULLIF($3, ''),
-		    exhibitionid  = NULLIF($4, '')::uuid,
+		    exhibitionid  = $4::uuid,
 		    resource_type = NULLIF($5, ''),
 		    resource_ref  = NULLIF($6, '')
 		WHERE id = $7
-	`, req.RoleID, req.EntityType, req.EntityRef, req.ExhibitionID, req.ResourceType, req.ResourceRef, grantID)
+	`, req.RoleID, req.EntityType, req.EntityRef, nullableUUID(req.ExhibitionID), req.ResourceType, req.ResourceRef, grantID)
 	if err != nil {
 		slog.Error("Grants.Update", "error", err, "grantid", grantID)
 		middleware.WriteError(w, http.StatusBadRequest, "could not update grant — check that the role and entity/resource all exist")

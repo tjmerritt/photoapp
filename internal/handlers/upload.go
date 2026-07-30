@@ -196,9 +196,9 @@ func (h *UploadPhotosHandler) uploadOne(
 	var photoID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO photos (owner_userid, image_url, image_width, image_height, title_text, title_userid, exhibitionid, is_public)
-		VALUES ($1, $2, $3, $4, $5, $1, NULLIF($6,'')::uuid, FALSE)
+		VALUES ($1, $2, $3, $4, $5, $1, $6::uuid, FALSE)
 		RETURNING photoid::text
-	`, userID, imageURL, width, height, title, exhibitionID).Scan(&photoID)
+	`, userID, imageURL, width, height, title, nullableUUID(exhibitionID)).Scan(&photoID)
 	if err != nil {
 		cleanup()
 		return "", fmt.Errorf("inserting photo: %w", err)
