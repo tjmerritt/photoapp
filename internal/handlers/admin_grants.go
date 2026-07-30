@@ -316,11 +316,16 @@ func (h *GrantsHandler) Revoke(w http.ResponseWriter, r *http.Request, ps httpro
 // createGrantRequest is the JSON body accepted by POST /api/v1/admin/grants.
 //
 // ExhibitionID and ResourceType/ResourceRef are mutually exclusive (mirrors
-// entity_role_grants' chk_exhibitionid_resource_exclusive constraint — see
-// migrations/018_grant_exhibitionid.sql):
+// entity_role_grants' chk_grant_scope_exclusive constraint — see
+// migrations/018_grant_exhibitionid.sql and migrations/021_org_admin.sql):
 //   - both empty            -> global grant (every exhibition)
 //   - ExhibitionID set      -> scoped to that one exhibition
 //   - ResourceType/Ref set  -> scoped to that one Gallery/Display/Photo
+//
+// This endpoint doesn't accept an OrganizationID — organization-scoped
+// grants (PLAN2.md Phase 1c) are only created today by
+// ExhibitionsHandler.grantOrgAdmin when a new organization is created; there
+// is no org-admin management API/UI yet (that's Phase 1d/2 territory).
 type createGrantRequest struct {
 	RoleID       string `json:"roleid"`
 	EntityType   string `json:"entity_type"`

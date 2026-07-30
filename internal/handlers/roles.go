@@ -51,8 +51,17 @@ type adminRole struct {
 // roleExhibitionID resolves the exhibition a (non-deleted, non-singleton)
 // role belongs to, used both to scope the permission check and to 404 on a
 // bad/singleton roleid before doing anything else.
+//
+// Since migrations/021_org_admin.sql (PLAN2.md Phase 1c), a role's
+// exhibitionid can be NULL — organization-scoped roles have organizationid
+// set instead. This whole handler is an exhibition-scoped admin API (every
+// endpoint takes/derives an exhibitionid), so an org-scoped role is
+// correctly "not found" from here rather than a value to return; there is
+// no org-roles admin UI/API yet (see grantOrgAdmin in exhibitions.go for the
+// only thing that creates one today).
 func roleExhibitionID(w http.ResponseWriter, r *http.Request, pool *db.Pool, roleID string) (string, bool) {
-	var exhibitionID, name string
+	var exhibitionID *string
+	var name string
 	err := pool.QueryRow(r.Context(), `
 		SELECT exhibitionid::text, name FROM roles WHERE roleid = $1 AND deleted_at IS NULL
 	`, roleID).Scan(&exhibitionID, &name)
@@ -65,11 +74,15 @@ func roleExhibitionID(w http.ResponseWriter, r *http.Request, pool *db.Pool, rol
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return "", false
 	}
+	if exhibitionID == nil {
+		middleware.WriteError(w, http.StatusNotFound, "role not found")
+		return "", false
+	}
 	if strings.HasPrefix(name, singletonRolePrefix) {
 		middleware.WriteError(w, http.StatusBadRequest, "this role is auto-managed and cannot be edited here")
 		return "", false
 	}
-	return exhibitionID, true
+	return *exhibitionID, true
 }
 
 // GET /api/v1/admin/roles?exhibitionid=&search=&offset=&limit=  (Phase 6h, 6i)

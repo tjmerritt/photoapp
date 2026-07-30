@@ -88,13 +88,6 @@ func (h *ExhibitionsHandler) Create(w http.ResponseWriter, r *http.Request, _ ht
 		return
 	}
 
-	organizationID, err := h.resolveOrganizationID(ctx, userID, strings.TrimSpace(req.OrganizationName))
-	if err != nil {
-		slog.Error("Exhibitions.Create resolveOrganizationID", "error", err)
-		middleware.WriteError(w, http.StatusInternalServerError, "db error")
-		return
-	}
-
 	tx, err := h.DB.Begin(ctx)
 	if err != nil {
 		slog.Error("Exhibitions.Create begin", "error", err)
@@ -102,6 +95,13 @@ func (h *ExhibitionsHandler) Create(w http.ResponseWriter, r *http.Request, _ ht
 		return
 	}
 	defer tx.Rollback(ctx)
+
+	organizationID, isNewOrg, err := resolveOrganizationID(ctx, tx, userID, strings.TrimSpace(req.OrganizationName))
+	if err != nil {
+		slog.Error("Exhibitions.Create resolveOrganizationID", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
 
 	var exhibitionID string
 	if err := tx.QueryRow(ctx, `
@@ -128,6 +128,24 @@ func (h *ExhibitionsHandler) Create(w http.ResponseWriter, r *http.Request, _ ht
 		return
 	}
 
+	// PLAN2.md Phase 1c: a brand new organization gets a real org-scoped
+	// Admin grant for its creator, so their next exhibition (and every one
+	// after that) is administered automatically via Checker.Check's
+	// organization-level branch — no per-exhibition grant needed. When
+	// organizationID is instead an existing org (isNewOrg false), the
+	// caller already holds that grant (that's how resolveOrganizationID
+	// found it), so nothing more is needed here. The exhibition-level Admin
+	// grant bootstrapExhibitionRoles just created above stays either way —
+	// harmless duplication, and it means this exhibition remains fully
+	// self-sufficient even if the organization-scope branch ever has a bug.
+	if isNewOrg {
+		if err := grantOrgAdmin(ctx, tx, organizationID, userID); err != nil {
+			slog.Error("Exhibitions.Create grantOrgAdmin", "error", err)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		slog.Error("Exhibitions.Create commit", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -142,55 +160,92 @@ func (h *ExhibitionsHandler) Create(w http.ResponseWriter, r *http.Request, _ ht
 }
 
 // resolveOrganizationID implements PLAN2.md 1a's "auto-create an
-// organization for a user when they create their first exhibition."
+// organization for a user when they create their first exhibition," now
+// backed by PLAN2.md 1c's real organization-scoped Admin grants instead of
+// the exhibition-grant-inference stand-in this used before Phase 1c
+// existed: does the caller directly hold an organization-level grant
+// (entity_role_grants.organizationid set) for any permission? If so,
+// they're already an org admin somewhere — reuse that organization, so a
+// user's second, third, ... exhibition doesn't fragment into its own
+// orphaned single-exhibition org. If not, this really is their first
+// exhibition: create a new organization for them (the caller is
+// responsible for then calling grantOrgAdmin so this lookup finds it next
+// time — see the isNewOrg return value).
 //
-// There is no formal notion of organization membership yet — that's Phase
-// 1c (org-scoped admin permissions), not built yet — so this uses the best
-// available stand-in: does the caller directly hold the Admin permission on
-// any existing exhibition? If so, treat them as already belonging to that
-// exhibition's organization and reuse it, so a user's second, third, ...
-// exhibition doesn't fragment into its own orphaned single-exhibition org.
-// If not, this really is their first exhibition: create a new organization
-// for them. Once Phase 1c adds real org membership, this lookup should be
-// replaced with a direct membership check rather than inferring it from
-// exhibition-level grants.
-func (h *ExhibitionsHandler) resolveOrganizationID(ctx context.Context, userID, requestedOrgName string) (string, error) {
+// Runs inside tx so a brand new organization is only ever committed
+// alongside the exhibition (and org-admin grant) that justified creating
+// it — no orphaned organization left behind if a later step fails.
+func resolveOrganizationID(ctx context.Context, tx pgx.Tx, userID, requestedOrgName string) (organizationID string, isNewOrg bool, err error) {
 	var existingOrgID string
-	err := h.DB.QueryRow(ctx, `
-		SELECT e.organizationid::text
-		FROM   exhibitions e
-		JOIN   entity_role_grants erg ON erg.exhibitionid = e.exhibitionid
-		JOIN   role_permissions   rp  ON rp.roleid = erg.roleid
-		JOIN   roles              r   ON r.roleid  = erg.roleid AND r.deleted_at IS NULL
+	err = tx.QueryRow(ctx, `
+		SELECT erg.organizationid::text
+		FROM   entity_role_grants erg
+		JOIN   role_permissions   rp ON rp.roleid = erg.roleid
+		JOIN   roles              r  ON r.roleid  = erg.roleid AND r.deleted_at IS NULL
 		WHERE  erg.entity_type = 'User' AND erg.entity_ref = $1
 		  AND  rp.permission = $2
-		  AND  e.deleted_at IS NULL
+		  AND  erg.organizationid IS NOT NULL
 		LIMIT 1
 	`, userID, permissions.PermAdmin).Scan(&existingOrgID)
 	if err == nil {
-		return existingOrgID, nil
+		return existingOrgID, false, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return "", err
+		return "", false, err
 	}
 
 	orgName := requestedOrgName
 	if orgName == "" {
 		var username string
-		if err := h.DB.QueryRow(ctx, `SELECT username FROM users WHERE userid = $1::uuid`, userID).Scan(&username); err != nil {
-			return "", err
+		if err := tx.QueryRow(ctx, `SELECT username FROM users WHERE userid = $1::uuid`, userID).Scan(&username); err != nil {
+			return "", false, err
 		}
 		orgName = fmt.Sprintf("%s's Organization", username)
 	}
 
 	var newOrgID string
-	if err := h.DB.QueryRow(ctx, `
+	if err := tx.QueryRow(ctx, `
 		INSERT INTO organizations (name) VALUES ($1)
 		RETURNING organizationid::text
 	`, orgName).Scan(&newOrgID); err != nil {
-		return "", err
+		return "", false, err
 	}
-	return newOrgID, nil
+	return newOrgID, true, nil
+}
+
+// grantOrgAdmin makes creatorUserID an admin of organizationID: an
+// organization-scoped "Admin" role (mirroring bootstrapExhibitionRoles'
+// exhibition-scoped one, same adminPermissions bundle) granted directly to
+// the user. PLAN2.md Phase 1c: Checker.Check's organization-level branch
+// then covers every exhibition under this organization automatically,
+// present and future — this is what makes resolveOrganizationID's "does the
+// caller already hold an organization-level grant" lookup find them on
+// their next exhibition. Only called once, when resolveOrganizationID just
+// created organizationID (isNewOrg true) — an existing org's admin already
+// holds this grant, that's how they were found.
+func grantOrgAdmin(ctx context.Context, tx pgx.Tx, organizationID, creatorUserID string) error {
+	var roleID string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO roles (organizationid, name, description)
+		VALUES ($1::uuid, 'Admin', 'Full administrative access to the organization and all its exhibitions.')
+		RETURNING roleid::text
+	`, organizationID).Scan(&roleID); err != nil {
+		return fmt.Errorf("create organization Admin role: %w", err)
+	}
+	for _, p := range adminPermissions {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO role_permissions (roleid, permission) VALUES ($1, $2)
+		`, roleID, p); err != nil {
+			return fmt.Errorf("add organization Admin permission %q: %w", p, err)
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO entity_role_grants (roleid, entity_type, entity_ref, organizationid)
+		VALUES ($1, 'User', $2, $3::uuid)
+	`, roleID, creatorUserID, organizationID); err != nil {
+		return fmt.Errorf("grant organization Admin to creator: %w", err)
+	}
+	return nil
 }
 
 // bootstrapExhibitionRoles creates the standard Viewer/Contributor/Admin

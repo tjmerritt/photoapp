@@ -24,25 +24,34 @@
 //
 // # Resource scope types
 //
-// A grant row is scoped by at most one of two independent mechanisms —
-// never both on the same row:
+// A grant row is scoped by at most one of three independent mechanisms —
+// never more than one set on the same row (entity_role_grants'
+// chk_grant_scope_exclusive constraint enforces this):
 //
-//   - exhibitionid (a column on entity_role_grants) — NULL means the grant
-//     applies to every exhibition ("global"); set means the grant applies to
-//     that one exhibition only (covers all its Galleries/Displays/Photos).
-//     This replaced an earlier resource_type = 'Exhibition' convention (see
+//   - organizationid (a column on entity_role_grants) — set means the grant
+//     applies to every exhibition belonging to that organization, present
+//     and future. This is PLAN2.md Phase 1c's "org admin" tier — see
+//     migrations/021_org_admin.sql. Roles can themselves belong to an
+//     organization instead of an exhibition (roles.organizationid); such a
+//     role only makes sense granted at this scope.
+//   - exhibitionid (a column on entity_role_grants) — NULL (and
+//     organizationid also NULL) means the grant applies to every exhibition
+//     ("global"); set means the grant applies to that one exhibition only
+//     (covers all its Galleries/Displays/Photos). This replaced an earlier
+//     resource_type = 'Exhibition' convention (see
 //     migrations/018_grant_exhibitionid.sql).
 //   - resource_type/resource_ref — scopes the grant to one specific Gallery,
 //     Display, or Photo. Rows with a resource_type always have
-//     exhibitionid = NULL.
+//     exhibitionid = NULL and organizationid = NULL.
 //
 // # Permission hierarchy
 //
 // Grants nest along the ownership chain. A grant at a parent scope covers all
-// children. The two independent chains are:
+// children. The two independent chains, with PLAN2.md Phase 1c's
+// organization tier now sitting between Global and Exhibition:
 //
-//	Gallery chain:  Global → Exhibition → Gallery → Display
-//	Photo chain:    Global → Exhibition → Photo
+//	Gallery chain:  Global → Organization → Exhibition → Gallery → Display
+//	Photo chain:    Global → Organization → Exhibition → Photo
 //
 // Photos are NOT under the Gallery chain. galleryID is only meaningful when
 // checking Display permissions. For all Photo, Label, Emoji, and Comment
@@ -279,6 +288,16 @@ type Checker struct {
 //	Photo:   Global → Exhibition → Photo
 //
 // A grant at any ancestor tier satisfies the check.
+//
+// PLAN2.md Phase 1c adds a fourth tier above Exhibition: an
+// organization-scoped grant (entity_role_grants.organizationid set) covers
+// every exhibition belonging to that organization, present and future — the
+// same way an exhibitionid grant covers every gallery/display/photo within
+// that one exhibition. The LEFT JOIN below resolves exhibitionID's owning
+// organization once per call so the org-level OR branch can compare against
+// it; it deliberately only joins when exhibitionID is non-empty (mirroring
+// the "$3 <> ''" guards used everywhere else in this query) so unauthenticated/
+// resourceless checks (exhibitionID = "") never match an org-level grant.
 func (c *Checker) Check(
 	ctx context.Context,
 	userID, exhibitionID, galleryID,
@@ -292,6 +311,7 @@ func (c *Checker) Check(
 			FROM   entity_role_grants erg
 			JOIN   role_permissions   rp  ON rp.roleid = erg.roleid
 			JOIN   roles              r   ON r.roleid  = erg.roleid
+			LEFT   JOIN exhibitions   ex  ON $3 <> '' AND ex.exhibitionid = $3::uuid
 			WHERE  rp.permission = $1
 			  AND  r.deleted_at  IS NULL
 			  AND  (
@@ -307,8 +327,10 @@ func (c *Checker) Check(
 			                         ))
 			       )
 			  AND  (
-			           -- Global grant: applies everywhere (no exhibitionid, no resource)
-			           (erg.exhibitionid IS NULL AND erg.resource_type IS NULL)
+			           -- Global grant: applies everywhere (no exhibitionid, no resource, no org)
+			           (erg.exhibitionid IS NULL AND erg.resource_type IS NULL AND erg.organizationid IS NULL)
+			           -- Organization-level grant: covers every exhibition under that org
+			        OR (erg.organizationid IS NOT NULL AND erg.organizationid = ex.organizationid)
 			           -- Exhibition-level grant: covers all galleries/displays/photos within
 			        OR ($3 <> '' AND erg.exhibitionid = $3::uuid
 			                     AND erg.resource_type IS NULL)
@@ -362,6 +384,7 @@ func (c *Checker) UserPermissions(
 		FROM   entity_role_grants erg
 		JOIN   role_permissions   rp ON rp.roleid = erg.roleid
 		JOIN   roles              r  ON r.roleid  = erg.roleid
+		LEFT   JOIN exhibitions   ex ON $2 <> '' AND ex.exhibitionid = $2::uuid
 		WHERE  r.deleted_at IS NULL
 		  AND  (
 		           erg.entity_type = 'Public'
@@ -376,8 +399,10 @@ func (c *Checker) UserPermissions(
 		                         ))
 		       )
 		  AND  (
-		           -- Global grants (no exhibitionid, no resource)
-		           (erg.exhibitionid IS NULL AND erg.resource_type IS NULL)
+		           -- Global grants (no exhibitionid, no resource, no org)
+		           (erg.exhibitionid IS NULL AND erg.resource_type IS NULL AND erg.organizationid IS NULL)
+		           -- Organization-level grants: this exhibition's organization
+		        OR (erg.organizationid IS NOT NULL AND erg.organizationid = ex.organizationid)
 		           -- Exhibition-level grants
 		        OR ($2 <> '' AND erg.exhibitionid = $2::uuid
 		                     AND erg.resource_type IS NULL)

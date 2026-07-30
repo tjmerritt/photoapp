@@ -380,10 +380,12 @@ func (h *EmojisHandler) AdminListTypes(w http.ResponseWriter, r *http.Request, _
 	}
 
 	// Phase 1b: same visibility rule as the public ListTypes — global plus
-	// the caller's own organization's custom uploads. There is no
-	// global-admin concept yet (Phase 1c) that would see every
-	// organization's custom emoji here; this page is scoped to "my
-	// organization" the same as everything else until that exists.
+	// the caller's own organization's custom uploads. Phase 1c's org-admin
+	// grants only ever widen a user's reach to "every exhibition in my
+	// organization," not across organizations, so this page stays scoped to
+	// "my organization" regardless of how the caller qualified for admin
+	// access. A true cross-organization view would need a separate
+	// super-admin concept, which doesn't exist.
 	organizationID, err := resolveExhibitionOrganization(ctx, h.DB, exhibitionID)
 	if err != nil {
 		slog.Error("AdminListTypes resolveExhibitionOrganization", "error", err)

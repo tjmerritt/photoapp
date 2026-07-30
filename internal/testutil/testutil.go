@@ -141,6 +141,65 @@ func CreateExhibition(t *testing.T, pool *db.Pool) string {
 	return id
 }
 
+// CreateOrganization inserts an organization with a randomly generated name
+// and returns its organizationid. Pass it to CreateExhibitionInOrg (or set
+// exhibitions.organizationid directly) to associate exhibitions with it, and
+// to CreateOrgRole to give it Phase 1c organization-scoped roles.
+func CreateOrganization(t *testing.T, pool *db.Pool) string {
+	t.Helper()
+	var id string
+	err := pool.QueryRow(context.Background(), `
+		INSERT INTO organizations (name) VALUES ($1)
+		RETURNING organizationid::text
+	`, "test-org-"+uuid.NewString()).Scan(&id)
+	if err != nil {
+		t.Fatalf("testutil.CreateOrganization: %v", err)
+	}
+	return id
+}
+
+// CreateExhibitionInOrg is CreateExhibition, but the new exhibition belongs
+// to organizationID instead of getting the default Legacy Organization
+// (migrations/019_organizations.sql).
+func CreateExhibitionInOrg(t *testing.T, pool *db.Pool, organizationID string) string {
+	t.Helper()
+	var id string
+	err := pool.QueryRow(context.Background(), `
+		INSERT INTO exhibitions (name, organizationid) VALUES ($1, $2::uuid)
+		RETURNING exhibitionid::text
+	`, "test-exhibition-"+uuid.NewString(), organizationID).Scan(&id)
+	if err != nil {
+		t.Fatalf("testutil.CreateExhibitionInOrg: %v", err)
+	}
+	return id
+}
+
+// CreateOrgRole is CreateRole, but scoped to organizationID (PLAN2.md Phase
+// 1c) instead of an exhibition — see migrations/021_org_admin.sql. name
+// must be unique within organizationID (matches uq_role_name_org).
+func CreateOrgRole(t *testing.T, pool *db.Pool, organizationID, name string, perms ...string) string {
+	t.Helper()
+	ctx := context.Background()
+
+	var roleID string
+	err := pool.QueryRow(ctx, `
+		INSERT INTO roles (organizationid, name) VALUES ($1::uuid, $2)
+		RETURNING roleid::text
+	`, organizationID, name).Scan(&roleID)
+	if err != nil {
+		t.Fatalf("testutil.CreateOrgRole: %v", err)
+	}
+
+	for _, p := range perms {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO role_permissions (roleid, permission) VALUES ($1, $2)
+		`, roleID, p); err != nil {
+			t.Fatalf("testutil.CreateOrgRole: add permission %q: %v", p, err)
+		}
+	}
+	return roleID
+}
+
 // AddUserToExhibition inserts a user_exhibitions membership row, mirroring
 // what a real join/registration flow leaves behind. Several admin endpoints
 // (AdminHandler.ListExhibitions, ListUsers, Stats' user_count) only see
@@ -284,10 +343,10 @@ func CreateRole(t *testing.T, pool *db.Pool, exhibitionID, name string, perms ..
 }
 
 // GrantOptions describes one entity_role_grants row, mirroring the shape
-// documented in migrations/012_permissions.sql and
-// migrations/018_grant_exhibitionid.sql. Exactly one of ExhibitionID or
-// ResourceType/ResourceRef should be set (or neither, for a true global
-// grant) — the database enforces this via chk_exhibitionid_resource_exclusive.
+// documented in migrations/012_permissions.sql, 018_grant_exhibitionid.sql,
+// and 021_org_admin.sql. At most one of ExhibitionID, ResourceType/
+// ResourceRef, or OrganizationID should be set (or none, for a true global
+// grant) — the database enforces this via chk_grant_scope_exclusive.
 type GrantOptions struct {
 	// EntityType is one of permissions.EntityPublic, EntityLoggedIn,
 	// EntityTeam, or EntityUser.
@@ -295,20 +354,25 @@ type GrantOptions struct {
 	// EntityRef is the teamid or userid being granted to; "" for Public/LoggedIn.
 	EntityRef string
 	// ExhibitionID scopes the grant to one exhibition; "" for a grant not
-	// scoped this way (global, or resource-scoped).
+	// scoped this way (global, resource-scoped, or organization-scoped).
 	ExhibitionID string
 	// ResourceType is one of permissions.ResourceGallery, ResourceDisplay,
 	// or ResourcePhoto; "" for a grant not scoped to one specific resource.
 	ResourceType string
 	// ResourceRef is the resource's UUID; "" when ResourceType is "".
 	ResourceRef string
+	// OrganizationID scopes the grant to every exhibition under that
+	// organization (PLAN2.md Phase 1c); "" for a grant not scoped this way.
+	// roleID must reference an organization-scoped role (see CreateOrgRole)
+	// when this is set.
+	OrganizationID string
 }
 
 // Grant inserts one entity_role_grants row for roleID per opt.
 func Grant(t *testing.T, pool *db.Pool, roleID string, opt GrantOptions) {
 	t.Helper()
 
-	var entityRef, exhibitionID, resourceType, resourceRef any
+	var entityRef, exhibitionID, resourceType, resourceRef, organizationID any
 	if opt.EntityRef != "" {
 		entityRef = opt.EntityRef
 	}
@@ -321,11 +385,14 @@ func Grant(t *testing.T, pool *db.Pool, roleID string, opt GrantOptions) {
 	if opt.ResourceRef != "" {
 		resourceRef = opt.ResourceRef
 	}
+	if opt.OrganizationID != "" {
+		organizationID = opt.OrganizationID
+	}
 
 	_, err := pool.Exec(context.Background(), `
-		INSERT INTO entity_role_grants (roleid, entity_type, entity_ref, exhibitionid, resource_type, resource_ref)
-		VALUES ($1, $2, $3, $4::uuid, $5, $6)
-	`, roleID, opt.EntityType, entityRef, exhibitionID, resourceType, resourceRef)
+		INSERT INTO entity_role_grants (roleid, entity_type, entity_ref, exhibitionid, resource_type, resource_ref, organizationid)
+		VALUES ($1, $2, $3, $4::uuid, $5, $6, $7::uuid)
+	`, roleID, opt.EntityType, entityRef, exhibitionID, resourceType, resourceRef, organizationID)
 	if err != nil {
 		t.Fatalf("testutil.Grant: %v", err)
 	}
