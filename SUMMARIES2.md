@@ -282,3 +282,92 @@ No Go toolchain in this sandbox — fixed by hand from the exact error message a
 ### Open items
 - Confirm `TestEmojisHandler_ListVariants` (and the rest of the suite) passes clean now.
 - Everything listed as open at the end of Session 11 is unchanged and still open.
+
+---
+
+## Session 13 — OAuth testability design discussion (Google/Apple/Facebook/Microsoft), deferred
+
+### What was done
+Before closing out Phase 0, user asked for thoughts on testing the four OAuth sign-in providers — explicitly called out as security-critical and hard to test because of the external dependencies — and specifically asked (a) whether there's enough commonality across providers to consolidate, and (b) whether this is a good place for dependency injection with mocks. No code changes this session; read `auth.go`'s full OAuth surface (`googleConfig`/`GoogleLogin`/`GoogleCallback`, `AppleLogin`/`AppleCallback`/`validateAppleIDToken`/`appleJWKToRSA`, `facebookConfig`/`FacebookLogin`/`FacebookCallback`, `microsoftEndpoint`/`microsoftConfig`/`MicrosoftLogin`/`MicrosoftCallback`) and `cmd/server/main.go`'s `AuthHandler` construction to ground the analysis in the actual code rather than give generic advice.
+
+**Findings**: Google, Facebook, and Microsoft are structurally identical (~130 duplicated lines each) — build an `oauth2.Config`, redirect with a CSRF `state` cookie, on callback validate `state`, exchange the code for a token, GET a provider-specific userinfo URL, unmarshal a provider-specific JSON shape into `(sub, email, name, picture)`, then hand off to the already-shared `findOrCreateOAuthUser` → `localizeExternalProfileImage` → `finishLogin`. Apple is structurally different (cross-site `response_mode=form_post` callback, JWT/JWKS validation instead of a token exchange + userinfo call, its own CSRF cookie with `SameSite=None; Secure`) but shares the identical back half once an identity is resolved.
+
+**Proposed design** (not implemented): an `OAuthProvider` interface — `Name() string`, `Configured() bool`, `AuthURL(state string) string`, `Exchange(ctx, r *http.Request) (ExternalIdentity, error)` — with `ExternalIdentity{Sub, Email, Name, Picture}`. Real `googleProvider`/`facebookProvider`/`microsoftProvider` wrap the existing `oauth2.Config` + userinfo fetch; `appleProvider` wraps the JWT/JWKS validation. `AuthHandler` would carry the providers as a field (defaulting to real ones when built from `config.Config`, so `main.go`'s one-line construction wouldn't need to change), collapsing Google/Facebook/Microsoft's `Login`/`Callback` pairs into one generic implementation while Apple keeps its own thin wrapper for the form-post/cookie quirk but delegates identity resolution through the same interface. This puts the DI seam exactly at the security-relevant boundary — "did we correctly verify this token/code and resolve who it belongs to" — so a `fakeProvider` in tests can script identities/errors and exercise the entire currently-0%-covered decision tree (new user, re-login by same `sub`, account-linking by email, CSRF state mismatch, not-configured, exchange failure) through the real handler code, with the real per-provider verification logic tested separately and more narrowly against fake token/JWKS servers.
+
+Offered a lighter alternative too (leave the four provider functions structurally as-is, just make the hardcoded endpoint/userinfo/JWKS URLs overridable so tests can point them at `httptest.Server`s — smaller diff, no de-duplication benefit, messier tests) and flagged the interface refactor's real trade-off honestly: it changes production authentication code, not just test infrastructure, so even with full new test coverage it would still want one manual smoke-test pass against real Google/Apple/Facebook/Microsoft accounts before trusting it, since a mock can't confirm the real implementations still satisfy each provider's actual handshake.
+
+**Decision**: user chose to defer. Logged as task #28 in the session task tracker with the design notes above, to be picked up as its own properly-scoped piece of work rather than folded into Phase 0's test-backfill effort.
+
+### Testing notes
+N/A — discussion/design only, no code written or modified.
+
+### Open items
+- OAuth provider testability refactor (design above) — deferred, tracked separately from Phase 0.
+- Everything listed as open at the end of Session 12 is unchanged and still open.
+- Phase 0 test-backfill effort is otherwise being closed out per the user's message opening this session.
+
+---
+
+## Session 14 — Phase 0 closed; Phase 1 (Organizations) kickoff
+
+### What was done
+User closed out Phase 0 (PLAN2.md) and confirmed intent to move through Phases 1–3 one at a time, explicitly lowering the testing bar going forward: "I will not be spending much time testing before moving onto the next one" — a deliberate departure from PLAN2.md's stated rule ("every subsequent phase ships with unit tests for its new code"), noted here rather than silently enforced, since it's the user's explicit call.
+
+Re-read PLAN2.md's Phase 1 ("Organizations (Foundation)") to scope the next step: 1a data model (`organizations` table, `exhibitions.organization_id`, auto-create an org for a user on their first exhibition), 1b emoji ownership (uploaded emojis belong to an org; unowned = global, added only via `cmd/import-emojis`), 1c org admin (permissions scoped to an org, spanning all its exhibitions), 1d header UI (current org display, global-admin org switcher — PLAN2.md flags this as an open question: popup vs. dropdown). 1a is the clear starting point since 1b/1c/1d all depend on the data model existing first.
+
+No code written yet this session — before drafting the `organizations` migration, surfaced the one real open question a schema decision can't safely guess at: what happens to exhibitions that already exist (the seeded default exhibition, everything created by `scripts/seed-exhibition.sh`, and — now — every exhibition created by Phase 0's test suite against the shared test database) once `exhibitions.organization_id` exists. Asked the user to decide the backfill strategy before writing the migration.
+
+### Testing notes
+N/A this session — planning/scoping only.
+
+### Open items
+- Waiting on user's backfill-strategy decision for existing exhibitions before writing the Phase 1a migration.
+- Phase 1 (1a→1b→1c→1d), then Phase 2, then Phase 3 — to be worked one at a time per the user's stated preference, with lighter testing than Phase 0 going forward (still worth a final correctness pass per major piece, just not full backfill coverage before moving on).
+- Task #28 (OAuth provider testability refactor) remains deferred, unrelated to Phase 1+ work.
+
+---
+
+## Session 15 — Phase 1a: organizations migration
+
+### What was done
+User picked "one shared legacy org" for the backfill question raised in Session 14. Wrote `migrations/019_organizations.sql`:
+
+- `organizations` table (`organizationid` PK, `name`, `created_at`/`updated_at`/`deleted_at`) — same shape as `exhibitions`/`teams`/`roles`.
+- A fixed-UUID `'eeeeeeee-0000-0000-0000-000000000001'` "Legacy Organization" row, inserted `ON CONFLICT DO NOTHING` for idempotency — mirrors migration 008's fixed-UUID convention for the seeded default exhibition, so the legacy org can be referred to by a known constant later rather than looked up by name.
+- `exhibitions.organizationid UUID NOT NULL DEFAULT 'eeeeeeee-...-000000000001' REFERENCES organizations ... ON DELETE CASCADE`, added via a single `ALTER TABLE ADD COLUMN ... NOT NULL DEFAULT ...` (Postgres applies the default to existing rows in the same statement — no separate backfill `UPDATE` needed). The `DEFAULT` is deliberately left in place going forward, not just used for the one-time backfill: since there's no exhibition-creation API endpoint yet (confirmed by grepping the codebase — exhibitions today only ever come from a migration seed or manual SQL, then `scripts/seed-exhibition.sh` bootstraps permissions on an already-existing row), anything that creates an exhibition without specifying an org — including `testutil.CreateExhibition`, unchanged — keeps working and lands in the Legacy Organization until real org-creation logic exists and starts setting it explicitly.
+- Renamed the FK column from PLAN2.md's literal `organization_id` to `organizationid`: every other identifier column in this schema is unbroken (`exhibitionid`, `teamid`, `roleid`, `galleryid`, `displayid`, `emojiid`, `labelid`, `userid`, ...), so PLAN2.md's underscore is read as planning-doc shorthand, not a deliberate naming decision worth introducing the schema's only exception for. Noted this explicitly in the migration's header comment so it doesn't look like an oversight.
+- Registered the new file in `Makefile`'s `migrate-up` target (`018_grant_exhibitionid.sql` was previously missed this same way twice before — see Session 3/7's history — so this is now a habitual double-check, not an afterthought).
+
+**Deliberately not done**: the other half of 1a, "auto-create an organization for a user when they create their first exhibition," and any Go model/handler code for `organizations`. There is currently no exhibition-creation flow in the application at all for that behavior to attach to, and no existing precedent for what one should look like (who's allowed to create an exhibition, how it's named, what hostname it gets) — inventing that speculatively felt like the wrong call rather than a scoping shortcut. Flagged back to the user rather than guessed at.
+
+### Testing notes
+No Go toolchain in this sandbox. SQL-only change, reviewed by hand against migration 008's fixed-UUID/backfill precedent and migration 018's `ALTER TABLE`/constraint style. Not run against a real database this session — the user said they're not prioritizing test coverage per-phase going forward, but this is a schema change with a real backfill semantic (the `DEFAULT`), so it's still worth an actual `make migrate-up` run to confirm before treating 1a's data model as done.
+
+### Open items
+- Run `make migrate-up` against a real/test database and confirm the migration applies cleanly and `testutil.CreateExhibition` still works unmodified (it should, given the `DEFAULT`, but not yet verified against a live database).
+- Decide how/when to build the actual "create an exhibition" + "auto-create org for a user's first exhibition" flow — currently blocked on there being no exhibition-creation endpoint at all. Could be folded into 1a, or treated as its own prerequisite piece.
+- 1b (emoji ownership), 1c (org admin), 1d (header UI, including PLAN2.md's open popup-vs-dropdown question) are next, in that order, once 1a is confirmed working.
+
+---
+
+## Session 16 — POST /api/v1/exhibitions (API only, no UI yet)
+
+### What was done
+User asked to build the exhibition-creation API that Session 15 flagged as missing, explicitly deferring the UI for it.
+
+`internal/handlers/exhibitions.go` (new) — `ExhibitionsHandler{DB *db.Pool}` (no `Cfg` field — nothing in `Create` needs pagination defaults or an upload dir, matching `PermissionsHandler`'s "only the fields you actually use" shape rather than every handler carrying `Cfg` reflexively).
+
+- `POST /api/v1/exhibitions` — body `{"name": "...", "organizationName": "..."}` (the latter optional, only consulted if this turns out to be the caller's first exhibition). Requires authentication only — deliberately no exhibition-scoped permission check, since creating an exhibition is exhibition-agnostic by nature (there's no exhibition yet to scope a check against); this is the same "any logged-in user may do this" tier as registering an account.
+- Runs inside one transaction (`h.DB.Begin`/`tx.Rollback` deferred/`tx.Commit`, same pattern as `TeamsHandler.Delete`): insert the exhibition row, add the creator to `user_exhibitions`, then `bootstrapExhibitionRoles` creates the standard Viewer/Contributor/Admin roles and grants (Viewer→Public, Contributor→LoggedIn, Admin→the creating user directly) — a Go reimplementation of `scripts/seed-exhibition.sh`'s *outcome*, not its mechanism: Admin is granted straight to the user rather than via an intermediate "Admins" team, since a brand-new single-admin exhibition doesn't need a team yet (one can be added later through the existing Teams admin API). The three roles' permission bundles (`viewerPermissions`/`contributorPermissions`/`adminPermissions` package vars) were copied permission-for-permission from the shell script rather than reading them back out of any shared source of truth, since none exists yet — flagged in a doc comment as something to watch for drifting out of sync.
+- `resolveOrganizationID` implements the "auto-create an org for a user's first exhibition" half of Phase 1a: since Phase 1c (real org-scoped membership/permissions) doesn't exist yet, "does this user already have an org" is inferred from whether they directly hold the `Admin` permission (a `User`-entity, exhibition-scoped `entity_role_grants` row) on any existing exhibition — if so, the new exhibition joins that same organization instead of getting its own; otherwise a new `organizations` row is created, named from the request's `organizationName` if supplied, else defaulting to `"{username}'s Organization"`. Documented explicitly as a stand-in to be replaced with a real membership check once 1c exists, so it isn't mistaken for the permanent design.
+- Wired into `router.go`: new `exhibitions := &ExhibitionsHandler{DB: pool}` instance, registered as `POST /api/v1/exhibitions` under the `auth(...)` wrapper, grouped with the other write endpoints.
+
+Also went back and fixed migration 019's header comment (written in Session 15, before this endpoint existed) — it previously said "there is currently no exhibition-creation API endpoint," which became stale the moment this session started; updated it to point at `exhibitions.go` instead of describing a gap that no longer exists.
+
+### Testing notes
+No Go toolchain in this sandbox. Per the user's stated preference this session ("not spending much time testing before moving onto the next one"), no automated test file was written for this handler — reviewed by hand instead: cross-checked `pgx.Tx`'s method set (`QueryRow`/`Exec`/`Commit`/`Rollback`) against `db.Pool.Begin`'s return type (`*pgxpool.Pool` embedded, so `Begin` returns `pgx.Tx` directly, not a local wrapper type — first draft of this file guessed a `db.Tx` type that doesn't exist and had to be corrected to `pgx.Tx`), every permission constant in the three role bundles against `internal/permissions/permissions.go`'s actual constant names (`PermDisplayView` in particular — an earlier partial grep of the file missed it and nearly left it out of `viewerPermissions`/`contributorPermissions`), and the `entity_role_grants` insert shapes against migration 018's column semantics (exhibition-scoped grants carry `exhibitionid`, never `resource_type`). Not run against a live database.
+
+### Open items
+- Run this against a real/test database: create an exhibition as a user with no prior admin grants (expect a new org), then create a second exhibition as the same user (expect it to join the same org, not create a second one) — this specific "first vs. subsequent exhibition" branch in `resolveOrganizationID` is the part most worth a real check before trusting it.
+- No UI for this yet, per the user's explicit request — API only.
+- 1b (emoji ownership), 1c (org admin — which should eventually replace `resolveOrganizationID`'s inferred-membership stand-in with a real one), 1d (header UI) remain next.

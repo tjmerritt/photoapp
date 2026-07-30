@@ -42,6 +42,7 @@ migrate-up:
 	psql "$$DATABASE_URL" -f migrations/016_label_names.sql
 	psql "$$DATABASE_URL" -f migrations/017_admin_phase6.sql
 	psql "$$DATABASE_URL" -f migrations/018_grant_exhibitionid.sql
+	psql "$$DATABASE_URL" -f migrations/019_organizations.sql
 
 #Commented out so that the database isn't destroyed accidentally
 #migrate-down:

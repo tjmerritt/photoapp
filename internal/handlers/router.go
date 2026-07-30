@@ -39,6 +39,7 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	teams       := &TeamsHandler{DB: pool, Cfg: cfg, Checker: checker}
 	grants      := &GrantsHandler{DB: pool, Cfg: cfg, Checker: checker}
 	roles       := &RolesHandler{DB: pool, Cfg: cfg, Checker: checker}
+	exhibitions := &ExhibitionsHandler{DB: pool}
 
 	// Convenience: wrap a httprouter.Handle with RequireAuth
 	auth := func(h httprouter.Handle) httprouter.Handle {
@@ -115,6 +116,10 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 
 	// Photo uploads (write — auth required; PermPhotoCreate enforced in handler)
 	r.POST("/api/v1/photos/upload",                       auth(uploads.ServeHTTP))
+
+	// Exhibitions (write — auth required, no exhibition-scoped permission:
+	// this is exhibition-agnostic by nature. PLAN2.md Phase 1a.)
+	r.POST("/api/v1/exhibitions",                         auth(exhibitions.Create))
 
 	// ── Admin endpoints (auth + PermAdmin enforced in handler) ───────────────────
 	r.GET("/api/v1/admin/exhibitions",  auth(admin.ListExhibitions))
