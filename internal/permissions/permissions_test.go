@@ -429,3 +429,45 @@ func TestSingletonGrant_GrantAndRevoke(t *testing.T) {
 		t.Error("HasDirectUserGrant() = true after RevokeUserPermission, want false")
 	}
 }
+
+// ── MustCheck ─────────────────────────────────────────────────────────────────
+
+func TestMustCheck_ReturnsSameResultAsCheck(t *testing.T) {
+	pool := testutil.RequireDB(t)
+	ctx := context.Background()
+	checker := &permissions.Checker{DB: pool}
+
+	exhibitionID := testutil.CreateExhibition(t, pool)
+	role := testutil.CreateRole(t, pool, exhibitionID, "Viewer", permissions.PermGalleryView)
+	testutil.Grant(t, pool, role, testutil.GrantOptions{
+		EntityType:   permissions.EntityPublic,
+		ExhibitionID: exhibitionID,
+	})
+
+	if !checker.MustCheck(ctx, "", exhibitionID, "", "", "", permissions.PermGalleryView) {
+		t.Error("MustCheck() = false for a matching Public/exhibition grant, want true")
+	}
+	if checker.MustCheck(ctx, "", exhibitionID, "", "", "", permissions.PermGalleryDelete) {
+		t.Error("MustCheck() = true for a permission never granted, want false")
+	}
+}
+
+func TestMustCheck_PanicsOnError(t *testing.T) {
+	pool := testutil.RequireDB(t)
+	checker := &permissions.Checker{DB: pool}
+
+	// A canceled context makes the underlying QueryRow fail deterministically
+	// (unlike trying to provoke a SQL-level error, which depends on exactly
+	// which rows Postgres happens to evaluate) — this is the reliable way to
+	// exercise MustCheck's documented "panics on database error" behavior.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	defer func() {
+		if recover() == nil {
+			t.Error("MustCheck did not panic on a database error, want a panic")
+		}
+	}()
+	checker.MustCheck(ctx, "", "", "", "", "", permissions.PermGalleryView)
+	t.Error("unreachable: MustCheck should have panicked before returning")
+}
