@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -11,6 +12,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -52,10 +54,18 @@ func doPublicRequest(t *testing.T, method, target string, body io.Reader, header
 	return rec
 }
 
-// uniqueIP returns a fresh, never-reused value to pass as X-Forwarded-For —
-// see doPublicRequest's doc comment. Doesn't need to look like a real IP;
-// clientIP() just uses it as an opaque rate-limiter map key.
-func uniqueIP() string { return uuid.NewString() }
+// uniqueIP returns a fresh, never-reused IPv4 address to pass as
+// X-Forwarded-For — see doPublicRequest's doc comment. Must be a real,
+// parseable IP address, not just an opaque unique string: createSession
+// stores it in sessions.ip_address, which is a Postgres `inet` column, so a
+// non-IP value like a bare UUID fails with "invalid input syntax for type
+// inet" once Register gets far enough to create a session.
+var uniqueIPCounter atomic.Uint32
+
+func uniqueIP() string {
+	n := uniqueIPCounter.Add(1)
+	return fmt.Sprintf("10.%d.%d.%d", byte(n>>16), byte(n>>8), byte(n))
+}
 
 // doMultipartRequest runs a multipart/form-data request through the same
 // Auth+Exhibition middleware chain doRequest uses (so middleware.UserID
