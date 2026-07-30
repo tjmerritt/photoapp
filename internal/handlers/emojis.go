@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -482,14 +483,22 @@ func (h *EmojisHandler) ListVariants(w http.ResponseWriter, r *http.Request, _ h
 	}
 
 	// Fetch the base emoji first.
+	//
+	// sort_order and created_at have to be part of each SELECT's own output
+	// list, not just referenced bare in the trailing ORDER BY — Postgres
+	// resolves a UNION ALL's ORDER BY against the combined result's output
+	// columns only, not the underlying tables, so a bare `sort_order`/
+	// `created_at` here (previously not selected by either branch) failed
+	// at query time with "column does not exist" the moment this endpoint
+	// was actually exercised by a test with more than one row to order.
 	baseRows, err := h.DB.Query(r.Context(), `
 		SELECT emojiid::text, emoji_char, image_url, alt_text, is_active,
-		       COALESCE(hexcode,''), COALESCE(skintone,'')
+		       COALESCE(hexcode,''), COALESCE(skintone,''), sort_order, created_at
 		FROM   emoji_types
 		WHERE  hexcode = $1 AND base_hexcode IS NULL AND is_active = TRUE
 		UNION ALL
 		SELECT emojiid::text, emoji_char, image_url, alt_text, is_active,
-		       COALESCE(hexcode,''), COALESCE(skintone,'')
+		       COALESCE(hexcode,''), COALESCE(skintone,''), sort_order, created_at
 		FROM   emoji_types
 		WHERE  base_hexcode = $1 AND is_active = TRUE
 		ORDER  BY sort_order, created_at
@@ -505,8 +514,10 @@ func (h *EmojisHandler) ListVariants(w http.ResponseWriter, r *http.Request, _ h
 	for baseRows.Next() {
 		var et models.EmojiTypeResponse
 		var tone string
+		var rowSortOrder int
+		var rowCreatedAt time.Time
 		if err := baseRows.Scan(&et.EmojiID, &et.EmojiChar, &et.ImageURL, &et.AltText,
-			&et.IsActive, &et.Hexcode, &tone); err != nil {
+			&et.IsActive, &et.Hexcode, &tone, &rowSortOrder, &rowCreatedAt); err != nil {
 			slog.Error("ListVariants", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return

@@ -265,8 +265,20 @@ No Go toolchain available in this sandbox this session either (confirmed again: 
 - `RolesHandler.List`/`Create`'s possible permission-check-before-empty-check ordering issue (flagged, not yet confirmed or fixed, in Session 10) is still open.
 - Long-standing, not started: migration data-integrity tests (verify each migration transforms existing data correctly, not just applies without error).
 
+---
+
+## Session 12 — real production bug found by TestEmojisHandler_ListVariants: fixed EmojisHandler.ListVariants
+
+### What was done
+User ran the Session 11 suite: everything passed except `TestEmojisHandler_ListVariants`, with the server logging `ERROR: column "sort_order" does not exist (SQLSTATE 42703)`. This is not a test-authoring mistake — it's `EmojisHandler.ListVariants` (`internal/handlers/emojis.go`) itself being broken in a way no prior test had ever exercised, exactly the kind of thing this whole "test the testing tools, then fill in the real gaps" push was for.
+
+Root cause: the handler's query is a `UNION ALL` of two `SELECT`s (base emoji, then skintone variants), with a trailing `ORDER BY sort_order, created_at`. Postgres resolves a `UNION` query's `ORDER BY` against the *combined result's output column list*, not the underlying tables — and neither `SELECT` in this query actually selected `sort_order` or `created_at`. That's valid to write (Postgres doesn't reject it at parse time if the column happens to not exist anywhere in scope for the union), but here it fails at execution because `sort_order`/`created_at` aren't visible in that scope at all. This had zero coverage before Session 11 (0% per every prior `go tool cover -func` report), so it had presumably never actually been called with a hexcode that had any matching rows — my `TestEmojisHandler_ListVariants` was the first thing to ever exercise the query end-to-end with real data.
+
+**Fix** (`internal/handlers/emojis.go`, `ListVariants`): added `sort_order, created_at` to both `SELECT`s' output lists so `ORDER BY` can resolve them, and added two throwaway scan targets (`rowSortOrder int`, `rowCreatedAt time.Time`) to the existing `Scan` call to match the now-wider result set — the response shape (`models.EmojiTypeResponse`) is unchanged, this is purely an internal query fix. Added `"time"` to the file's imports. Documented in a comment directly above the query why the columns have to be there even though nothing in Go ever reads them back out.
+
+### Testing notes
+No Go toolchain in this sandbox — fixed by hand from the exact error message and the query text, then cross-checked against `migrations/001_initial.sql`'s `emoji_types` definition to confirm `sort_order INTEGER NOT NULL DEFAULT 0` and `created_at` are real columns on the table (so the fix is "expose them to ORDER BY," not "they don't exist and the test's assumption is wrong"). This is the first time in this whole test-writing effort that a new test caught a genuine, previously-shipped production bug rather than a test-authoring mistake — worth noting since it's the entire justification for this style of "test the poorly-covered code" push. Please re-run and confirm this specific test (and nothing else) was the only thing affected.
+
 ### Open items
-- Confirm `admin_test.go`, `admin_grants_test.go`, and `auth_test.go` compile and pass.
-- Worth a quick follow-up check (not yet done): does `RolesHandler.List`/`Create` have the same permission-check-before-empty-check ordering issue noted above? Not currently exercised by any test either way.
-- Session 8's remaining priorities are now down to: `upload.go`'s `ServeHTTP`/`uploadOne`, `search.go`'s `ServeHTTP`, `imgproxy.go` (`ServeHTTP`/`serveImage`/`isResizeable`/`resizeToWidth`), and the small single-function misses (`permissions.MustCheck`, `avatar.go`'s `ServeAvatar`, `resolve.go`'s `resolveDisplayGallery`, `exhibition.go`'s `Lookup`/`doRefresh`, `permissions.go`'s `ServeHTTP`). OAuth provider Login/Callback pairs remain lowest priority.
-- Long-standing, not started: migration data-integrity tests (verify each migration transforms existing data correctly, not just applies without error).
+- Confirm `TestEmojisHandler_ListVariants` (and the rest of the suite) passes clean now.
+- Everything listed as open at the end of Session 11 is unchanged and still open.
