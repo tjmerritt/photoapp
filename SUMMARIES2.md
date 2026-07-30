@@ -165,7 +165,55 @@ No Go toolchain in this sandbox, reviewed by hand. The global-grant contaminatio
 One pre-existing discrepancy noticed in passing, unrelated to this session's work: `SUMMARIES2.md` Session 2's task list and this conversation's internal task tracker both claim `galleries.go`/`displays.go`/`roles.go` handler test coverage was completed, but no `galleries_test.go`, `displays_test.go`, or `roles_test.go` files actually exist in `internal/handlers/` — only `teams_test.go` and `templates_test.go` do. Flagging honestly rather than assuming it was done; that follow-up item should be treated as still open, not completed.
 
 ### Open items
-- Confirm `go test -count=1 ./...` (concurrent packages, shared database, no lock) passes cleanly now — this is the real test of the whole redesign.
+- ~~Confirm `go test -count=1 ./...` (concurrent packages, shared database, no lock) passes cleanly now~~ — confirmed: user reports quicker execution (no lock contention, no migration replay per package) and no errors, running against a database recreated fresh before each test run. Overall coverage now 65%.
 - `galleries.go`/`displays.go`/`roles.go` handler tests appear to have never actually been written despite earlier notes claiming otherwise (see above) — should be treated as a fresh item, not a re-check.
 - Rest of the Session 2 follow-up list (admin.go/admin_grants.go, upload.go/search.go end-to-end, auth.go non-OAuth paths, imgproxy.go) is otherwise unchanged.
 - `internal/handlers/LabelsHandler.Names` (`GET /api/v1/label-names`) returns distinct names across *all* non-deleted labels with no exhibition scoping at all — genuinely global by design, not a bug. No current test calls it, so it wasn't a problem for this audit, but if a test is added against it later, it can't use an exact-count assertion the way most other list endpoints do (same category of caveat as `display_templates`).
+- User plans a fresh-database-per-run workflow going forward (`make test-db-drop test-db-create migrate-up` before each `go test` run) — sidesteps the "data accumulates forever" caveat in testutil's doc comment entirely, no infra changes needed for that.
+- New, not-yet-started: user wants migration data-integrity tests later (verify each migration transforms existing data correctly, not just applies without error) — tracked as a separate task, not part of this session's work.
+
+---
+
+## Session 8 — Coverage report analysis (65% overall)
+
+### What was done
+User ran `go tool cover -func` against the redesigned suite and pasted the full report. No code changes this session — analyzed and prioritized the real 0%/low-coverage gaps (previous sessions' priority lists were written speculatively, before any real coverage numbers existed).
+
+**Confirmed healthy** (70–100%): `internal/config`, `internal/middleware`, `internal/permissions` (except `MustCheck`, see below), `internal/db`, most of `internal/handlers/{comments,fetch,imgcache,pagination,resolve,search's pure functions,upload's pure functions}.go`, `photoimport.{MergeLabels,Names,ImageDimensions,MarkNamesRestricted}`.
+
+**Real 0% gaps, prioritized**:
+1. `internal/handlers/galleries.go`, `displays.go`, `roles.go` — List/Create/Get/Update/Delete (+ `roles.go`'s AddPermission/RemovePermission/PermissionCatalog) all 0%. Confirms Session 7's finding that these were never actually written despite earlier notes claiming otherwise. Same CRUD-handler pattern as `teams_test.go`/`templates_test.go` — lowest-effort, highest-value next step.
+2. `internal/handlers/admin.go` (ListExhibitions/ListPhotos/SetPublic/Stats/ListUsers/UpdateUser) and `admin_grants.go` (ListGlobal/ListForExhibition/Revoke/Create/Update/validateGrantRequest) — both fully 0%, both DB-only (no external dependency), same pattern again.
+3. `internal/handlers/auth.go` — large file, mostly 0%, but splits cleanly: `Register`/`Login`/`Me`/`Logout`/`UpdateProfile`/`ListUsers`/`UploadProfileAvatar`/`createSession`/`setSessionCookie`/`clearSessionCookie`/`LookupUserFlags`/`LookupSession`/`usernameFromName`/`uniqueUsername` are DB/local-only and tractable now; the four OAuth providers' `Login`/`Callback` pairs plus `validateAppleIDToken`/`appleJWKToRSA` need a mocked external IdP and stay lowest priority, unchanged from Session 2's assessment.
+4. `internal/handlers/upload.go`'s `ServeHTTP`/`uploadOne` (full multipart upload flow — the pure helpers `prioritizeLabels`/`titleFromFilename` are already 100%) and `search.go`'s `ServeHTTP` (the query parser/SQL builder underneath are already 100%/79.6%) — logic is covered indirectly, the HTTP entry points aren't.
+5. `internal/handlers/emojis.go` (`ListUsers`/`ListTypes`/`AdminListTypes`/`AdminUpdateType`/`ListVariants`/`UploadType`) and `labels.go` (`Names`/`AdminListNames`/`UpdateName`/`Values`) — admin/catalog-management endpoints alongside the already-decently-covered React/Unreact/CRUD paths (~55–72%).
+6. `internal/handlers/imgproxy.go` (`ServeHTTP`/`serveImage`/`isResizeable`/`resizeToWidth`) — needs real image decode/resize, more effort for the value.
+7. Small/cheap misses worth a quick pass: `internal/permissions.MustCheck` (0%, single function), `internal/handlers/avatar.go`'s `ServeAvatar` (0%, `AvatarURL`/`emailHash` under it are 100%), `internal/handlers/resolve.go`'s `resolveDisplayGallery` (0%, everything else in the file is 87–100%), `internal/handlers/exhibition.go`'s `Lookup`/`doRefresh` (0%), `internal/handlers/permissions.go`'s `ServeHTTP` (0% — the handler exposing the permission catalog to the frontend).
+8. `photoimport.ExtractEXIF` is at 15.8%, not 0% — existing tests only cover the no-metadata/garbage-data edge cases; the real EXIF-tag-extraction path (actual camera metadata) is barely exercised. Would need a fixture image with real EXIF data embedded.
+9. `internal/handlers/router.go`'s `NewRouter` (0%) and `cmd/*` entry points (0%) — as previously noted, typically excluded from unit coverage goals (wiring/entry points, better suited to integration/smoke testing).
+
+`internal/testutil`'s functions all showing 0% is expected, not a gap — same explanation as Session 3: Go's per-package `-cover` only attributes coverage to tests *in that package*, and every `testutil.Create*`/`RequireDB`/`Grant` call happens from other packages' test files.
+
+### Testing notes
+Pure analysis of pasted output, no code touched this session.
+
+### Open items
+- Waiting on user's steer for which gap to tackle next — flagged priority 1 (galleries/displays/roles) as the obvious lowest-effort/highest-value pick given the pattern is already proven twice (teams, templates), but deferring to the user's call given several other substantial options exist.
+
+---
+
+## Session 9 — galleries/displays/roles handler tests
+
+### What was done
+User picked priority 1 from the Session 8 report. Read `galleries.go`, `displays.go`, and `roles.go` in full (request/response shapes, permission checks, error paths) before writing anything, rather than assuming from the models package alone.
+
+- `internal/handlers/galleries_test.go` — `galleriesFixture` (Contributor role with the full Gallery permission set, exhibition-scoped — an exhibition grant covers the whole Gallery→Display chain per `Checker.Check`'s doc comment, so no per-resource grant needed for handler-level CRUD tests). Covers Create→List→Get→Update→Delete→Delete-again-404 round trip, List requiring permission, Create requiring a non-empty title, Get 404, and `Update`'s `display_order` reordering (creates two displays, reorders them, confirms `Get`'s embedded `Displays` reflects the new order).
+- `internal/handlers/displays_test.go` — `displaysFixture` (same pattern, Display permission set + one empty gallery). Covers Create (no template, confirms empty slots)→Get→Update (assigns a real photo into slot 0 via `SlotUpdate`, confirms it comes back embedded)→Delete→Delete-again-404, Create requiring permission, Create against a nonexistent gallery (404), Get against a nonexistent display (404 — confirmed `resolveDisplayGallery`'s `pgx.ErrNoRows` short-circuits before any permission check, so an unauthenticated/no-exhibition request still gets a clean 404).
+- `internal/handlers/roles_test.go` — `rolesAdmin` fixture grants `PermAdmin`, itself creating one role ("SuperAdmin") to carry the grant — so list assertions use a found-in-list check, not an exact count of 1 (that role is real, persistent state in the same exhibition, not test pollution — it's how this specific permission has to be granted). Covers the full Create→List→AddPermission→verify→RemovePermission→verify→Update(rename)→verify→Delete→Delete-again-404 round trip, Create requiring admin, `AddPermission` rejecting an unknown permission string, `Update` on a nonexistent role (404), `PermissionCatalog`, and — since `roles.go`'s own doc comment calls it out as a real correctness concern — `Update` rejecting a singleton role (name prefixed `__grant:`, the auto-managed per-user permission mechanism) with 400 before ever reaching the admin-permission check.
+
+### Testing notes
+No Go toolchain in this sandbox, reviewed by hand against the actual handler source for every endpoint (SQL param order, JSON field names against `models.go`, response shapes, which checks run before which — e.g. confirming `roleExhibitionID`'s 404/400 short-circuits happen before `Update`'s own `HasAny` check, and that `GalleriesHandler.Update`/`DisplaysHandler.Update` both delegate their response to `Get` internally, meaning the permission already granted for viewing covers the update-response path too, no separate grant needed). Please run and report back — this is new code, not yet compiler-verified.
+
+### Open items
+- Confirm these three files compile and pass.
+- Session 8's remaining priorities (admin.go/admin_grants.go, auth.go non-OAuth paths, upload.go/search.go ServeHTTP, imgproxy.go, and the small single-function misses) are unchanged and still open.
