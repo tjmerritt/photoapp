@@ -15,7 +15,7 @@
 BEGIN;
 
 ALTER TABLE entity_role_grants
-    ADD COLUMN exhibitionid UUID REFERENCES exhibitions (exhibitionid) ON DELETE CASCADE;
+    ADD COLUMN IF NOT EXISTS exhibitionid UUID REFERENCES exhibitions (exhibitionid) ON DELETE CASCADE;
 
 -- ── Backfill ──────────────────────────────────────────────────────────────────
 --
@@ -60,9 +60,26 @@ ALTER TABLE entity_role_grants
 
 -- A grant is scoped by at most one of exhibitionid or resource_type/
 -- resource_ref -- never both on the same row.
-ALTER TABLE entity_role_grants
-    ADD CONSTRAINT chk_exhibitionid_resource_exclusive
-    CHECK (exhibitionid IS NULL OR resource_type IS NULL);
+--
+-- NOTE: migrations/021_org_admin.sql later DROPs this specific constraint
+-- and replaces it with a 3-way chk_grant_scope_exclusive. Re-running this
+-- file (018) after 021 has already run would otherwise resurrect the old
+-- 2-way constraint under this name, silently undoing 021's replacement --
+-- so this ADD is itself guarded by name, not just existence: it only adds
+-- chk_exhibitionid_resource_exclusive back if 021 hasn't already retired it.
+ALTER TABLE entity_role_grants DROP CONSTRAINT IF EXISTS chk_exhibitionid_resource_exclusive;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE  conname   = 'chk_grant_scope_exclusive'
+          AND  conrelid  = 'entity_role_grants'::regclass
+    ) THEN
+        ALTER TABLE entity_role_grants
+            ADD CONSTRAINT chk_exhibitionid_resource_exclusive
+            CHECK (exhibitionid IS NULL OR resource_type IS NULL);
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_entity_role_grants_exhibition
     ON entity_role_grants (exhibitionid) WHERE exhibitionid IS NOT NULL;

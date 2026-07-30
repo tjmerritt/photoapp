@@ -30,9 +30,10 @@ BEGIN;
 -- ── entity_role_grants: organization scope ──────────────────────────────────
 
 ALTER TABLE entity_role_grants
-    ADD COLUMN organizationid UUID REFERENCES organizations (organizationid) ON DELETE CASCADE;
+    ADD COLUMN IF NOT EXISTS organizationid UUID REFERENCES organizations (organizationid) ON DELETE CASCADE;
 
 ALTER TABLE entity_role_grants DROP CONSTRAINT IF EXISTS chk_exhibitionid_resource_exclusive;
+ALTER TABLE entity_role_grants DROP CONSTRAINT IF EXISTS chk_grant_scope_exclusive;
 ALTER TABLE entity_role_grants
     ADD CONSTRAINT chk_grant_scope_exclusive
     CHECK (num_nonnulls(exhibitionid, resource_type, organizationid) <= 1);
@@ -44,7 +45,8 @@ CREATE INDEX IF NOT EXISTS idx_entity_role_grants_organization
 
 ALTER TABLE roles ALTER COLUMN exhibitionid DROP NOT NULL;
 ALTER TABLE roles
-    ADD COLUMN organizationid UUID REFERENCES organizations (organizationid) ON DELETE CASCADE;
+    ADD COLUMN IF NOT EXISTS organizationid UUID REFERENCES organizations (organizationid) ON DELETE CASCADE;
+ALTER TABLE roles DROP CONSTRAINT IF EXISTS chk_roles_scope_exclusive;
 ALTER TABLE roles
     ADD CONSTRAINT chk_roles_scope_exclusive
     CHECK (num_nonnulls(exhibitionid, organizationid) = 1);
