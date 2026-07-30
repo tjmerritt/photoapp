@@ -73,6 +73,40 @@ func resolvePhotoExhibition(ctx context.Context, pool *db.Pool, photoid string) 
 	return exhibitionID, nil
 }
 
+// exhibitionOrganizationCache maps exhibitionid → organizationid.
+// An exhibition's organization is treated as immutable for caching purposes
+// — there is no endpoint that reassigns an exhibition to a different
+// organization today. Revisit this cache if Phase 1c (org admin) or later
+// work ever adds one.
+var exhibitionOrganizationCache syncMap[string, string]
+
+// resolveExhibitionOrganization returns the organizationid for the given
+// exhibitionid, or "" if exhibitionID is itself "" (no exhibition context —
+// e.g. a request whose Host header matched no known exhibition). Callers
+// should treat "" as "no organization to scope against," not an error —
+// PLAN2.md Phase 1b's org-scoped emoji visibility falls back to "global
+// only" in that case rather than failing the request.
+func resolveExhibitionOrganization(ctx context.Context, pool *db.Pool, exhibitionID string) (string, error) {
+	if exhibitionID == "" {
+		return "", nil
+	}
+	if v, ok := exhibitionOrganizationCache.Load(exhibitionID); ok {
+		return v, nil
+	}
+
+	var organizationID string
+	err := pool.QueryRow(ctx, `
+		SELECT organizationid::text FROM exhibitions
+		WHERE  exhibitionid = $1 AND deleted_at IS NULL
+	`, exhibitionID).Scan(&organizationID)
+	if err != nil {
+		return "", err
+	}
+
+	exhibitionOrganizationCache.Store(exhibitionID, organizationID)
+	return organizationID, nil
+}
+
 // displayGalleryCache maps displayid → galleryid.
 // A display's galleryid is immutable — displays are never moved between
 // galleries after creation.

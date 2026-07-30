@@ -371,3 +371,29 @@ No Go toolchain in this sandbox. Per the user's stated preference this session (
 - Run this against a real/test database: create an exhibition as a user with no prior admin grants (expect a new org), then create a second exhibition as the same user (expect it to join the same org, not create a second one) — this specific "first vs. subsequent exhibition" branch in `resolveOrganizationID` is the part most worth a real check before trusting it.
 - No UI for this yet, per the user's explicit request — API only.
 - 1b (emoji ownership), 1c (org admin — which should eventually replace `resolveOrganizationID`'s inferred-membership stand-in with a real one), 1d (header UI) remain next.
+
+---
+
+## Session 17 — Phase 1b: emoji ownership
+
+### What was done
+`migrations/020_emoji_ownership.sql` — `emoji_types.organizationid UUID REFERENCES organizations ... ON DELETE SET NULL`, nullable with no default. No backfill needed: NULL is exactly the right value for every existing row (both the seeded set and anything from `cmd/import-emojis`), so leaving the column nullable does that for free — NULL means "global, usable in every organization," matching PLAN2.md 1b's wording directly. `ON DELETE SET NULL` rather than `CASCADE`, chosen so deleting an organization (no such endpoint exists yet, but the FK should still be sane) can't silently destroy custom emoji rows/images and, transitively, photo reaction history — it just makes them global instead. Registered in `Makefile`'s `migrate-up`.
+
+`internal/handlers/resolve.go` — added `resolveExhibitionOrganization(ctx, pool, exhibitionID) (string, error)`, following the exact caching pattern `resolvePhotoExhibition`/`resolveDisplayGallery` already use (an exhibition's org is treated as immutable for caching purposes — no reassignment endpoint exists). Returns `("", nil)` for `exhibitionID == ""` rather than an error, since "no exhibition context" is an expected, not exceptional, state for several of the endpoints that call it (public emoji-browsing routes on a request whose Host header matched nothing).
+
+`internal/models/models.go` — `EmojiTypeResponse` gained `OrganizationID *string` (`omitempty`), unset for global emoji types.
+
+`internal/handlers/emojis.go` — updated every endpoint touching `emoji_types`:
+- `ListTypes` / `AdminListTypes` / `ListVariants` (all public or admin-list endpoints) — added `(organizationid IS NULL OR ($n <> '' AND organizationid = $n::uuid))` to their WHERE clauses, so an organization's custom emoji is invisible outside it while global ones remain visible everywhere. `AdminListTypes`'s doc comment flags that this is "my org only" scoping, not true global-admin visibility across every org — there's no such role yet (that's Phase 1c).
+- `AdminUpdateType` — before toggling `is_active`, looks up the target emoji's `organizationid` and 403s if it belongs to a different organization than the caller's; global emoji (`organizationid IS NULL`) and the caller's own org's emoji remain toggleable, matching existing behavior for anyone who already had `PermAdmin`/`PermEmojiAdmin`.
+- `UploadType` — resolves the uploading exhibition's organization and stores it on the new row via `NULLIF($n, '')::uuid` (so the one edge case where `PermEmojiUpload` was satisfied by a global, exhibition-less grant still degrades to a global emoji rather than erroring).
+- `React` — extended the existing "is this emoji active" lookup to also fetch `organizationid`; if the emoji is org-owned, a second lookup resolves the reacting photo's exhibition's org and rejects the reaction (400) if they don't match. Deliberately only does that second lookup when the emoji actually has an owning org, so the common case (reacting with a global emoji) costs nothing extra.
+
+Cross-checked all of Session 11's existing `emojis_admin_test.go`/`emojis_test.go` tests by hand against these changes for compatibility rather than re-running anything: every fixture in those tests goes through `testutil.CreateEmojiType`, which never sets `organizationid`, so every existing assertion still holds under an `organizationid IS NULL` branch regardless of what exhibition/org context the test used — nothing needed updating there.
+
+### Testing notes
+No Go toolchain in this sandbox. Per the user's stated pace for Phase 1+, no new test file was written; reviewed by hand instead, and specifically traced the `$n`/`args` positional-parameter bookkeeping in `ListTypes` and `AdminListTypes` by hand (both already built their WHERE clause incrementally with a running `n` counter before this change — easy to get an off-by-one wrong when inserting a new clause in the middle of that pattern) to confirm the appended org-filter argument and the trailing `LIMIT`/`OFFSET` still land on the right `$n` positions afterward.
+
+### Open items
+- Run against a real/test database: upload a custom emoji as an org member, confirm it's invisible to `ListTypes`/`AdminListTypes` from a different organization's exhibition and rejected by `React` there, but still visible/reactable from the uploading org's own exhibitions and from any exhibition for a global (imported) emoji.
+- 1c (org admin — real org membership, to replace both this phase's and 1a's inferred-membership stand-ins) and 1d (header UI) remain next.

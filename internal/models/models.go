@@ -415,4 +415,9 @@ type EmojiTypeResponse struct {
 	Skintone     *string `json:"skintone,omitempty"`      // set on variant rows
 	Hexcode      string  `json:"hexcode,omitempty"`       // needed to fetch variants
 	UsageCount   int     `json:"usage_count,omitempty"`   // total reactions across all photos (Phase 5c popularity sort)
+	// OrganizationID (Phase 1b) is unset/omitted for global emoji types
+	// (importable via cmd/import-emojis, usable in every organization) and
+	// set for custom emoji types uploaded through an organization's own
+	// exhibition (POST /api/v1/emoji/types).
+	OrganizationID *string `json:"organizationid,omitempty"`
 }

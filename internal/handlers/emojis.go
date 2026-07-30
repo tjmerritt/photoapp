@@ -140,12 +140,30 @@ func (h *EmojisHandler) React(w http.ResponseWriter, r *http.Request, _ httprout
 		return
 	}
 
-	// Verify emoji type exists and is active
+	// Verify emoji type exists and is active.
 	var active bool
-	err = h.DB.QueryRow(ctx, `SELECT is_active FROM emoji_types WHERE emojiid=$1`, emojiid).Scan(&active)
+	var emojiOrgID *string
+	err = h.DB.QueryRow(ctx, `SELECT is_active, organizationid::text FROM emoji_types WHERE emojiid=$1`, emojiid).Scan(&active, &emojiOrgID)
 	if err == pgx.ErrNoRows || !active {
 		middleware.WriteError(w, http.StatusBadRequest, "emoji not found or inactive")
 		return
+	}
+
+	// Phase 1b: a custom (organization-owned) emoji type is only usable
+	// within the organization that owns it; global emoji types
+	// (organizationid IS NULL) are usable everywhere, which is the common
+	// case, so the extra lookup below only runs when it might matter.
+	if emojiOrgID != nil {
+		photoOrgID, orgErr := resolveExhibitionOrganization(ctx, h.DB, exhibitionID)
+		if orgErr != nil {
+			slog.Error("React", "error", orgErr)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		if *emojiOrgID != photoOrgID {
+			middleware.WriteError(w, http.StatusBadRequest, "emoji not available in this organization")
+			return
+		}
 	}
 
 	_, err = h.DB.Exec(ctx, `
@@ -226,10 +244,24 @@ func (h *EmojisHandler) Unreact(w http.ResponseWriter, r *http.Request, _ httpro
 //	offset  – pagination offset (default 0)
 //	limit   – page size (default DefaultPageSize, max MaxPageSize)
 func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
 	q := r.URL.Query()
 	search := strings.TrimSpace(q.Get("search"))
 	group := strings.TrimSpace(q.Get("group"))
 	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
+
+	// Phase 1b: only global emoji types (organizationid IS NULL) plus the
+	// caller's own organization's custom uploads are visible here — an
+	// organization's custom emoji is not usable outside it. organizationID
+	// is "" when the request's exhibition context is unknown, in which case
+	// the org branch of the WHERE clause below never matches anything and
+	// this degrades to global-only, not an error.
+	organizationID, err := resolveExhibitionOrganization(ctx, h.DB, middleware.ExhibitionID(ctx))
+	if err != nil {
+		slog.Error("ListTypes resolveExhibitionOrganization", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
 
 	// Build WHERE clause — only return base emojis (exclude skintone variants).
 	where := "is_active = TRUE AND base_hexcode IS NULL"
@@ -245,10 +277,13 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 		args = append(args, group)
 		n++
 	}
+	where += fmt.Sprintf(" AND (organizationid IS NULL OR ($%d <> '' AND organizationid = $%d::uuid))", n, n)
+	args = append(args, organizationID)
+	n++
 
 	// Total count.
 	var total int
-	if err := h.DB.QueryRow(r.Context(),
+	if err := h.DB.QueryRow(ctx,
 		"SELECT COUNT(*) FROM emoji_types WHERE "+where,
 		args...,
 	).Scan(&total); err != nil {
@@ -264,10 +299,10 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 	// "frequently-used emojis first, everything else alphabetical" while
 	// still being a single stable ORDER BY that's safe to paginate over.
 	args = append(args, limit, offset)
-	rows, err := h.DB.Query(r.Context(),
+	rows, err := h.DB.Query(ctx,
 		fmt.Sprintf(`
 			SELECT et.emojiid::text, et.emoji_char, et.image_url, et.alt_text,
-			       et.is_active, COALESCE(et.hexcode,''),
+			       et.is_active, COALESCE(et.hexcode,''), et.organizationid::text,
 			       EXISTS (
 			           SELECT 1 FROM emoji_types v
 			           WHERE v.base_hexcode = et.hexcode AND v.is_active = TRUE
@@ -296,7 +331,7 @@ func (h *EmojisHandler) ListTypes(w http.ResponseWriter, r *http.Request, _ http
 	for rows.Next() {
 		var et models.EmojiTypeResponse
 		if err := rows.Scan(&et.EmojiID, &et.EmojiChar, &et.ImageURL, &et.AltText,
-			&et.IsActive, &et.Hexcode, &et.HasSkintones, &et.UsageCount); err != nil {
+			&et.IsActive, &et.Hexcode, &et.OrganizationID, &et.HasSkintones, &et.UsageCount); err != nil {
 			slog.Error("ListTypes", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
@@ -344,6 +379,18 @@ func (h *EmojisHandler) AdminListTypes(w http.ResponseWriter, r *http.Request, _
 		return
 	}
 
+	// Phase 1b: same visibility rule as the public ListTypes — global plus
+	// the caller's own organization's custom uploads. There is no
+	// global-admin concept yet (Phase 1c) that would see every
+	// organization's custom emoji here; this page is scoped to "my
+	// organization" the same as everything else until that exists.
+	organizationID, err := resolveExhibitionOrganization(ctx, h.DB, exhibitionID)
+	if err != nil {
+		slog.Error("AdminListTypes resolveExhibitionOrganization", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
 	q := r.URL.Query()
 	search := strings.TrimSpace(q.Get("search"))
 	source := q.Get("source")
@@ -379,6 +426,10 @@ func (h *EmojisHandler) AdminListTypes(w http.ResponseWriter, r *http.Request, _
 		n++
 	}
 
+	where += fmt.Sprintf(" AND (et.organizationid IS NULL OR ($%d <> '' AND et.organizationid = $%d::uuid))", n, n)
+	args = append(args, organizationID)
+	n++
+
 	var total int
 	if err := h.DB.QueryRow(ctx, "SELECT COUNT(*) FROM emoji_types et WHERE "+where, args...).Scan(&total); err != nil {
 		slog.Error("AdminListTypes count", "error", err)
@@ -389,7 +440,7 @@ func (h *EmojisHandler) AdminListTypes(w http.ResponseWriter, r *http.Request, _
 	rowArgs := append(append([]any{}, args...), limit, offset)
 	rows, err := h.DB.Query(ctx, fmt.Sprintf(`
 		SELECT et.emojiid::text, et.emoji_char, et.image_url, et.alt_text,
-		       et.is_active, COALESCE(et.hexcode,''),
+		       et.is_active, COALESCE(et.hexcode,''), et.organizationid::text,
 		       COALESCE(ec.usage_count, 0) AS usage_count
 		FROM   emoji_types et
 		LEFT JOIN (
@@ -412,7 +463,7 @@ func (h *EmojisHandler) AdminListTypes(w http.ResponseWriter, r *http.Request, _
 	for rows.Next() {
 		var et models.EmojiTypeResponse
 		if err := rows.Scan(&et.EmojiID, &et.EmojiChar, &et.ImageURL, &et.AltText,
-			&et.IsActive, &et.Hexcode, &et.UsageCount); err != nil {
+			&et.IsActive, &et.Hexcode, &et.OrganizationID, &et.UsageCount); err != nil {
 			slog.Error("AdminListTypes", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
@@ -459,6 +510,30 @@ func (h *EmojisHandler) AdminUpdateType(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	// Phase 1b: an exhibition admin may toggle global emoji types (imported
+	// via cmd/import-emojis) and their own organization's custom uploads,
+	// but not another organization's custom emoji.
+	callerOrgID, err := resolveExhibitionOrganization(ctx, h.DB, exhibitionID)
+	if err != nil {
+		slog.Error("AdminUpdateType resolveExhibitionOrganization", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	var emojiOrgID *string
+	if err := h.DB.QueryRow(ctx, `SELECT organizationid::text FROM emoji_types WHERE emojiid = $1`, emojiid).Scan(&emojiOrgID); err != nil {
+		if err == pgx.ErrNoRows {
+			middleware.WriteError(w, http.StatusNotFound, "emoji type not found")
+			return
+		}
+		slog.Error("AdminUpdateType", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if emojiOrgID != nil && *emojiOrgID != callerOrgID {
+		middleware.WriteError(w, http.StatusForbidden, "emoji type belongs to a different organization")
+		return
+	}
+
 	ct, err := h.DB.Exec(ctx, `UPDATE emoji_types SET is_active = $1 WHERE emojiid = $2`, *req.IsActive, emojiid)
 	if err != nil {
 		slog.Error("AdminUpdateType", "error", err)
@@ -476,9 +551,22 @@ func (h *EmojisHandler) AdminUpdateType(w http.ResponseWriter, r *http.Request, 
 // GET /api/v1/emoji/variants?hexcode=  — returns all skintone variants for a base emoji.
 // The base emoji itself is included first so the picker can offer "no skintone" too.
 func (h *EmojisHandler) ListVariants(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	ctx := r.Context()
 	hexcode := strings.TrimSpace(r.URL.Query().Get("hexcode"))
 	if hexcode == "" {
 		middleware.WriteError(w, http.StatusBadRequest, "hexcode is required")
+		return
+	}
+
+	// Phase 1b: same global-plus-own-org visibility rule as ListTypes. In
+	// practice a hexcode-bearing emoji is almost always a global OpenMoji
+	// import (custom uploads via UploadType never set hexcode/base_hexcode),
+	// but the filter is applied for correctness rather than assuming that
+	// invariant holds forever.
+	organizationID, err := resolveExhibitionOrganization(ctx, h.DB, middleware.ExhibitionID(ctx))
+	if err != nil {
+		slog.Error("ListVariants resolveExhibitionOrganization", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
 
@@ -491,18 +579,20 @@ func (h *EmojisHandler) ListVariants(w http.ResponseWriter, r *http.Request, _ h
 	// `created_at` here (previously not selected by either branch) failed
 	// at query time with "column does not exist" the moment this endpoint
 	// was actually exercised by a test with more than one row to order.
-	baseRows, err := h.DB.Query(r.Context(), `
+	baseRows, err := h.DB.Query(ctx, `
 		SELECT emojiid::text, emoji_char, image_url, alt_text, is_active,
-		       COALESCE(hexcode,''), COALESCE(skintone,''), sort_order, created_at
+		       COALESCE(hexcode,''), COALESCE(skintone,''), organizationid::text, sort_order, created_at
 		FROM   emoji_types
 		WHERE  hexcode = $1 AND base_hexcode IS NULL AND is_active = TRUE
+		  AND  (organizationid IS NULL OR ($2 <> '' AND organizationid = $2::uuid))
 		UNION ALL
 		SELECT emojiid::text, emoji_char, image_url, alt_text, is_active,
-		       COALESCE(hexcode,''), COALESCE(skintone,''), sort_order, created_at
+		       COALESCE(hexcode,''), COALESCE(skintone,''), organizationid::text, sort_order, created_at
 		FROM   emoji_types
 		WHERE  base_hexcode = $1 AND is_active = TRUE
+		  AND  (organizationid IS NULL OR ($2 <> '' AND organizationid = $2::uuid))
 		ORDER  BY sort_order, created_at
-	`, hexcode)
+	`, hexcode, organizationID)
 	if err != nil {
 		slog.Error("ListVariants", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -517,7 +607,7 @@ func (h *EmojisHandler) ListVariants(w http.ResponseWriter, r *http.Request, _ h
 		var rowSortOrder int
 		var rowCreatedAt time.Time
 		if err := baseRows.Scan(&et.EmojiID, &et.EmojiChar, &et.ImageURL, &et.AltText,
-			&et.IsActive, &et.Hexcode, &tone, &rowSortOrder, &rowCreatedAt); err != nil {
+			&et.IsActive, &et.Hexcode, &tone, &et.OrganizationID, &rowSortOrder, &rowCreatedAt); err != nil {
 			slog.Error("ListVariants", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
@@ -547,6 +637,19 @@ func (h *EmojisHandler) UploadType(w http.ResponseWriter, r *http.Request, _ htt
 	exhibitionID := middleware.ExhibitionID(ctx)
 	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermEmojiUpload); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
+	// Phase 1b: a custom emoji uploaded through an exhibition belongs to
+	// that exhibition's organization. In the unusual case where
+	// PermEmojiUpload was satisfied by a global grant with no exhibition
+	// context at all (exhibitionID == ""), organizationID resolves to "" too
+	// and NULLIF below stores that as a true global emoji instead — there's
+	// no organization to attribute it to.
+	organizationID, err := resolveExhibitionOrganization(ctx, h.DB, exhibitionID)
+	if err != nil {
+		slog.Error("UploadType resolveExhibitionOrganization", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
 
@@ -621,20 +724,24 @@ func (h *EmojisHandler) UploadType(w http.ResponseWriter, r *http.Request, _ htt
 	// or set is_active=TRUE to allow immediate use — adjust per policy)
 	var emojiid string
 	err = h.DB.QueryRow(ctx, `
-		INSERT INTO emoji_types (emojiid, image_url, alt_text, is_active)
-		VALUES ($1, $2, $3, TRUE)
+		INSERT INTO emoji_types (emojiid, image_url, alt_text, is_active, organizationid)
+		VALUES ($1, $2, $3, TRUE, NULLIF($4, '')::uuid)
 		RETURNING emojiid::text
-	`, newID, imageURL, altText).Scan(&emojiid)
+	`, newID, imageURL, altText, organizationID).Scan(&emojiid)
 	if err != nil {
 		slog.Error("UploadType", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
 
-	middleware.WriteJSON(w, http.StatusCreated, models.EmojiTypeResponse{
+	resp := models.EmojiTypeResponse{
 		EmojiID:  emojiid,
 		ImageURL: proxyImageURLPtr(&imageURL),
 		AltText:  altText,
 		IsActive: true,
-	})
+	}
+	if organizationID != "" {
+		resp.OrganizationID = &organizationID
+	}
+	middleware.WriteJSON(w, http.StatusCreated, resp)
 }
