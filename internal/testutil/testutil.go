@@ -141,6 +141,20 @@ func CreateExhibition(t *testing.T, pool *db.Pool) string {
 	return id
 }
 
+// AddUserToExhibition inserts a user_exhibitions membership row, mirroring
+// what a real join/registration flow leaves behind. Several admin endpoints
+// (AdminHandler.ListExhibitions, ListUsers, Stats' user_count) only see
+// users who have this row, not just any user in the users table.
+func AddUserToExhibition(t *testing.T, pool *db.Pool, userID, exhibitionID string) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(), `
+		INSERT INTO user_exhibitions (userid, exhibitionid) VALUES ($1::uuid, $2::uuid)
+	`, userID, exhibitionID)
+	if err != nil {
+		t.Fatalf("testutil.AddUserToExhibition: %v", err)
+	}
+}
+
 // CreatePhoto inserts a photo owned by ownerUserID within exhibitionID and
 // returns its photoid.
 func CreatePhoto(t *testing.T, pool *db.Pool, exhibitionID, ownerUserID string) string {
