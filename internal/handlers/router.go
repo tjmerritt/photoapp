@@ -40,6 +40,7 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	grants      := &GrantsHandler{DB: pool, Cfg: cfg, Checker: checker}
 	roles       := &RolesHandler{DB: pool, Cfg: cfg, Checker: checker}
 	exhibitions := &ExhibitionsHandler{DB: pool}
+	scope       := &ScopeHandler{DB: pool, Cfg: cfg, Checker: checker}
 
 	// Convenience: wrap a httprouter.Handle with RequireAuth
 	auth := func(h httprouter.Handle) httprouter.Handle {
@@ -126,6 +127,11 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	r.GET("/api/v1/admin/photos",       auth(admin.ListPhotos))
 	r.PATCH("/api/v1/admin/photo",      auth(admin.SetPublic))
 	r.GET("/api/v1/admin/stats",        auth(admin.Stats))
+
+	// Phase 1d: header Organization/Exhibition picker (paginated, searchable;
+	// access control is baked into the query itself — see scope.go).
+	r.GET("/api/v1/admin/organizations",   auth(scope.ListOrganizations))
+	r.GET("/api/v1/admin/org-exhibitions", auth(scope.ListExhibitions))
 
 	// Phase 6b: user admin (PermAdmin/PermUserAdmin enforced in handler)
 	r.GET("/api/v1/admin/users",           auth(admin.ListUsers))

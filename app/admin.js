@@ -9,9 +9,7 @@ function thumbUrl(url, cssWidth) {
 }
 
 function adminApp() {
-  return {
-    exhibitions:         [],
-    selectedExhibition:  '',
+  return Object.assign({
     photos:              [],
     total:               0,
     offset:              0,
@@ -23,38 +21,21 @@ function adminApp() {
 
     thumbUrl(url, cssWidth) { return thumbUrl(url, cssWidth); },
 
+    // Phase 1d: previously an inline copy of the exhibition-selector
+    // bootstrap (predating loadAdminExhibitions()/scopePickerMixin() — kept
+    // separate at the time to avoid touching working code). Now unified
+    // with every other admin page via loadAdminScope(), since duplicating
+    // the new Organization/Exhibition popup logic a further time here would
+    // have been worse than the risk of this refactor.
     async init() {
-      const me = await fetch('/auth/me').then(function(r) { return r.json(); });
-      if (!me.loggedIn) { window.location.href = '/'; return; }
-
-      // Probe for admin access (403 = no permission, 404 = server not rebuilt yet)
-      const probe = await fetch('/api/v1/admin/exhibitions');
-      if (probe.status === 403 || probe.status === 404) { this.authError = true; return; }
-
-      const data = await probe.json();
-      this.exhibitions = data.exhibitions || [];
-
-      if (this.exhibitions.length === 0) {
-        this.noExhibitions = true;
-        return;
-      }
-
-      const params = new URLSearchParams(window.location.search);
-      const requestedID = params.get('exhibitionid');
-      const match = requestedID && this.exhibitions.find(function(e) { return e.exhibitionid === requestedID; });
-      this.selectedExhibition = match ? match.exhibitionid : this.exhibitions[0].exhibitionid;
+      if (!(await loadAdminScope(this))) { return; }
       await this.loadMore();
       await this.$nextTick();
       this.initScroll();
     },
 
     async changeExhibition() {
-      // If the selected exhibition lives on a different host, navigate there.
-      const ex = this.exhibitions.find(function(e) { return e.exhibitionid === this.selectedExhibition; }, this);
-      if (ex && ex.hostname && ex.hostname !== window.location.host) {
-        window.location.href = window.location.protocol + '//' + ex.hostname + '/admin?exhibitionid=' + encodeURIComponent(ex.exhibitionid);
-        return;
-      }
+      if (crossHostRedirect(this.exhibitions.find(function(e) { return e.exhibitionid === this.selectedExhibition; }, this), '/admin.html')) return;
       // Reset and reload when the user picks a different exhibition.
       this.photos = [];
       this.offset = 0;
@@ -125,36 +106,177 @@ function adminApp() {
       const self = this;
       setTimeout(function() { self.toast.visible = false; }, 3500);
     },
-  };
+  }, scopePickerMixin());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 6: shared exhibition-selector bootstrap, used by adminMaster and
-// adminUsers (adminApp above predates this factoring-out and keeps its own
-// inline copy rather than risk touching working code).
+// Phase 1d: shared Organization/Exhibition header picker. Every admin page's
+// top-level Alpine component mixes this in via
+// Object.assign(returnedObject, scopePickerMixin()), so the (now-identical)
+// header markup — two text fields, "Organization" and "Exhibition", each
+// opening a shared search+select popup when there's more than one choice —
+// works the same everywhere. Replaces the old exhibitions-only <select>
+// dropdown and loadAdminExhibitions() bootstrap (Phase 6).
 //
-// Probes /api/v1/admin/exhibitions, redirects home if not logged in, and sets
-// authError/noExhibitions/exhibitions/selectedExhibition directly on the
-// given Alpine component instance. Returns true if the caller should go on
-// to load its own exhibition-scoped data, false if it should stop (auth
-// error, no exhibitions, or not logged in — all of which render their own
-// empty state and don't need further loading).
+// Fetch-as-needed: loadAdminScope() only ever fetches page 1
+// (SCOPE_PAGE_SIZE items) of organizations and page 1 of the selected
+// organization's exhibitions — just enough to know the current selection
+// and whether there's more than one choice. The popup itself
+// (openPicker/searchPicker/loadMorePicker) re-fetches from page 1 with the
+// live search term when opened, and appends further pages only when the
+// admin actually asks for more — the full list is never loaded up front.
 // ─────────────────────────────────────────────────────────────────────────────
-async function loadAdminExhibitions(app) {
+const SCOPE_PAGE_SIZE = 20;
+
+function scopePickerMixin() {
+  return {
+    organizations:            [],
+    organizationsTotal:       0,
+    selectedOrganization:     '',
+    selectedOrganizationName: '',
+
+    // exhibitions/selectedExhibition are also read by every page's own
+    // loadX()/changeExhibition() — this mixin owns fetching them.
+    exhibitions:            [],
+    exhibitionsTotal:       0,
+    selectedExhibition:     '',
+    selectedExhibitionName: '',
+
+    picker: {
+      open:    false,
+      kind:    '', // 'organization' | 'exhibition'
+      search:  '',
+      items:   [],
+      offset:  0,
+      total:   0,
+      loading: false,
+    },
+
+    async openPicker(kind) {
+      const total = kind === 'organization' ? this.organizationsTotal : this.exhibitionsTotal;
+      if (total <= 1) return; // nothing to switch to — header field isn't clickable
+      this.picker.kind   = kind;
+      this.picker.search = '';
+      this.picker.items  = [];
+      this.picker.offset = 0;
+      this.picker.total  = 0;
+      this.picker.open   = true;
+      await this.fetchPickerPage(true);
+    },
+
+    closePicker() {
+      this.picker.open = false;
+    },
+
+    async searchPicker() {
+      await this.fetchPickerPage(true);
+    },
+
+    async loadMorePicker() {
+      if (this.picker.loading || this.picker.items.length >= this.picker.total) return;
+      await this.fetchPickerPage(false);
+    },
+
+    async fetchPickerPage(reset) {
+      this.picker.loading = true;
+      try {
+        var offset = reset ? 0 : this.picker.offset;
+        var url;
+        if (this.picker.kind === 'organization') {
+          url = '/api/v1/admin/organizations?limit=' + SCOPE_PAGE_SIZE
+              + '&offset=' + offset + '&search=' + encodeURIComponent(this.picker.search);
+        } else {
+          url = '/api/v1/admin/org-exhibitions?organizationid=' + encodeURIComponent(this.selectedOrganization)
+              + '&limit=' + SCOPE_PAGE_SIZE
+              + '&offset=' + offset + '&search=' + encodeURIComponent(this.picker.search);
+        }
+        const r    = await fetch(url);
+        const data = await r.json();
+        const items = this.picker.kind === 'organization' ? (data.organizations || []) : (data.exhibitions || []);
+        this.picker.items  = reset ? items : this.picker.items.concat(items);
+        this.picker.offset = offset + items.length;
+        this.picker.total  = data.total || 0;
+      } catch (e) {
+        // Leave whatever was already loaded — the popup's own "N of M"
+        // footer and empty list cover a failed fetch well enough here.
+      }
+      this.picker.loading = false;
+    },
+
+    // choosePickerItemByValue looks the chosen id up in the currently
+    // loaded page (avoids an inline arrow-function lookup in the HTML
+    // attribute, which the Alpine CSP build doesn't support) and applies
+    // it. Switching organization reloads the exhibition list for the new
+    // org first, since the old one no longer applies; either case then
+    // hands off to the page's own changeExhibition() to reset+reload its
+    // page-specific data (and redirect cross-host if needed).
+    async choosePickerItemByValue(id) {
+      var item = null;
+      for (var i = 0; i < this.picker.items.length; i++) {
+        var it = this.picker.items[i];
+        if ((it.organizationid || it.exhibitionid) === id) { item = it; break; }
+      }
+      if (!item) return;
+      this.closePicker();
+      if (this.picker.kind === 'organization') {
+        this.selectedOrganization     = item.organizationid;
+        this.selectedOrganizationName = item.name;
+        await this.loadOrgExhibitions();
+      } else {
+        this.selectedExhibition     = item.exhibitionid;
+        this.selectedExhibitionName = item.name;
+      }
+      await this.changeExhibition();
+    },
+
+    // loadOrgExhibitions fetches page 1 of selectedOrganization's
+    // exhibitions and picks a default (the ?exhibitionid= query param if
+    // it's on page 1, else the first result) — used by loadAdminScope's
+    // initial load and by choosePickerItemByValue when the org changes.
+    async loadOrgExhibitions() {
+      const r    = await fetch('/api/v1/admin/org-exhibitions?organizationid=' + encodeURIComponent(this.selectedOrganization) + '&limit=' + SCOPE_PAGE_SIZE);
+      const data = await r.json();
+      this.exhibitions      = data.exhibitions || [];
+      this.exhibitionsTotal = data.total || 0;
+
+      const params = new URLSearchParams(window.location.search);
+      const requestedID = params.get('exhibitionid');
+      const match = requestedID && this.exhibitions.find(function(e) { return e.exhibitionid === requestedID; });
+      const chosen = match || this.exhibitions[0];
+      this.selectedExhibition     = chosen ? chosen.exhibitionid : '';
+      this.selectedExhibitionName = chosen ? chosen.name : '';
+    },
+  };
+}
+
+// loadAdminScope replaces the old loadAdminExhibitions(): probes login,
+// then loads page 1 of organizations and page 1 of the chosen
+// organization's exhibitions onto `app` (which must have
+// scopePickerMixin() mixed in). Returns true if the caller should go on to
+// load its own exhibition-scoped data, false if it should stop (not logged
+// in, no admin access, or nothing to administer — each of which renders its
+// own empty state and doesn't need further loading).
+async function loadAdminScope(app) {
   const me = await fetch('/auth/me').then(function(r) { return r.json(); });
   if (!me.loggedIn) { window.location.href = '/'; return false; }
 
-  const probe = await fetch('/api/v1/admin/exhibitions');
-  if (probe.status === 403 || probe.status === 404) { app.authError = true; return false; }
+  const probe = await fetch('/api/v1/admin/organizations?limit=' + SCOPE_PAGE_SIZE);
+  if (!probe.ok) { app.authError = true; return false; }
 
   const data = await probe.json();
-  app.exhibitions = data.exhibitions || [];
-  if (app.exhibitions.length === 0) { app.noExhibitions = true; return false; }
+  app.organizations      = data.organizations || [];
+  app.organizationsTotal = data.total || 0;
+  if (app.organizations.length === 0) { app.noExhibitions = true; return false; }
 
   const params = new URLSearchParams(window.location.search);
-  const requestedID = params.get('exhibitionid');
-  const match = requestedID && app.exhibitions.find(function(e) { return e.exhibitionid === requestedID; });
-  app.selectedExhibition = match ? match.exhibitionid : app.exhibitions[0].exhibitionid;
+  const requestedOrgID = params.get('organizationid');
+  const orgMatch = requestedOrgID && app.organizations.find(function(o) { return o.organizationid === requestedOrgID; });
+  const chosenOrg = orgMatch || app.organizations[0];
+  app.selectedOrganization     = chosenOrg.organizationid;
+  app.selectedOrganizationName = chosenOrg.name;
+
+  await app.loadOrgExhibitions();
+  if (app.exhibitions.length === 0) { app.noExhibitions = true; return false; }
   return true;
 }
 
@@ -174,16 +296,14 @@ function crossHostRedirect(ex, pagePath) {
 // adminMaster (6a) — quick-stats panel + links to the other admin pages.
 // ─────────────────────────────────────────────────────────────────────────────
 function adminMaster() {
-  return {
-    exhibitions:        [],
-    selectedExhibition: '',
+  return Object.assign({
     stats:              null,
     loading:            true,
     authError:          false,
     noExhibitions:      false,
 
     async init() {
-      if (!(await loadAdminExhibitions(this))) { this.loading = false; return; }
+      if (!(await loadAdminScope(this))) { this.loading = false; return; }
       await this.loadStats();
       this.loading = false;
     },
@@ -201,7 +321,7 @@ function adminMaster() {
         this.stats = await r.json();
       } catch (e) { /* leave stats null — page shows its loading state */ }
     },
-  };
+  }, scopePickerMixin());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -209,9 +329,7 @@ function adminMaster() {
 // and manage-own-labels/emoji/comments.
 // ─────────────────────────────────────────────────────────────────────────────
 function adminUsers() {
-  return {
-    exhibitions:        [],
-    selectedExhibition: '',
+  return Object.assign({
     users:              [],
     total:              0,
     offset:             0,
@@ -223,7 +341,7 @@ function adminUsers() {
     toast:              { visible: false, message: '' },
 
     async init() {
-      if (!(await loadAdminExhibitions(this))) { this.loading = false; return; }
+      if (!(await loadAdminScope(this))) { this.loading = false; return; }
       await this.loadUsers();
       this.loading = false;
     },
@@ -292,7 +410,7 @@ function adminUsers() {
       const self = this;
       setTimeout(function() { self.toast.visible = false; }, 3500);
     },
-  };
+  }, scopePickerMixin());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -487,12 +605,10 @@ function adminLabels() {
 // ─────────────────────────────────────────────────────────────────────────────
 // adminTeams (6f) — create/edit/delete teams and manage their membership.
 // Exhibition-scoped (a team belongs to one exhibition), same selector
-// pattern as adminUsers/adminMaster via loadAdminExhibitions().
+// pattern as adminUsers/adminMaster via loadAdminScope().
 // ─────────────────────────────────────────────────────────────────────────────
 function adminTeams() {
-  return {
-    exhibitions:        [],
-    selectedExhibition: '',
+  return Object.assign({
     teams:              [],
     total:              0,
     offset:             0,
@@ -517,7 +633,7 @@ function adminTeams() {
     memberSearching:    false,
 
     async init() {
-      if (!(await loadAdminExhibitions(this))) { this.loading = false; return; }
+      if (!(await loadAdminScope(this))) { this.loading = false; return; }
       await this.loadTeams();
       this.loading = false;
     },
@@ -688,7 +804,7 @@ function adminTeams() {
       const self = this;
       setTimeout(function() { self.toast.visible = false; }, 3500);
     },
-  };
+  }, scopePickerMixin());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -698,9 +814,7 @@ function adminTeams() {
 // "exhibition-specific" grants, each revocable.
 // ─────────────────────────────────────────────────────────────────────────────
 function adminPermissions() {
-  return {
-    exhibitions:        [],
-    selectedExhibition: '',
+  return Object.assign({
     globalGrants:       [],
     globalTotal:        0,
     exGrants:           [],
@@ -736,7 +850,7 @@ function adminPermissions() {
     thumbUrl(url, cssWidth) { return thumbUrl(url, cssWidth); },
 
     async init() {
-      if (!(await loadAdminExhibitions(this))) { this.loading = false; return; }
+      if (!(await loadAdminScope(this))) { this.loading = false; return; }
       await Promise.all([this.loadGlobal(), this.loadForExhibition()]);
       this.loading = false;
     },
@@ -1044,13 +1158,11 @@ function adminPermissions() {
       const self = this;
       setTimeout(function() { self.toast.visible = false; }, 3500);
     },
-  };
+  }, scopePickerMixin());
 }
 
 function adminRoles() {
-  return {
-    exhibitions:        [],
-    selectedExhibition: '',
+  return Object.assign({
     roles:              [],
     total:              0,
     offset:             0,
@@ -1071,7 +1183,7 @@ function adminRoles() {
     permissionGroups:   [],
 
     async init() {
-      if (!(await loadAdminExhibitions(this))) { this.loading = false; return; }
+      if (!(await loadAdminScope(this))) { this.loading = false; return; }
       await Promise.all([this.loadRoles(), this.loadPermissionCatalog()]);
       this.loading = false;
     },
@@ -1231,7 +1343,7 @@ function adminRoles() {
       const self = this;
       setTimeout(function() { self.toast.visible = false; }, 3500);
     },
-  };
+  }, scopePickerMixin());
 }
 
 document.addEventListener('alpine:init', function() {
