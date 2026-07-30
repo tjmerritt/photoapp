@@ -97,3 +97,25 @@ Same sandbox limitation as every prior session — no Go toolchain here. This on
 ### Open items
 - Confirm the fix actually resolves it — if `internal/handlers`/`internal/permissions`/`internal/photoimport` still fail under `-p 1 -count=1`, that rules out the race theory and points at something else (please paste the actual error text this time, not just the SKIP/FAIL summary, if it recurs).
 - Follow-up list from Session 2 is otherwise unchanged.
+
+---
+
+## Session 5 — Found and fixed a second real bug: migrations were never tracked as applied, and one isn't idempotent
+
+### What was done
+User re-ran with `-p 1 -count=1` (confirming Session 4's fix: the concurrency race is gone) and got a new, cleaner failure this time with the actual error text: `internal/db`'s test passed, but every DB-backed test in `internal/handlers`, `internal/permissions`, and `internal/photoimport` failed with `column "exhibitionid" of relation "entity_role_grants" already exists` while applying `018_grant_exhibitionid.sql`.
+
+Root cause: `applyMigrations` had no *persistent* record of which migration files had already run — `migrationsOnce` is an in-memory `sync.Once` scoped to one process, so with `-p 1` now serializing packages, each package's process (a fresh binary) independently re-ran all 18 `psql -f` migrations from scratch against the same already-migrated database. My own doc comment claimed every migration file was written to be idempotent (`IF NOT EXISTS` guards), but checked `migrations/018_grant_exhibitionid.sql` directly and that's false for this file: it does a bare `ALTER TABLE entity_role_grants ADD COLUMN exhibitionid ...` with no `IF NOT EXISTS`. First package's process applies it fine; every subsequent package's process hits a real Postgres error trying to add a column that's already there.
+
+Fixed with a `schema_migrations` tracking table (`name TEXT PRIMARY KEY`), created if missing inside `applyMigrations` under the same advisory lock as before:
+- Queries `schema_migrations` for already-applied names before doing anything, skips any file already recorded, and inserts a row immediately after each successful `psql -f` run.
+- This is the correct fix regardless of whether any individual migration file happens to be idempotent — no longer relying on that assumption at all.
+- Had to also exclude `schema_migrations` itself from `TruncateAll`'s truncate list (`internal/testutil/testutil.go`) — otherwise every test would wipe the tracking table even though the real schema changes persist, silently reintroducing the exact same "already exists" failure on the next package's process.
+- Corrected the package doc comment and `applyMigrations`'s doc comment, which previously (incorrectly) asserted every migration file is idempotent.
+
+### Testing notes
+Same sandbox limitation — no Go toolchain here, reviewed by hand. This diagnosis is solid: the user's own error text names the exact non-idempotent statement, and I confirmed by reading `018_grant_exhibitionid.sql` directly that it has no `IF NOT EXISTS` guard on the `ADD COLUMN`. The `schema_migrations` pattern is the standard fix for "migrations re-run across independent processes" and doesn't depend on trusting any migration file's idempotence going forward. One thing I can't verify without running it: that no *other* migration file has a similar non-idempotent statement that would only surface once 018 stops being the blocker — if a new "already exists" error appears further down the list after this fix, it's the same class of bug in a different file, not a new root cause.
+
+### Open items
+- Confirm this resolves it — re-run `make test-go` (or `TEST_DATABASE_URL=... go test -p 1 -count=1 ./...`). If a *different* migration file now throws a similar "already exists"/"already applied" error, that's the same non-idempotent-migration issue recurring elsewhere in the list, not a new bug — paste the error and I'll patch that file too.
+- Follow-up list from Session 2 (galleries/displays/roles CRUD, admin.go/admin_grants.go, upload.go/search.go end-to-end, auth.go non-OAuth paths, imgproxy.go) is otherwise unchanged.

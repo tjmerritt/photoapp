@@ -6,11 +6,12 @@
 //     unset, or when psql is not found on PATH — so `go test ./...` stays
 //     usable without a database configured (e.g. a contributor's first run,
 //     or a CI stage that only lints).
-//  2. Applies every schema migration in migrations/ (in numeric order) via
-//     `psql -f`, the same mechanism the Makefile's migrate-up target uses.
-//     This runs at most once per test binary invocation — every migration
-//     file uses IF NOT EXISTS / IF EXISTS guards, so it's safe to point
-//     TEST_DATABASE_URL at an already-migrated database too.
+//  2. Applies every not-yet-applied schema migration in migrations/ (in
+//     numeric order) via `psql -f`, the same mechanism the Makefile's
+//     migrate-up target uses. A schema_migrations tracking table (see
+//     applyMigrations) records which files have already run, so it's safe
+//     to point TEST_DATABASE_URL at an already-migrated database, and safe
+//     even though not every migration file is itself idempotent.
 //  3. Truncates every table so each test starts from an empty database,
 //     regardless of what earlier tests in the same run left behind.
 //
@@ -100,25 +101,29 @@ func migrationsDir() (string, error) {
 // project's migration-locking use — chosen once, must never change.
 const migrationLockKey = 8743028917
 
-// applyMigrations runs every migrations/*.sql file against dsn via `psql -f`,
-// in numeric filename order, skipping *_seed.sql files — those are dev-only
-// sample data (see `make seed`), not schema, and inserting them would leak
-// fake fixture rows into every test.
+// applyMigrations runs every not-yet-applied migrations/*.sql file against
+// dsn via `psql -f`, in numeric filename order, skipping *_seed.sql files —
+// those are dev-only sample data (see `make seed`), not schema, and
+// inserting them would leak fake fixture rows into every test.
+//
+// Applied migrations are tracked in a schema_migrations table (name TEXT
+// PRIMARY KEY), created if missing, so a file is applied at most once ever
+// against a given database — deliberately NOT relying on every migration
+// file being idempotent. (018_grant_exhibitionid.sql, for one, is not: its
+// `ALTER TABLE ... ADD COLUMN exhibitionid` has no IF NOT EXISTS and errors
+// on a second run.) This also means re-running against an already-migrated
+// database is fast — it's just one query per file to confirm it's already
+// recorded, not a re-execution of 18 `psql -f` invocations.
 //
 // `go test ./...` runs each package's tests in a separate OS process, and by
 // default runs multiple packages' processes concurrently (see `go help
 // build`'s -p flag) — so with a shared TEST_DATABASE_URL, two packages can
 // call this at the same moment. migrationsOnce (testutil.go) only dedupes
 // within a single process, not across them, so every package's process
-// re-applies every migration file independently. Each file is written to be
-// idempotent (CREATE TABLE IF NOT EXISTS, etc.), but Postgres does not make
-// "IF NOT EXISTS" DDL safe under true concurrency: two sessions can both see
-// "not exists" and both attempt the CREATE, and one loses with a duplicate
-// object error instead of silently no-op'ing. A Postgres advisory lock held
-// for the whole migration run (not just one file) closes that race by
-// ensuring only one process runs `psql -f` at a time; every other
-// concurrent process simply blocks until the lock is free, then proceeds
-// (the migrations it "re-applies" are genuine no-ops at that point).
+// calls this independently. A Postgres advisory lock held for the whole
+// migration run (not just one file) serializes those calls: only one
+// process checks-and-applies at a time, so the second process to run sees
+// schema_migrations already populated and does nothing.
 //
 // This does NOT make it safe to run different packages' DB-backed test
 // suites concurrently against one shared database beyond this migration
@@ -136,6 +141,33 @@ func applyMigrations(dsn string) error {
 		return fmt.Errorf("acquire migration lock: %w", err)
 	}
 	defer conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", int64(migrationLockKey))
+
+	if _, err := conn.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			name        TEXT PRIMARY KEY,
+			applied_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+		)
+	`); err != nil {
+		return fmt.Errorf("create schema_migrations: %w", err)
+	}
+
+	applied := make(map[string]bool)
+	rows, err := conn.Query(ctx, `SELECT name FROM schema_migrations`)
+	if err != nil {
+		return fmt.Errorf("list applied migrations: %w", err)
+	}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan applied migration name: %w", err)
+		}
+		applied[name] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("list applied migrations: %w", err)
+	}
 
 	dir, err := migrationsDir()
 	if err != nil {
@@ -160,10 +192,16 @@ func applyMigrations(dsn string) error {
 	sort.Strings(files) // "001_..." < "002_..." < ... < "018_..." sorts correctly as plain strings
 
 	for _, name := range files {
+		if applied[name] {
+			continue
+		}
 		cmd := exec.Command("psql", dsn, "-v", "ON_ERROR_STOP=1", "-f", filepath.Join(dir, name))
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("apply migration %s: %w\n%s", name, err, out)
+		}
+		if _, err := conn.Exec(ctx, `INSERT INTO schema_migrations (name) VALUES ($1)`, name); err != nil {
+			return fmt.Errorf("record migration %s as applied: %w", name, err)
 		}
 	}
 	return nil
@@ -188,7 +226,7 @@ func TruncateAll(t *testing.T, pool *db.Pool) {
 	t.Helper()
 	ctx := context.Background()
 
-	rows, err := pool.Query(ctx, `SELECT tablename FROM pg_tables WHERE schemaname = 'public'`)
+	rows, err := pool.Query(ctx, `SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename != 'schema_migrations'`)
 	if err != nil {
 		t.Fatalf("testutil: list tables: %v", err)
 	}
