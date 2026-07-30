@@ -16,9 +16,10 @@ import (
 )
 
 // testEnv bundles the dependencies every handler struct needs (DB, Cfg,
-// Checker), backed by a freshly truncated database — see
-// testutil.RequireDB. Skips the calling test when TEST_DATABASE_URL isn't
-// configured.
+// Checker), backed by the shared TEST_DATABASE_URL database — see
+// testutil.RequireDB and its package doc comment for why tests don't get a
+// private/truncated database and what keeps them from colliding anyway.
+// Skips the calling test when TEST_DATABASE_URL isn't configured.
 type testEnv struct {
 	Pool    *db.Pool
 	Cfg     *config.Config

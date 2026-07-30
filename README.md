@@ -542,26 +542,37 @@ When a photo is unchanged (URL matches, `--refresh-exif` not set), any `--label`
 
 Go tests that need a database (permission checks, handler tests, ...) are
 opt-in: they call `internal/testutil.RequireDB`, which skips the test
-automatically when `TEST_DATABASE_URL` is unset. Point it at a disposable
-database — its tables are truncated before every test:
+automatically when `TEST_DATABASE_URL` is unset. Point it at a *migrated*
+database:
 
 ```sh
 make test-db-create   # createdb photoapp_test
+DATABASE_URL=postgres://photoapp:photoapp@localhost:5432/photoapp_test?sslmode=disable make migrate-up
 TEST_DATABASE_URL=postgres://photoapp:photoapp@localhost:5432/photoapp_test?sslmode=disable make test-go
 ```
 
-The first DB-backed test in a run applies every file in `migrations/`
-(via `psql -f`, skipping `*_seed.sql`) automatically — no separate
-migrate step needed for the test database.
+`internal/testutil` doesn't apply migrations or truncate anything itself —
+migrating the test database is an explicit step here, the same as it would
+be for any real deployment, not something the app (or tests) does
+implicitly. Every package's tests run directly against this one shared
+database, concurrently, with no locking and nothing resetting it between
+tests — deliberately: this is a multi-tenant app (nearly everything is
+scoped by `exhibitionid`), so tests exercise the same "many concurrent
+callers, one shared schema" model production actually runs under, rather
+than each getting a private database to itself. What keeps tests from
+colliding is on the test-writing side: fixture builders generate
+collision-free random keys (see `internal/testutil`'s `Create*` helpers),
+and assertions stay scoped to the fixtures a test itself created rather
+than asserting an exact count/list across a whole table. See
+`internal/testutil`'s package doc comment for the full reasoning, including
+why two more "clever"-looking designs (a cross-process advisory lock, then
+a private schema per test binary) were each tried and reverted in favor of
+this.
 
-`make test-go` always passes `-p 1 -count=1` to `go test`, and if you
-ever run `go test` directly with `TEST_DATABASE_URL` set, do the same.
-Every package's tests share that one database; without `-p 1`, Go runs
-different packages concurrently by default and they'll truncate each
-other's tables mid-test, producing flaky failures with no obvious cause.
 `-count=1` bypasses Go's test cache, which has no way to know
 `TEST_DATABASE_URL` affects the result and can otherwise replay a stale
-pass/fail from before the database was configured.
+pass/fail from before the database was configured. If you run `go test`
+directly with `TEST_DATABASE_URL` set, it's worth doing the same.
 
 JS unit tests ([Vitest](https://vitest.dev)) cover the pure, DOM-free
 helpers exposed by `app/app.js` (see `app/__tests__/`):

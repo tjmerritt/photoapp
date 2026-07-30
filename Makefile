@@ -55,28 +55,31 @@ seed:
 #
 # Go: DB-backed tests (internal/permissions, internal/handlers, ...) skip
 # themselves automatically when TEST_DATABASE_URL is unset — see
-# internal/testutil's package doc comment. Point it at a disposable database
-# (its tables get truncated before every test):
+# internal/testutil's package doc comment. Point it at a *migrated* database
+# (internal/testutil no longer applies migrations itself — that's a deploy
+# step here too, same as it would be for a real environment):
 #
 #   make test-db-create
+#   DATABASE_URL=postgres://photoapp:photoapp@localhost:5432/photoapp_test?sslmode=disable make migrate-up
 #   TEST_DATABASE_URL=postgres://photoapp:photoapp@localhost:5432/photoapp_test?sslmode=disable make test-go
 #
-# -p 1 is required, not optional, whenever TEST_DATABASE_URL is set: `go
-# test ./...` otherwise runs different packages' tests concurrently, and
-# every package shares the one database named by TEST_DATABASE_URL —
-# concurrent packages will truncate tables out from under each other's
-# in-flight tests (see internal/testutil.TruncateAll's doc comment) and
-# produce flaky, misleading failures that vanish under -v -run on a single
-# package. -count=1 additionally bypasses Go's test result cache, which
-# otherwise doesn't know TEST_DATABASE_URL affects the outcome and can
-# silently serve a stale result from a run before the database was set up.
+# No -p 1, no locking, no per-test/per-package database: every package's
+# tests run concurrently against this one shared database, same as
+# production traffic from different tenants does. What keeps them from
+# colliding is fixtures using collision-free random keys and assertions
+# staying scoped to the fixtures a test itself created — see
+# internal/testutil's package doc comment for the full reasoning (and why
+# two earlier, more clever-seeming designs here were both reverted).
+# -count=1 bypasses Go's test result cache, which doesn't know
+# TEST_DATABASE_URL affects the outcome and can otherwise silently serve a
+# stale result from a run before the database was configured.
 #
 # JS: `npm test` (Vitest) covers the pure, DOM-free helpers exposed by
 # app/app.js (see app/__tests__/).
 test: test-go test-js
 
 test-go:
-	go test -p 1 -count=1 ./...
+	go test -count=1 ./...
 
 test-js:
 	npm test
@@ -84,6 +87,8 @@ test-js:
 # Convenience targets for a local throwaway test database. Requires
 # createdb/dropdb (part of the same Postgres client tools as psql) and
 # DATABASE_URL set to a superuser/owner connection for the CREATE/DROP.
+# Run `DATABASE_URL=<same url> make migrate-up` after test-db-create (or
+# after test-db-drop + test-db-create) to (re)apply the schema.
 test-db-create:
 	createdb photoapp_test
 

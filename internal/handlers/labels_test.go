@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/julienschmidt/httprouter"
 	"github.com/tjmerritt/photoapp/internal/handlers"
 	"github.com/tjmerritt/photoapp/internal/models"
@@ -175,13 +176,18 @@ func TestLabelsHandler_Create_RestrictedName_RequiresLabelAdmin(t *testing.T) {
 	h := &handlers.LabelsHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
 	fx := setupLabelsFixture(t, env)
 
+	// label_names is a global, app-wide catalog (name is its primary key),
+	// not scoped to an exhibition — unlike every other fixture here, this
+	// row has to be unique across every concurrently-running test on its
+	// own, not via the exhibition it happens to be used from.
+	restrictedName := "Sensitive-" + uuid.NewString()
 	if _, err := env.Pool.Exec(t.Context(), `
-		INSERT INTO label_names (name, restricted) VALUES ('Sensitive', TRUE)
-	`); err != nil {
+		INSERT INTO label_names (name, restricted) VALUES ($1, TRUE)
+	`, restrictedName); err != nil {
 		t.Fatalf("seed restricted label_names row: %v", err)
 	}
 
-	body, _ := json.Marshal(models.AddLabelRequest{Name: "Sensitive", Value: "yes"})
+	body, _ := json.Marshal(models.AddLabelRequest{Name: restrictedName, Value: "yes"})
 
 	// An ordinary contributor (has PhotoLabelCreate but not LabelAdmin) is forbidden.
 	rec := doRequest(t, http.MethodPost, "/api/v1/labels?photoid="+fx.photoID, fx.owner, fx.exhibitionID, bytes.NewReader(body), nil, h.Create)

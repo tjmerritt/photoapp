@@ -7,6 +7,7 @@ import (
 	"image/png"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/tjmerritt/photoapp/internal/photoimport"
 	"github.com/tjmerritt/photoapp/internal/testutil"
 )
@@ -154,18 +155,26 @@ func TestMarkNamesRestricted_NeverUnrestricts(t *testing.T) {
 	pool := testutil.RequireDB(t)
 	ctx := t.Context()
 
-	if _, err := pool.Exec(ctx, `INSERT INTO label_names (name, restricted) VALUES ('Location', TRUE)`); err != nil {
+	// label_names is a global catalog (name is its primary key), not scoped
+	// to anything test-specific, and this seed row uses a plain INSERT
+	// rather than MarkNamesRestricted's own ON CONFLICT upsert — so unlike
+	// "Camera Make"/"ISO" in the test above (which go through the real
+	// idempotent upsert and are safe to reuse indefinitely), this name needs
+	// to be unique per run or a second run of this test would fail on the
+	// name's uniqueness constraint.
+	name := "Location-" + uuid.NewString()
+	if _, err := pool.Exec(ctx, `INSERT INTO label_names (name, restricted) VALUES ($1, TRUE)`, name); err != nil {
 		t.Fatalf("seed label_names: %v", err)
 	}
 
 	// Calling it again (idempotent upsert) must leave restricted = TRUE, not
 	// reset or clear it.
-	if err := photoimport.MarkNamesRestricted(ctx, pool, []string{"Location"}); err != nil {
+	if err := photoimport.MarkNamesRestricted(ctx, pool, []string{name}); err != nil {
 		t.Fatalf("MarkNamesRestricted: %v", err)
 	}
 
 	var restricted bool
-	if err := pool.QueryRow(ctx, `SELECT restricted FROM label_names WHERE name = 'Location'`).Scan(&restricted); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT restricted FROM label_names WHERE name = $1`, name).Scan(&restricted); err != nil {
 		t.Fatalf("query: %v", err)
 	}
 	if !restricted {

@@ -3,23 +3,57 @@
 // Tests that need a real Postgres connection call RequireDB(t), which:
 //
 //  1. Skips the test (via t.Skip, not a failure) when TEST_DATABASE_URL is
-//     unset, or when psql is not found on PATH — so `go test ./...` stays
-//     usable without a database configured (e.g. a contributor's first run,
-//     or a CI stage that only lints).
-//  2. Applies every not-yet-applied schema migration in migrations/ (in
-//     numeric order) via `psql -f`, the same mechanism the Makefile's
-//     migrate-up target uses. A schema_migrations tracking table (see
-//     applyMigrations) records which files have already run, so it's safe
-//     to point TEST_DATABASE_URL at an already-migrated database, and safe
-//     even though not every migration file is itself idempotent.
-//  3. Truncates every table so each test starts from an empty database,
-//     regardless of what earlier tests in the same run left behind.
+//     unset — so `go test ./...` stays usable without a database configured
+//     (e.g. a contributor's first run, or a CI stage that only lints).
+//  2. Connects to it and returns a *db.Pool. That's it — no truncation, no
+//     migration step, no locking.
 //
-// Point TEST_DATABASE_URL at a *disposable* database — tests truncate all
-// data in it before every test. A local throwaway database works well:
+// TEST_DATABASE_URL must point at an already-migrated database: run
+// migrations against it once, the same way you would for any real
+// deployment, before running tests —
 //
-//	createdb photoapp_test
+//	make test-db-create
+//	DATABASE_URL=postgres://photoapp:photoapp@localhost:5432/photoapp_test?sslmode=disable make migrate-up
 //	TEST_DATABASE_URL=postgres://photoapp:photoapp@localhost:5432/photoapp_test?sslmode=disable go test ./...
+//
+// Tests run concurrently against this one shared database — every package,
+// every test, no locking, no per-test/per-package schema, no truncation
+// between tests. That's deliberate, not an oversight: this is a multi-tenant
+// app (every resource lives under an exhibitionid), so requests from
+// different tenants already have to coexist safely in one shared schema in
+// production; tests should exercise that same property rather than being
+// artificially given a database to themselves. Two earlier versions of this
+// package tried to paper over that instead — first with Postgres advisory
+// locks serializing access to one shared schema, then with a private schema
+// per test binary — and both were reverted: a lock just took away the
+// parallelism `go test ./...` is supposed to give you without actually
+// making concurrent access safe, and a private schema meant tests were no
+// longer exercising the same multi-tenant-on-one-schema model production
+// actually runs under.
+//
+// What actually makes concurrent tests safe here is on the caller's side,
+// not this package's:
+//
+//   - Every fixture builder below (CreateUser, CreateExhibition, ...)
+//     generates a random, collision-free key for anything with a uniqueness
+//     constraint (uuid.NewString() in usernames, emails, exhibition names,
+//     image URLs, team names, ...). Two tests running at the same instant
+//     never insert the same row.
+//   - Write tests so their assertions are scoped to the fixtures they
+//     created — filter by the exhibitionid, photoid, userid, etc. your test
+//     just made, never assert an exact global count/list across a table
+//     another concurrently-running test could also be writing to.
+//     Handlers here already work this way (nearly everything is scoped by
+//     exhibitionid), so this is usually automatic, not something you have to
+//     work to maintain — but it's the property that keeps this safe, so bear
+//     it in mind when adding a test against something that ISN'T naturally
+//     tenant-scoped (e.g. a hypothetical "list every user" admin endpoint).
+//
+// One consequence: data from every test run accumulates in
+// TEST_DATABASE_URL forever (nothing ever deletes it). Harmless — rows are
+// inert and scoped away from each other — but if that bothers you,
+// periodically recreate the database (`make test-db-drop test-db-create` +
+// re-migrate).
 //
 // Fixture builders (CreateUser, CreateExhibition, CreateRole, Grant, ...)
 // mirror the rows scripts/seed-exhibition.sh creates for a real deployment,
@@ -28,47 +62,25 @@ package testutil
 
 import (
 	"context"
-	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
-	"sort"
-	"strings"
-	"sync"
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/tjmerritt/photoapp/internal/db"
 )
 
-// ── Setup / teardown ─────────────────────────────────────────────────────────
-
-var (
-	migrationsOnce sync.Once
-	migrationsErr  error
-)
+// ── Setup ─────────────────────────────────────────────────────────────────────
 
 // RequireDB returns a connection pool to the database named by
-// TEST_DATABASE_URL, with every table truncated so the test starts empty.
-// See the package doc comment for the skip conditions and setup steps.
+// TEST_DATABASE_URL. See the package doc comment for the skip condition,
+// the shared-database design, and what keeps concurrent tests from
+// colliding in it.
 func RequireDB(t *testing.T) *db.Pool {
 	t.Helper()
 
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL not set; skipping database-backed test (see internal/testutil doc comment)")
-	}
-	if _, err := exec.LookPath("psql"); err != nil {
-		t.Skip("psql not found on PATH; skipping database-backed test (needed to apply migrations)")
-	}
-
-	migrationsOnce.Do(func() {
-		migrationsErr = applyMigrations(dsn)
-	})
-	if migrationsErr != nil {
-		t.Fatalf("testutil: apply migrations: %v", migrationsErr)
 	}
 
 	ctx := context.Background()
@@ -78,187 +90,16 @@ func RequireDB(t *testing.T) *db.Pool {
 	}
 	t.Cleanup(pool.Close)
 
-	TruncateAll(t, pool)
+	var hasUsers bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('public.users') IS NOT NULL`).Scan(&hasUsers); err != nil {
+		t.Fatalf("testutil: check TEST_DATABASE_URL is migrated: %v", err)
+	}
+	if !hasUsers {
+		t.Fatalf("testutil: TEST_DATABASE_URL is not migrated (no users table found) — " +
+			"run migrations against it first, e.g. DATABASE_URL=$TEST_DATABASE_URL make migrate-up")
+	}
+
 	return pool
-}
-
-// migrationsDir locates the repo's migrations/ directory relative to this
-// source file, so it resolves correctly regardless of which package's tests
-// invoke RequireDB (Go tests run with the package directory as cwd).
-func migrationsDir() (string, error) {
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		return "", fmt.Errorf("could not determine testutil.go's own path")
-	}
-	// thisFile: <repo>/internal/testutil/testutil.go
-	root := filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
-	return filepath.Join(root, "migrations"), nil
-}
-
-// migrationLockKey is an arbitrary fixed advisory-lock key used to
-// serialize migration application across concurrent processes (see
-// applyMigrations). Value has no meaning beyond being unique to this
-// project's migration-locking use — chosen once, must never change.
-const migrationLockKey = 8743028917
-
-// applyMigrations runs every not-yet-applied migrations/*.sql file against
-// dsn via `psql -f`, in numeric filename order, skipping *_seed.sql files —
-// those are dev-only sample data (see `make seed`), not schema, and
-// inserting them would leak fake fixture rows into every test.
-//
-// Applied migrations are tracked in a schema_migrations table (name TEXT
-// PRIMARY KEY), created if missing, so a file is applied at most once ever
-// against a given database — deliberately NOT relying on every migration
-// file being idempotent. (018_grant_exhibitionid.sql, for one, is not: its
-// `ALTER TABLE ... ADD COLUMN exhibitionid` has no IF NOT EXISTS and errors
-// on a second run.) This also means re-running against an already-migrated
-// database is fast — it's just one query per file to confirm it's already
-// recorded, not a re-execution of 18 `psql -f` invocations.
-//
-// `go test ./...` runs each package's tests in a separate OS process, and by
-// default runs multiple packages' processes concurrently (see `go help
-// build`'s -p flag) — so with a shared TEST_DATABASE_URL, two packages can
-// call this at the same moment. migrationsOnce (testutil.go) only dedupes
-// within a single process, not across them, so every package's process
-// calls this independently. A Postgres advisory lock held for the whole
-// migration run (not just one file) serializes those calls: only one
-// process checks-and-applies at a time, so the second process to run sees
-// schema_migrations already populated and does nothing.
-//
-// This does NOT make it safe to run different packages' DB-backed test
-// suites concurrently against one shared database beyond this migration
-// step — see TruncateAll's doc comment. `make test-go` passes `-p 1` for
-// exactly that reason.
-func applyMigrations(dsn string) error {
-	ctx := context.Background()
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		return fmt.Errorf("connect for migration lock: %w", err)
-	}
-	defer conn.Close(ctx)
-
-	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", int64(migrationLockKey)); err != nil {
-		return fmt.Errorf("acquire migration lock: %w", err)
-	}
-	defer conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", int64(migrationLockKey))
-
-	if _, err := conn.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS schema_migrations (
-			name        TEXT PRIMARY KEY,
-			applied_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-		)
-	`); err != nil {
-		return fmt.Errorf("create schema_migrations: %w", err)
-	}
-
-	applied := make(map[string]bool)
-	rows, err := conn.Query(ctx, `SELECT name FROM schema_migrations`)
-	if err != nil {
-		return fmt.Errorf("list applied migrations: %w", err)
-	}
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan applied migration name: %w", err)
-		}
-		applied[name] = true
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("list applied migrations: %w", err)
-	}
-
-	dir, err := migrationsDir()
-	if err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return fmt.Errorf("read migrations dir %s: %w", dir, err)
-	}
-
-	var files []string
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".sql") {
-			continue
-		}
-		if strings.HasSuffix(name, "_seed.sql") {
-			continue
-		}
-		files = append(files, name)
-	}
-	sort.Strings(files) // "001_..." < "002_..." < ... < "018_..." sorts correctly as plain strings
-
-	for _, name := range files {
-		if applied[name] {
-			continue
-		}
-		cmd := exec.Command("psql", dsn, "-v", "ON_ERROR_STOP=1", "-f", filepath.Join(dir, name))
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("apply migration %s: %w\n%s", name, err, out)
-		}
-		if _, err := conn.Exec(ctx, `INSERT INTO schema_migrations (name) VALUES ($1)`, name); err != nil {
-			return fmt.Errorf("record migration %s as applied: %w", name, err)
-		}
-	}
-	return nil
-}
-
-// TruncateAll empties every table in the public schema and refreshes the
-// emoji_counts materialized view (which TRUNCATE doesn't touch, since it's a
-// view over emoji_reactions rather than a table itself). RequireDB calls
-// this before returning; tests normally don't need to call it directly.
-//
-// This is only safe when nothing else is concurrently reading or writing
-// the same database. `go test ./...` runs different packages' tests in
-// separate, concurrent OS processes by default (see `go help build`'s -p
-// flag) — with a shared TEST_DATABASE_URL, one package's TruncateAll can
-// wipe rows a different package's test is mid-assertion on, causing
-// spurious, non-reproducible failures with no useful error beyond "row not
-// found" or a permission check unexpectedly failing. `make test-go` passes
-// `-p 1` so packages run one at a time against a shared test database;
-// don't drop that flag unless every package gets its own database/schema
-// instead.
-func TruncateAll(t *testing.T, pool *db.Pool) {
-	t.Helper()
-	ctx := context.Background()
-
-	rows, err := pool.Query(ctx, `SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename != 'schema_migrations'`)
-	if err != nil {
-		t.Fatalf("testutil: list tables: %v", err)
-	}
-	var tables []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			rows.Close()
-			t.Fatalf("testutil: scan table name: %v", err)
-		}
-		tables = append(tables, name)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		t.Fatalf("testutil: list tables: %v", err)
-	}
-	if len(tables) == 0 {
-		return
-	}
-
-	quoted := make([]string, len(tables))
-	for i, name := range tables {
-		quoted[i] = pgx.Identifier{name}.Sanitize()
-	}
-	stmt := "TRUNCATE TABLE " + strings.Join(quoted, ", ") + " CASCADE"
-	if _, err := pool.Exec(ctx, stmt); err != nil {
-		t.Fatalf("testutil: truncate tables: %v", err)
-	}
-
-	if err := pool.RefreshEmojiCounts(ctx); err != nil {
-		t.Fatalf("testutil: refresh emoji_counts: %v", err)
-	}
 }
 
 // ── Fixture builders ──────────────────────────────────────────────────────────

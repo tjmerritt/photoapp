@@ -288,8 +288,23 @@ func TestCheck_GlobalGrant_AppliesToEveryExhibition(t *testing.T) {
 	// (roles.exhibitionid is NOT NULL), but the grant row has both
 	// exhibitionid and resource_type/resource_ref left NULL, which Check()
 	// treats as applying everywhere.
+	//
+	// Unlike every other fixture in this package, a truly global Public grant
+	// isn't scoped away from other tests by construction — left in place,
+	// this would give every user in every exhibition (including ones created
+	// by unrelated, concurrently-running or future tests) PermAdmin forever,
+	// silently breaking any test that asserts a plain user lacks it (e.g.
+	// handlers.TestTeamsHandler_List_RequiresAdminOrTeamAdmin). Delete it
+	// once this test is done; the roleid cascade (entity_role_grants.roleid
+	// REFERENCES roles ON DELETE CASCADE, migrations/012_permissions.sql)
+	// takes the grant row with it.
 	role := testutil.CreateRole(t, pool, exhibitionA, "SuperAdmin", permissions.PermAdmin)
 	testutil.Grant(t, pool, role, testutil.GrantOptions{EntityType: permissions.EntityPublic})
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), `DELETE FROM roles WHERE roleid = $1`, role); err != nil {
+			t.Errorf("cleanup: delete global-grant role: %v", err)
+		}
+	})
 
 	for _, exhibitionID := range []string{exhibitionA, exhibitionB, ""} {
 		ok, err := checker.Check(ctx, "", exhibitionID, "", "", "", permissions.PermAdmin)

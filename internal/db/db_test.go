@@ -20,7 +20,7 @@ func TestNew_ConnectsAndPings(t *testing.T) {
 	// test when TEST_DATABASE_URL isn't set) — this re-confirms New/Ping
 	// succeed against a real database and directly exercises
 	// RefreshEmojiCounts, which the labels/emoji handler tests only ever
-	// exercise indirectly through testutil.TruncateAll.
+	// exercise indirectly through the React/Unreact handlers.
 	pool := testutil.RequireDB(t)
 	if err := pool.RefreshEmojiCounts(context.Background()); err != nil {
 		t.Fatalf("RefreshEmojiCounts: %v", err)
