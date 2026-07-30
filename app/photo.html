@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" x-data="photoApp" x-init="init()" @open-emoji-picker.window="$store.ui.emojiPickerOpen = true">
+<html lang="en" x-data="photoApp" @open-emoji-picker.window="$store.ui.emojiPickerOpen = true">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -1271,8 +1271,7 @@
   <div class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
        @click.self="$store.ui.labelModal = false">
     <div class="bg-white rounded-2xl shadow-2xl w-96 p-6 animate-scalein"
-         x-data="labelEditor(labelModalData, photo)"
-         x-init="init()">
+         x-data="labelEditor(labelModalData, photo)">
       <div class="flex items-center justify-between mb-5">
         <h2 class="font-serif text-xl" x-text="editingLabel ? 'Edit Label' : 'Add Label'"></h2>
         <button @click="$dispatch('photoapp:close-label-modal')" class="text-muted hover:text-brand text-2xl leading-none">&times;</button>
@@ -1362,8 +1361,7 @@
        @click.self="$store.ui.emojiPickerOpen = false"
        @close-emoji-picker="$store.ui.emojiPickerOpen = false">
     <div class="bg-white rounded-2xl shadow-2xl w-[28rem] p-5 animate-scalein flex flex-col" style="max-height:80vh"
-         x-data="emojiPicker(photo)"
-         x-init="init()">
+         x-data="emojiPicker(photo)">
 
       <!-- Header -->
       <div class="flex items-center justify-between mb-3 shrink-0">
