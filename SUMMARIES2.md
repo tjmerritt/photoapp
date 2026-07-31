@@ -730,3 +730,21 @@ No live Postgres/Go toolchain in this sandbox — reviewed by hand, with extra c
 - Performance is unverified — `photoAccessibleViaDisplaySQL` runs a multi-join correlated `EXISTS` once per candidate photo row in list/search contexts, which is inherently more expensive than the single boolean `PhotoView` check. The new partial index on `display_slots.photoid` should help, but there's been no `EXPLAIN ANALYZE` against a realistically-sized dataset — worth checking if the photo wall or search feels slower after this lands, especially in exhibitions with many displays.
 - Phase 2c (label-based grants) is parked indefinitely per the user's direction — expected to fall out of Phase 3c (label-based dynamic groups) rather than being built standalone.
 - Phase 2e (global permission administration) is PLAN2.md's last item under Phase 2 and hasn't been started.
+
+---
+
+## Session 32 — Fix: two Phase 2d tests had a scope bug, not a production bug
+
+### What was done
+User ran `go test -p 1 -count=1 ./...` and reported `TestListPhotosHandler_PrivateVisibleViaDisplayViewGrant` and `TestListPhotosHandler_PrivateVisibleViaGalleryViewGrant` both failing with `Total:0` (photo not visible). `TestListPhotosHandler_DisplayViewAlone_InsufficientForPrivatePhoto` — the third new test from Session 31 — passed, which was the key clue: only the two tests granting `PermPrivatePhotoView` failed, not the one that never grants it at all.
+
+Root cause was in the test fixtures, not `photoAccessibleViaDisplaySQL` or any production code: both failing tests bundled `PermPrivatePhotoView` into the *same role* as `PermDisplayView`/`PermGalleryView`, and granted that single role scoped to the Display/Gallery resource (`ResourceType`/`ResourceRef`). But `ListPhotosHandler`'s `canSeePrivate` check always calls `Checker.Check(ctx, userID, exhibitionID, "", "", "", PermPrivatePhotoView)` — `resourceType`/`resourceRef` are always `""` at that call site. Per `Check`'s own SQL, the "exact resource match" branch only fires when *both* `$5` (resourceType) and `$6` (resourceRef) are non-empty; a grant with `resource_type = 'Display'` can never satisfy a check where `resourceType` is passed as `""`. So the `PermPrivatePhotoView` half of each role's grant was invisible to the very check that was supposed to see it — `canSeePrivate` came back `false`, and the combined visibility formula `(hasPhotoView OR indirect) AND (isPublic OR canSeePrivate)` failed on its second half regardless of whether the indirect `DisplayView`/`GalleryView` resolution worked correctly or not.
+
+Fixed by splitting each test's single role into two: a `PrivateViewer` role holding only `PermPrivatePhotoView`, granted at exhibition scope (`ExhibitionID: exhibitionID` — the scope `canSeePrivate`'s check actually looks at), and a separate `DisplayViewer`/`GalleryViewer` role holding only `PermDisplayView`/`PermGalleryView`, granted resource-scoped to the display/gallery (the scope `photoAccessibleViaDisplaySQL` looks at). Both tests now grant the same two permissions as before, just at the two different scopes each check actually reads from.
+
+### Testing notes
+No live Postgres/Go toolchain in this sandbox — diagnosed entirely by re-reading `Checker.Check`'s SQL (specifically the "exact resource match" branch's `$5 <> '' AND $6 <> ''` guard) against exactly what `canSeePrivate`'s call site passes, and confirming by contrast that the third (passing) test never exercised this path at all since it never grants `PermPrivatePhotoView` in the first place. This is a test-fixture-construction bug, not a finding about `photoAccessibleViaDisplaySQL` itself — nothing about the production SQL from Session 31 changed.
+
+### Open items
+- Ask the user to re-run `go test -p 1 -count=1 ./...` to confirm both tests now pass with the corrected fixtures.
+- Same open items as Session 31 (migration/rebuild verification, performance check, Phase 2c parked, Phase 2e not started) — unchanged.

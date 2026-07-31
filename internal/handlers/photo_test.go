@@ -188,13 +188,27 @@ func TestListPhotosHandler_PrivateVisibleViaDisplayViewGrant(t *testing.T) {
 	displayID := testutil.CreateDisplay(t, env.Pool, galleryID)
 	testutil.PlacePhotoInSlot(t, env.Pool, displayID, photoID)
 
+	// PrivatePhotoView must be granted at exhibition (or broader) scope --
+	// ListPhotosHandler's canSeePrivate check always calls Checker.Check with
+	// resourceType="" (see permissions.go's Check doc: the "exact resource
+	// match" branch only fires when both resourceType and resourceRef are
+	// passed to Check, which canSeePrivate's call site never does), so a
+	// PrivatePhotoView grant scoped to the Display resource itself would
+	// never be seen by that check -- it has to be a separate, differently-
+	// scoped role/grant from the DisplayView one below.
+	privateRole := testutil.CreateRole(t, env.Pool, exhibitionID, "PrivateViewer", permissions.PermPrivatePhotoView)
+	testutil.Grant(t, env.Pool, privateRole, testutil.GrantOptions{
+		EntityType: permissions.EntityUser, EntityRef: viewer, ExhibitionID: exhibitionID,
+	})
+
 	// DisplayView scoped to this one specific display (not PhotoView, and
-	// not an exhibition-wide grant) plus PrivatePhotoView -- neither alone
-	// is enough (see TestListPhotosHandler_DisplayViewAlone_InsufficientForPrivatePhoto
-	// below), but together they satisfy the PhotoView-equivalent half and
-	// the private-access half of the combined visibility rule.
-	role := testutil.CreateRole(t, env.Pool, exhibitionID, "DisplayViewer", permissions.PermDisplayView, permissions.PermPrivatePhotoView)
-	testutil.Grant(t, env.Pool, role, testutil.GrantOptions{
+	// not an exhibition-wide grant) -- together with PrivatePhotoView above,
+	// satisfies the PhotoView-equivalent half and the private-access half of
+	// the combined visibility rule. DisplayView alone, without
+	// PrivatePhotoView anywhere, is insufficient -- see
+	// TestListPhotosHandler_DisplayViewAlone_InsufficientForPrivatePhoto below.
+	displayRole := testutil.CreateRole(t, env.Pool, exhibitionID, "DisplayViewer", permissions.PermDisplayView)
+	testutil.Grant(t, env.Pool, displayRole, testutil.GrantOptions{
 		EntityType: permissions.EntityUser, EntityRef: viewer,
 		ResourceType: permissions.ResourceDisplay, ResourceRef: displayID,
 	})
@@ -222,12 +236,21 @@ func TestListPhotosHandler_PrivateVisibleViaGalleryViewGrant(t *testing.T) {
 	displayID := testutil.CreateDisplay(t, env.Pool, galleryID)
 	testutil.PlacePhotoInSlot(t, env.Pool, displayID, photoID)
 
+	// PrivatePhotoView must be granted at exhibition (or broader) scope --
+	// see the DisplayView test above for why a resource-scoped grant can't
+	// satisfy canSeePrivate's own resourceType=""-scoped check -- so this is
+	// a separate role/grant from the GalleryView one below.
+	privateRole := testutil.CreateRole(t, env.Pool, exhibitionID, "PrivateViewer", permissions.PermPrivatePhotoView)
+	testutil.Grant(t, env.Pool, privateRole, testutil.GrantOptions{
+		EntityType: permissions.EntityUser, EntityRef: viewer, ExhibitionID: exhibitionID,
+	})
+
 	// GalleryView scoped to the gallery containing the display (not
-	// DisplayView, and not PhotoView) plus PrivatePhotoView -- TODO2.md's
-	// "GalleryView grants PhotoView for all photos used within displays
-	// within the galleries for which the permission is granted".
-	role := testutil.CreateRole(t, env.Pool, exhibitionID, "GalleryViewer", permissions.PermGalleryView, permissions.PermPrivatePhotoView)
-	testutil.Grant(t, env.Pool, role, testutil.GrantOptions{
+	// DisplayView, and not PhotoView) -- TODO2.md's "GalleryView grants
+	// PhotoView for all photos used within displays within the galleries
+	// for which the permission is granted".
+	galleryRole := testutil.CreateRole(t, env.Pool, exhibitionID, "GalleryViewer", permissions.PermGalleryView)
+	testutil.Grant(t, env.Pool, galleryRole, testutil.GrantOptions{
 		EntityType: permissions.EntityUser, EntityRef: viewer,
 		ResourceType: permissions.ResourceGallery, ResourceRef: galleryID,
 	})
