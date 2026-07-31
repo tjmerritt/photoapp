@@ -205,15 +205,15 @@ func (h *ListPhotosHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, _ 
 	// default) photo would never appear in the uploader's own wall/gallery
 	// view unless they separately held PermPrivatePhotoView.
 	rows, err := h.DB.Query(ctx, fmt.Sprintf(`
-		SELECT photoid::text, image_url, image_width, image_height,
+		SELECT p.photoid::text, p.image_url, p.image_width, p.image_height,
 		       COUNT(*) OVER() AS total
-		FROM   photos
-		WHERE  deleted_at IS NULL
-		  AND  ($1 = '' OR exhibitionid::text = $1)
-		  AND  (%s OR $2 OR ($3 <> '' AND owner_userid::text = $3))
-		ORDER  BY created_at DESC, photoid
+		FROM   photos p
+		WHERE  p.deleted_at IS NULL
+		  AND  ($1 = '' OR p.exhibitionid::text = $1)
+		  AND  (%s OR $2 OR ($3 <> '' AND p.owner_userid::text = $3))
+		ORDER  BY p.created_at DESC, p.photoid
 		LIMIT  $4 OFFSET $5
-	`, photoIsPublicSQL("photoid")), exhibitionID, canSeePrivate, userID, limit, offset)
+	`, photoIsPublicSQL("p.photoid")), exhibitionID, canSeePrivate, userID, limit, offset)
 	if err != nil {
 		slog.Error("ListPhotos", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
