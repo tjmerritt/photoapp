@@ -151,10 +151,6 @@ const (
 
 // Photo permissions.
 const (
-	PermPhotoCreate            = "PhotoCreate"            // upload a new photo
-	PermPhotoDelete            = "PhotoDelete"            // delete a photo
-	PermPrivatePhotoView       = "PrivatePhotoView"        // view photos where is_public = false
-	PermPhotoDescriptionModify = "PhotoDescriptionModify" // edit a photo's title or description when not the owner
 	// PermPhotoView is PLAN2.md Phase 2a's general "can view this photo"
 	// permission. Defined but NOT YET ENFORCED anywhere: today's actual
 	// photo-visibility gate is still the is_public column (see photo.go),
@@ -165,7 +161,11 @@ const (
 	// either, would make every photo invisible until every install
 	// re-granted it. It's defined now so it's valid to add to roles ahead
 	// of that cutover. See SUMMARIES2.md Session 25.
-	PermPhotoView = "PhotoView"
+	PermPhotoView              = "PhotoView"
+	PermPhotoCreate            = "PhotoCreate"            // upload a new photo
+	PermPhotoDelete            = "PhotoDelete"            // delete a photo
+	PermPrivatePhotoView       = "PrivatePhotoView"        // view photos where is_public = false
+	PermPhotoDescriptionModify = "PhotoDescriptionModify" // edit a photo's title or description when not the owner
 )
 
 // Photo label permissions.
@@ -302,7 +302,7 @@ func PermissionCatalog() []PermissionGroup {
 	return []PermissionGroup{
 		{Name: "Gallery", Permissions: []string{PermGalleryView, PermGalleryCreate, PermGalleryModify, PermGalleryDelete}},
 		{Name: "Display", Permissions: []string{PermDisplayView, PermDisplayCreate, PermDisplayModify, PermDisplayDelete}},
-		{Name: "Photo", Permissions: []string{PermPhotoCreate, PermPhotoDelete, PermPrivatePhotoView, PermPhotoDescriptionModify, PermPhotoView}},
+		{Name: "Photo", Permissions: []string{PermPhotoView, PermPhotoCreate, PermPhotoDelete, PermPrivatePhotoView, PermPhotoDescriptionModify}},
 		{Name: "Photo labels", Permissions: []string{PermPhotoLabelView, PermPhotoLabelCreate, PermPhotoLabelModify, PermPhotoLabelDelete}},
 		{Name: "Photo emoji", Permissions: []string{PermPhotoEmojiView, PermPhotoEmojiCreate, PermPhotoEmojiDelete, PermPhotoEmojiReact}},
 		{Name: "Photo comments", Permissions: []string{PermPhotoCommentView, PermPhotoCommentCreate, PermPhotoCommentModify, PermPhotoCommentDelete, PermCommentEmojiReact}},
