@@ -209,11 +209,7 @@ body > *:not(#TOC) { max-width: none; padding: 24px; }
 }
 </style>
 </head>
-<body>
-<header id="title-block-header">
-<h1 class="title">photoapp API Reference</h1>
-</header>
-<nav id="TOC" role="doc-toc">
+<body><nav id="TOC" role="doc-toc">
 <ul>
 <li><a href="#photoapp-api-reference">photoapp API Reference</a>
 <ul>
@@ -341,6 +337,13 @@ body > *:not(#TOC) { max-width: none; padding: 24px; }
 </ul></li>
 </ul>
 </nav>
+<div class="content">
+<header id="title-block-header">
+<h1 class="title">photoapp API Reference</h1>
+</header>
+
+
+
 <h1 id="photoapp-api-reference">photoapp API Reference</h1>
 <p>This document describes every HTTP endpoint exposed by the photoapp backend (<code>internal/handlers/router.go</code>), organized by resource category. For each endpoint it covers required inputs (path parameters, query parameters, headers, cookies, and request bodies), the shape of successful responses, every distinct error condition the handler can return, and notable side effects or business rules.</p>
 <p>Generated directly from the Go source (handlers, models, middleware, and the permissions package) as of the current <code>main</code> branch. Where the underlying code has quirks, inconsistencies, or unusual behavior, this document calls them out explicitly rather than smoothing them over.</p>
@@ -1536,5 +1539,7 @@ body > *:not(#TOC) { max-width: none; padding: 24px; }
 <li><strong>OAuth account linking:</strong> if no user is found by the provider-specific ID, but an email is present, an existing non-deleted user with that email (regardless of their original provider) is silently linked to the new OAuth provider rather than creating a duplicate account. No additional ownership verification is performed for this linking step — it trusts the OAuth provider’s email claim entirely.</li>
 <li><strong>Disabled-account handling:</strong> enforced in two independent places — <code>Login</code> explicitly checks after password verification and returns a distinct <code>403</code>, and session validation (used on every subsequent cookie-authenticated request, including after an OAuth login) filters out disabled accounts at the query level, silently treating their session as invalid rather than surfacing a specific error.</li>
 </ul>
+
+</div>
 </body>
 </html>

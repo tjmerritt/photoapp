@@ -776,3 +776,19 @@ No live Go toolchain/Postgres needed for this task (pure documentation). Verific
 - No compiled/running server was available to actually exercise any endpoint and confirm the documented behavior against live responses — this document describes what the code appears to do when read, not what it's been observed to do.
 - The document doesn't yet cover non-`/api`/`/auth` static routes' interaction with the SPA fallback in detail beyond what's in "Global conventions," nor does it document environment-variable configuration (e.g., `AUTH_HEADER`, `DEFAULT_PAGE_SIZE`) as a standalone reference — those are mentioned inline only where they affect a specific endpoint's behavior.
 - PLAN2.md Phase 2e (global permission administration) is still not started; Phase 2c remains parked per the user's earlier direction.
+
+---
+
+## Session 34 — Fix: API doc HTML rendered as illegible single-word columns
+
+### What was done
+User reported the API reference HTML from Session 33 was illegible — "mostly 1 word columns." Root cause: pandoc's `--standalone` output (this pandoc version, 2.9.2.1) does not wrap body content in a single container — it emits `<header id="title-block-header">`, `<nav id="TOC">`, and then every top-level Markdown block (each heading, paragraph, code block, list) as a *flat sibling* directly under `<body>`. The custom CSS set `body { display: flex }` (intending a sidebar-TOC layout) and styled `body > *:not(#TOC)` with `flex: 1 1 auto; max-width: 900px; margin: 0 auto`, expecting that selector to match one content wrapper. Instead it matched every one of the dozens of flat top-level blocks individually, turning each paragraph/heading/list into its own narrow flex column — hence the "one word per column" look.
+
+Fixed by post-processing the generated HTML with a small Python script: extracted the `<header id="title-block-header">` and `<nav id="TOC">` blocks out of `<body>`, then wrapped the title header plus every remaining top-level block in a single `<div class="content">...</div>`, leaving `<body>` with exactly two direct children (`<nav id="TOC">` and `<div class="content">`). No CSS changes were needed — the existing `body > *:not(#TOC)` rule now correctly matches only the single content wrapper.
+
+### Testing notes
+No live Go/Postgres needed (pure HTML post-processing). Verified via: confirming `<body>` now starts with `<nav` and ends with a single `</div>` right before `</body>` (i.e., exactly two direct children); re-inspecting both embedded `<style>` blocks to confirm the layout CSS was untouched and still targets the same selector, which is now correctly scoped. Did not have a real browser available to render a screenshot in this sandbox — verification was structural (DOM shape), not visual; asked the user implicitly (by re-sharing the file) to confirm it now renders correctly.
+
+### Open items
+- Should confirm with the user that the file now renders as a normal two-column (sidebar TOC + content) layout rather than assuming the structural fix was sufficient — no visual/browser confirmation was possible in this sandbox.
+- Same longer-standing open items as Session 33 (no independent second-pass verification of every quoted permission/error string; PLAN2.md Phase 2e not started; Phase 2c parked).
