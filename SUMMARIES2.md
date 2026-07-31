@@ -748,3 +748,31 @@ No live Postgres/Go toolchain in this sandbox — diagnosed entirely by re-readi
 ### Open items
 - Ask the user to re-run `go test -p 1 -count=1 ./...` to confirm both tests now pass with the corrected fixtures.
 - Same open items as Session 31 (migration/rebuild verification, performance check, Phase 2c parked, Phase 2e not started) — unchanged.
+
+---
+
+## Session 33 — Comprehensive API reference document
+
+### What was done
+User confirmed all tests pass and, before continuing further PLAN2 work, asked for a document categorizing and describing every API endpoint — inputs (POST body, query parameters, headers, cookies) and responses (status codes, response body details) — preferably as HTML.
+
+No code was touched this session; this was a pure documentation/read task. Read `internal/handlers/router.go` and `internal/middleware/middleware.go` in full to establish the definitive route table and cross-cutting request/response behavior (auth resolution order, exhibition host-based scoping, CORS, error/success JSON envelopes). Delegated the per-handler detail extraction to six parallel research agents, each assigned a logical group of handler files plus `internal/models/models.go` and `internal/permissions/permissions.go` for cross-reference, with strict instructions to quote exact JSON field names, exact permission constants, exact error message strings, and exact status codes from the source rather than approximate:
+1. Photos/search/upload/media (`photo.go`, `fetch.go`, `search.go`, `upload.go`, `avatar.go`, `imgproxy.go`) — 8 endpoints.
+2. Labels/emojis/comments (`labels.go`, `emojis.go`, `comments.go`) — 20 endpoints.
+3. Galleries/displays/templates (`galleries.go`, `displays.go`, `templates.go`) — 13 endpoints.
+4. Admin/scope/exhibitions (`admin.go`, `scope.go`, `exhibitions.go`) — 9 endpoints.
+5. Teams/grants/roles/permissions (`teams.go`, `admin_grants.go`, `roles.go`, `permissions.go`) — 19 endpoints.
+6. Auth (`auth.go`, all local + 4 OAuth providers) — 16 endpoints.
+
+Each agent's returned Markdown was reviewed, lightly cleaned up (stripped duplicate preambles, normalized heading levels to a consistent `## Category` / `### METHOD /path` hierarchy, with the Teams/Grants/Roles/Permissions section additionally using `### Subsection` / `#### METHOD /path` since it groups four sub-resources under one category), and assembled into a single document covering all 85 documented routes (`/api/v1/*`, `/auth/*`, `/healthz`, `/avatars/:hash`) plus a "Global conventions" section describing the middleware chain, auth resolution, and error/success response shapes shared by every endpoint.
+
+Converted the assembled Markdown to a styled, self-contained HTML file via `pandoc` (with the `yaml_metadata_block` extension disabled — see Testing notes for why) with an embedded CSS sidebar table-of-contents, syntax-highlighted JSON/code blocks, and category-colored endpoint headers. Saved as `photoapp_api_reference.html` in the project folder.
+
+### Testing notes
+No live Go toolchain/Postgres needed for this task (pure documentation). Verification consisted of: confirming pandoc was available in the sandbox before committing to the HTML-via-Markdown approach; after the first pandoc pass, discovering via header-count grep (`<h2 id=`, `<h3 id=`) that an entire endpoint (`GET /api/v1/photo`) and its parent section heading had silently vanished from the output, plus a `[WARNING] Could not parse YAML metadata`. Root-caused by minimal reproduction: concatenating the intro file and the first fragment file with a plain `cat` left a `---` thematic-break line at the end of the intro immediately followed by a `##` heading with no intervening blank line; pandoc's `yaml_metadata_block` extension (enabled by default) attempted to parse everything between that `---` and the next `---` several paragraphs later as a YAML metadata block, silently discarding the real content in between until the parse failed. Fixed two ways: (1) disabled the `yaml_metadata_block` extension entirely via `--from=markdown-yaml_metadata_block` since the document never needs inline YAML metadata (title is passed via `--metadata` on the command line instead), and (2) ensured a blank line separates every concatenated fragment file. Re-verified afterward via header-count grep (7 `h2`, 74 `h3`, 20 `h4` — matching the expected section/endpoint/subsection counts), a check for zero unconverted literal `**` sequences in the final HTML (confirming no bold-text corruption survived), and a manual read of the table-of-contents HTML to confirm every endpoint from every one of the six research fragments is present and correctly nested.
+
+### Open items
+- The six research agents worked independently and did not cross-check each other's conventions; while I normalized heading levels during assembly, I did not independently re-verify every quoted permission constant, error string, or status code against the source myself — the accuracy of the endpoint-level detail rests on each agent's own source reading, not a second independent pass.
+- No compiled/running server was available to actually exercise any endpoint and confirm the documented behavior against live responses — this document describes what the code appears to do when read, not what it's been observed to do.
+- The document doesn't yet cover non-`/api`/`/auth` static routes' interaction with the SPA fallback in detail beyond what's in "Global conventions," nor does it document environment-variable configuration (e.g., `AUTH_HEADER`, `DEFAULT_PAGE_SIZE`) as a standalone reference — those are mentioned inline only where they affect a specific endpoint's behavior.
+- PLAN2.md Phase 2e (global permission administration) is still not started; Phase 2c remains parked per the user's earlier direction.
