@@ -155,14 +155,18 @@ type dbExecer interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// MarkNamesRestricted upserts each name into label_names with restricted set
-// to TRUE — creating the row if the name has never been seen before, or
-// flipping restricted on if it already existed unrestricted. It never
-// un-restricts a name; that's only done explicitly (PATCH
-// /api/v1/label-names). Empty names are skipped. This is how Phase 5b's
-// "EXIF import always marks its labels restricted" rule is implemented: both
-// cmd/import-photos and the browser upload endpoint call this with the
-// names that came out of ExtractEXIF.
+// MarkNamesRestricted ensures each name has a label_names row, defaulting
+// restricted to TRUE the first time a name is ever seen. It never touches an
+// existing row's restricted flag — once a name has a row (whether created
+// here or via the admin panel), that row's restricted value is sticky and
+// can only change through an explicit PATCH /api/v1/label-names. This is
+// deliberate: an admin relaxing a name to unrestricted must not be silently
+// re-restricted the next time any photo carrying that label name is
+// uploaded or imported. Empty names are skipped. This is how "every label
+// name defaults to restricted until an admin says otherwise" is
+// implemented: both cmd/import-photos and the browser upload endpoint call
+// this with every label name they're about to write — EXIF-derived and
+// app-computed (Resolution, Filename, Public) alike — not just EXIF ones.
 func MarkNamesRestricted(ctx context.Context, db dbExecer, names []string) error {
 	for _, name := range names {
 		if name == "" {
@@ -171,7 +175,7 @@ func MarkNamesRestricted(ctx context.Context, db dbExecer, names []string) error
 		if _, err := db.Exec(ctx, `
 			INSERT INTO label_names (name, restricted)
 			VALUES ($1, TRUE)
-			ON CONFLICT (name) DO UPDATE SET restricted = TRUE, updated_at = NOW()
+			ON CONFLICT (name) DO NOTHING
 		`, name); err != nil {
 			return fmt.Errorf("marking label name %q restricted: %w", name, err)
 		}

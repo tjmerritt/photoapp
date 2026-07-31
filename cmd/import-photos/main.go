@@ -293,14 +293,20 @@ func main() {
 		allLabels := mergeLabels(exifLabels, computedLabels)
 		allLabels = mergeLabels(allLabels, []label(extraLabels))
 
-		// Phase 5b: EXIF-derived label names are always restricted, regardless
-		// of --restrict-labels — see internal/photoimport.MarkNamesRestricted's
-		// doc. --restrict-labels additionally restricts --label-supplied names
-		// (not the computed Resolution/Public names). Both are no-ops in
+		// Every label name defaults to restricted the first time it's seen —
+		// see internal/photoimport.MarkNamesRestricted's doc. EXIF-derived
+		// and this run's own computed names (Resolution, Public) are always
+		// marked; --restrict-labels additionally covers --label-supplied
+		// names. MarkNamesRestricted never touches a name that already has a
+		// label_names row, so an admin's explicit unrestrict via the admin
+		// panel is never undone by a later import. Both are no-ops in
 		// --dry-run mode, since nothing else is written to the DB either.
 		if !dryRun {
 			if err := photoimport.MarkNamesRestricted(ctx, pool, names(exifLabels)); err != nil {
 				slog.Warn("failed to mark EXIF label names restricted", "url", rawURL, "error", err)
+			}
+			if err := photoimport.MarkNamesRestricted(ctx, pool, names([]label(computedLabels))); err != nil {
+				slog.Warn("failed to mark computed label names restricted", "url", rawURL, "error", err)
 			}
 			if restrictLabels {
 				if err := photoimport.MarkNamesRestricted(ctx, pool, names([]label(extraLabels))); err != nil {

@@ -181,3 +181,36 @@ func TestMarkNamesRestricted_NeverUnrestricts(t *testing.T) {
 		t.Error("restricted was cleared, want it to remain true")
 	}
 }
+
+// TestMarkNamesRestricted_DoesNotReRestrictAdminUnrestrictedName covers the
+// actual production bug this behavior exists to prevent: an admin using
+// PATCH /api/v1/label-names to explicitly unrestrict a name (e.g. relaxing
+// "Filename") must have that decision stick even after a later photo
+// upload/import calls MarkNamesRestricted with that same name again. Before
+// this fix, MarkNamesRestricted's ON CONFLICT clause unconditionally forced
+// restricted back to TRUE on every call, silently undoing the admin's
+// change on the next upload.
+func TestMarkNamesRestricted_DoesNotReRestrictAdminUnrestrictedName(t *testing.T) {
+	pool := testutil.RequireDB(t)
+	ctx := t.Context()
+
+	name := "Filename-" + uuid.NewString()
+	// Simulate: name already has a row (e.g. created by an earlier upload),
+	// and an admin has since explicitly unrestricted it.
+	if _, err := pool.Exec(ctx, `INSERT INTO label_names (name, restricted) VALUES ($1, FALSE)`, name); err != nil {
+		t.Fatalf("seed label_names: %v", err)
+	}
+
+	// A later upload/import sees this name again and calls MarkNamesRestricted.
+	if err := photoimport.MarkNamesRestricted(ctx, pool, []string{name}); err != nil {
+		t.Fatalf("MarkNamesRestricted: %v", err)
+	}
+
+	var restricted bool
+	if err := pool.QueryRow(ctx, `SELECT restricted FROM label_names WHERE name = $1`, name).Scan(&restricted); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if restricted {
+		t.Error("restricted was flipped back to true, want the admin's unrestrict to stick")
+	}
+}

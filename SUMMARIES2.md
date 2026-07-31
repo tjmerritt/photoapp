@@ -654,3 +654,23 @@ Diagnosed from the user's actual test failure output (not hypothetical) — trac
 ### Open items
 - Re-run the full suite and confirm `TestListPhotosHandler_OnlyPublicVisibleToAnonymous` (and the rest of the previously-passing suite) now passes.
 - Worth a standing note for future `fmt.Sprintf`-built SQL in this codebase: any helper that correlates a subquery back to an outer row via a bare column name is only safe if the outer table is aliased and every call site passes the qualified form — an unaliased outer table whose column name happens to collide with a name inside the injected subquery will silently mis-bind rather than error. `photoIsPublicSQL`'s own doc comment already models the expected call shape (`"p.photoid"`) but doesn't explicitly warn against passing a bare name — could tighten that if this class of bug recurs.
+
+---
+
+## Session 29 — Label restriction defaults: fixed two real bugs found by hand during upload testing
+
+### What was done
+User uploaded photos manually and noticed two related problems: (1) the `Filename`, `Resolution`, and `Public` label names were not restricted by default, unlike EXIF-derived names, and (2) after manually unrestricting a name via the admin panel, uploading a new photo silently re-restricted it — undoing the admin change.
+
+Both traced to `internal/photoimport/exif.go`'s `MarkNamesRestricted`:
+- **Bug 2 (the upsert itself)**: `ON CONFLICT (name) DO UPDATE SET restricted = TRUE, updated_at = NOW()` unconditionally forced `restricted` back to `TRUE` on every call, including for a name whose row already existed with `restricted = FALSE` because an admin had explicitly relaxed it via `PATCH /api/v1/label-names`. Fixed by changing the conflict clause to `DO NOTHING` — the row is only ever created with `restricted = TRUE` the first time a name is seen; once a `label_names` row exists, `MarkNamesRestricted` never touches its `restricted` value again, no matter how many more times a photo carrying that label name is uploaded or imported. Rewrote the function's doc comment to state this explicitly, since the old comment ("flipping restricted on if it already existed unrestricted") was describing the very behavior that was the bug.
+- **Bug 1 (which names get marked at all)**: both `internal/handlers/upload.go`'s `uploadOne` and `cmd/import-photos/main.go`'s import loop only ever called `MarkNamesRestricted` with EXIF-derived label names — the app's own computed labels (`Filename`/`Resolution`/`Public` in the browser upload; `Resolution`/`Public` in `cmd/import-photos`, which has no `Filename` label) were never passed in at all, so they never got a `label_names` row and fell back to `fetchLabelNameInfo`'s "no row = not restricted" default. Fixed by including the computed label names in both `MarkNamesRestricted` calls, so they default to restricted on first sight exactly like EXIF names do. `cmd/import-photos`'s `--label-supplied` names (`extraLabels`, gated by `--restrict-labels`) are unchanged — those remain an explicit opt-in, not something this task touched.
+
+Added `TestMarkNamesRestricted_DoesNotReRestrictAdminUnrestrictedName` (`internal/photoimport/exif_test.go`) — seeds a name with `restricted = FALSE` directly (simulating an admin's prior unrestrict), calls `MarkNamesRestricted` again, and asserts it's still `FALSE`. This is the one gap the existing `TestMarkNamesRestricted_NeverUnrestricts` test didn't actually cover — that test only ever seeds `restricted = TRUE`, so it couldn't have caught this regression.
+
+### Testing notes
+No live Postgres/Go toolchain in this sandbox — reviewed by hand: confirmed via grep that every `MarkNamesRestricted` call site in both `upload.go` and `cmd/import-photos/main.go` is accounted for and that the one remaining call site left untouched (`main.go`'s "unchanged URL, patch extra labels only" short-circuit, ~line 234) genuinely has no EXIF/computed labels in scope at that point — nothing to add there. Confirmed `computed`/`computedLabels` are already `[]photoimport.Label`/`[]label` respectively so no new conversion helpers were needed. The new test targets the exact scenario the user reported rather than a synthetic one.
+
+### Open items
+- Ask the user to rebuild/restart, re-verify: uploading a new photo now leaves `Filename`/`Resolution`/`Public` restricted by default (visible as locked in the admin label-names view), and that unrestricting a name via the admin panel survives any number of subsequent uploads/imports.
+- `cmd/import-photos --label-supplied` names remain restricted only when `--restrict-labels` is passed — unchanged, deliberately out of scope for this fix since the user's report was specifically about computed/EXIF names, not user-supplied import labels.
