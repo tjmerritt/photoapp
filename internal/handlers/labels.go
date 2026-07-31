@@ -371,12 +371,12 @@ func (h *LabelsHandler) Names(w http.ResponseWriter, r *http.Request, _ httprout
 // Paginated admin listing of every distinct label name in use, each
 // annotated with its color override, restricted flag, enabled flag, and
 // usage count (how many non-deleted labels currently use it).
-// Requires: authenticated + (PermAdmin or PermLabelAdmin).
+// Requires: authenticated + (PermAdmin or PermLabelAdmin or PermLabelNameView).
 func (h *LabelsHandler) AdminListNames(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	ctx := r.Context()
 	userID, _ := middleware.UserID(ctx)
 	exhibitionID := middleware.ExhibitionID(ctx)
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermLabelAdmin); err != nil || !ok {
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermLabelAdmin, permissions.PermLabelNameView); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -452,11 +452,19 @@ func (h *LabelsHandler) AdminListNames(w http.ResponseWriter, r *http.Request, _
 	})
 }
 
-// PATCH /api/v1/label-names?name=<name>  (requires Admin or LabelAdmin)
+// PATCH /api/v1/label-names?name=<name>  (requires Admin, LabelAdmin,
+// LabelNameCreate, or LabelNameModify)
 // Body: { "color_hex": "#rrggbb" | "" , "restricted": bool, "enabled": bool }
 // — any subset of fields; only the fields present in the request are
 // changed. An empty string for color_hex clears the override (falling back
 // to the client-side hash-based color again).
+//
+// This is an upsert (ON CONFLICT DO UPDATE below) — it creates a label_names
+// row if none exists yet, or updates one that does. LabelNameCreate and
+// LabelNameModify are both accepted rather than distinguishing the two with
+// an extra existence-check query first; either is sufficient to perform
+// this single endpoint's one action. See permissions.PermLabelNameCreate's
+// doc comment.
 func (h *LabelsHandler) UpdateName(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	ctx := r.Context()
 	name := strings.TrimSpace(r.URL.Query().Get("name"))
@@ -467,7 +475,10 @@ func (h *LabelsHandler) UpdateName(w http.ResponseWriter, r *http.Request, _ htt
 
 	userID := middleware.MustUserID(ctx)
 	exhibitionID := middleware.ExhibitionID(ctx)
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermLabelAdmin); err != nil || !ok {
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID,
+		permissions.PermAdmin, permissions.PermLabelAdmin,
+		permissions.PermLabelNameCreate, permissions.PermLabelNameModify,
+	); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "forbidden")
 		return
 	}

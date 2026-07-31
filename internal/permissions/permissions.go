@@ -151,10 +151,21 @@ const (
 
 // Photo permissions.
 const (
-	PermPhotoCreate             = "PhotoCreate"             // upload a new photo
-	PermPhotoDelete             = "PhotoDelete"             // delete a photo
-	PermPrivatePhotoView        = "PrivatePhotoView"        // view photos where is_public = false
-	PermPhotoDescriptionModify  = "PhotoDescriptionModify"  // edit a photo's title or description when not the owner
+	PermPhotoCreate            = "PhotoCreate"            // upload a new photo
+	PermPhotoDelete            = "PhotoDelete"            // delete a photo
+	PermPrivatePhotoView       = "PrivatePhotoView"        // view photos where is_public = false
+	PermPhotoDescriptionModify = "PhotoDescriptionModify" // edit a photo's title or description when not the owner
+	// PermPhotoView is PLAN2.md Phase 2a's general "can view this photo"
+	// permission. Defined but NOT YET ENFORCED anywhere: today's actual
+	// photo-visibility gate is still the is_public column (see photo.go),
+	// and Phase 2b removes is_public in favor of a "Public" label while
+	// Phase 2d builds the direct + indirect (via DisplayView/GalleryView)
+	// grant resolution PhotoView needs before it can safely replace that
+	// check — flipping photo.go over to require PhotoView now, ahead of
+	// either, would make every photo invisible until every install
+	// re-granted it. It's defined now so it's valid to add to roles ahead
+	// of that cutover. See SUMMARIES2.md Session 25.
+	PermPhotoView = "PhotoView"
 )
 
 // Photo label permissions.
@@ -171,6 +182,14 @@ const (
 	PermPhotoEmojiView   = "PhotoEmojiView"
 	PermPhotoEmojiCreate = "PhotoEmojiCreate"
 	PermPhotoEmojiDelete = "PhotoEmojiDelete"
+	// PermPhotoEmojiReact is PLAN2.md Phase 2a's single combined
+	// add-or-remove-your-own-reaction permission — an alternate way to
+	// grant what PermPhotoEmojiCreate + PermPhotoEmojiDelete together
+	// already cover. Introduced as an additional accepted permission
+	// rather than a replacement so existing role grants using the
+	// Create/Delete pair keep working unchanged; React/Unreact accept
+	// either. See SUMMARIES2.md Session 25.
+	PermPhotoEmojiReact = "PhotoEmojiReact"
 )
 
 // Photo comment permissions.
@@ -179,11 +198,71 @@ const (
 	PermPhotoCommentCreate = "PhotoCommentCreate"
 	PermPhotoCommentModify = "PhotoCommentModify"
 	PermPhotoCommentDelete = "PhotoCommentDelete"
+	// PermCommentEmojiReact is PLAN2.md Phase 2a's permission for reacting
+	// to a comment with an emoji, mirroring PermPhotoEmojiReact. Defined
+	// but NOT YET ENFORCED anywhere — there is no comment-reaction feature
+	// to gate yet (no emoji_reactions-equivalent table/endpoints for
+	// comments exist). Building that feature is out of scope for "define
+	// the permission types"; this constant makes the permission valid and
+	// grantable ahead of that future feature. See SUMMARIES2.md Session 25.
+	PermCommentEmojiReact = "CommentEmojiReact"
 )
 
-// Emoji type permissions (site-wide, not scoped to a photo).
+// Emoji type catalog permissions (site-wide, not scoped to a photo) — govern
+// uploading, renaming, and deleting an emoji_types row itself, distinct from
+// PermPhotoEmojiCreate/Delete/React above, which govern reacting to a photo
+// with an emoji that already exists in the catalog.
 const (
 	PermEmojiUpload = "EmojiUpload" // upload a new custom emoji type
+	// PermEmojiCreate is an alternate name for PermEmojiUpload (PLAN2.md
+	// Phase 2a's naming). Both are accepted by UploadType so existing role
+	// grants using PermEmojiUpload keep working unchanged.
+	PermEmojiCreate = "EmojiCreate"
+	// PermEmojiModify governs renaming an emoji type's alt text and
+	// toggling its active state (AdminUpdateType).
+	PermEmojiModify = "EmojiModify"
+	// PermEmojiDelete is defined but NOT YET ENFORCED anywhere — there is
+	// no emoji-type delete endpoint today (AdminUpdateType only toggles
+	// is_active; there's no hard-delete). See SUMMARIES2.md Session 25.
+	PermEmojiDelete = "EmojiDelete"
+)
+
+// Label name permissions — govern the shared label_names catalog (which
+// names exist, their restricted/enabled flags, and display color), distinct
+// from PermPhotoLabelCreate/Modify/Delete/View above, which govern
+// individual label VALUES attached to one specific photo.
+const (
+	PermLabelNameView = "LabelNameView"
+	// PermLabelNameCreate and PermLabelNameModify both apply to the same
+	// upsert endpoint (UpdateName) — either is accepted rather than
+	// distinguishing "does a label_names row already exist for this name"
+	// with an extra query, since the endpoint's behavior (and the access
+	// it should require) doesn't meaningfully differ between the two.
+	PermLabelNameCreate = "LabelNameCreate"
+	PermLabelNameModify = "LabelNameModify"
+	// PermLabelNameDelete is defined but NOT YET ENFORCED anywhere — there
+	// is no endpoint that deletes a label_names row today. See
+	// SUMMARIES2.md Session 25.
+	PermLabelNameDelete = "LabelNameDelete"
+)
+
+// Team permissions — a granular alternative to the blanket PermTeamAdmin,
+// which every team-admin endpoint continues to accept alongside these.
+const (
+	PermTeamView   = "TeamView"
+	PermTeamCreate = "TeamCreate"
+	PermTeamModify = "TeamModify" // also covers adding/removing team members
+	PermTeamDelete = "TeamDelete"
+)
+
+// Role permissions — a granular alternative to the blanket
+// PermPermissionsAdmin, which every role-admin endpoint continues to accept
+// alongside these.
+const (
+	PermRoleView   = "RoleView"
+	PermRoleCreate = "RoleCreate"
+	PermRoleModify = "RoleModify" // also covers adding/removing a role's permissions
+	PermRoleDelete = "RoleDelete"
 )
 
 // Administrative permissions.
@@ -223,11 +302,14 @@ func PermissionCatalog() []PermissionGroup {
 	return []PermissionGroup{
 		{Name: "Gallery", Permissions: []string{PermGalleryView, PermGalleryCreate, PermGalleryModify, PermGalleryDelete}},
 		{Name: "Display", Permissions: []string{PermDisplayView, PermDisplayCreate, PermDisplayModify, PermDisplayDelete}},
-		{Name: "Photo", Permissions: []string{PermPhotoCreate, PermPhotoDelete, PermPrivatePhotoView, PermPhotoDescriptionModify}},
+		{Name: "Photo", Permissions: []string{PermPhotoCreate, PermPhotoDelete, PermPrivatePhotoView, PermPhotoDescriptionModify, PermPhotoView}},
 		{Name: "Photo labels", Permissions: []string{PermPhotoLabelView, PermPhotoLabelCreate, PermPhotoLabelModify, PermPhotoLabelDelete}},
-		{Name: "Photo emoji", Permissions: []string{PermPhotoEmojiView, PermPhotoEmojiCreate, PermPhotoEmojiDelete}},
-		{Name: "Photo comments", Permissions: []string{PermPhotoCommentView, PermPhotoCommentCreate, PermPhotoCommentModify, PermPhotoCommentDelete}},
-		{Name: "Emoji types", Permissions: []string{PermEmojiUpload}},
+		{Name: "Photo emoji", Permissions: []string{PermPhotoEmojiView, PermPhotoEmojiCreate, PermPhotoEmojiDelete, PermPhotoEmojiReact}},
+		{Name: "Photo comments", Permissions: []string{PermPhotoCommentView, PermPhotoCommentCreate, PermPhotoCommentModify, PermPhotoCommentDelete, PermCommentEmojiReact}},
+		{Name: "Emoji types", Permissions: []string{PermEmojiUpload, PermEmojiCreate, PermEmojiModify, PermEmojiDelete}},
+		{Name: "Label names", Permissions: []string{PermLabelNameView, PermLabelNameCreate, PermLabelNameModify, PermLabelNameDelete}},
+		{Name: "Teams", Permissions: []string{PermTeamView, PermTeamCreate, PermTeamModify, PermTeamDelete}},
+		{Name: "Roles", Permissions: []string{PermRoleView, PermRoleCreate, PermRoleModify, PermRoleDelete}},
 		{Name: "Administrative", Permissions: []string{PermAdmin, PermLabelAdmin, PermEmojiAdmin, PermUserAdmin, PermGalleryAdmin, PermTeamAdmin, PermPermissionsAdmin}},
 	}
 }

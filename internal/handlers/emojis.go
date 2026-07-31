@@ -125,7 +125,22 @@ func (h *EmojisHandler) React(w http.ResponseWriter, r *http.Request, _ httprout
 		middleware.WriteError(w, http.StatusNotFound, "photo not found")
 		return
 	}
-	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", permissions.ResourcePhoto, photoid, permissions.PermPhotoEmojiCreate); err != nil || !ok {
+	// PermPhotoEmojiReact (PLAN2.md Phase 2a) is an alternate, combined
+	// add/remove-your-own-reaction permission — accepted alongside the
+	// pre-existing PermPhotoEmojiCreate so existing role grants keep working.
+	okCreate, err := h.Checker.Check(ctx, userID, exhibitionID, "", permissions.ResourcePhoto, photoid, permissions.PermPhotoEmojiCreate)
+	if err != nil {
+		slog.Error("React", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	okReact, err := h.Checker.Check(ctx, userID, exhibitionID, "", permissions.ResourcePhoto, photoid, permissions.PermPhotoEmojiReact)
+	if err != nil {
+		slog.Error("React", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if !okCreate && !okReact {
 		middleware.WriteError(w, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -201,7 +216,22 @@ func (h *EmojisHandler) Unreact(w http.ResponseWriter, r *http.Request, _ httpro
 		middleware.WriteError(w, http.StatusNotFound, "photo not found")
 		return
 	}
-	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", permissions.ResourcePhoto, photoid, permissions.PermPhotoEmojiDelete); err != nil || !ok {
+	// PermPhotoEmojiReact (PLAN2.md Phase 2a) is an alternate, combined
+	// add/remove-your-own-reaction permission — accepted alongside the
+	// pre-existing PermPhotoEmojiDelete so existing role grants keep working.
+	okDelete, err := h.Checker.Check(ctx, userID, exhibitionID, "", permissions.ResourcePhoto, photoid, permissions.PermPhotoEmojiDelete)
+	if err != nil {
+		slog.Error("Unreact", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	okReact, err := h.Checker.Check(ctx, userID, exhibitionID, "", permissions.ResourcePhoto, photoid, permissions.PermPhotoEmojiReact)
+	if err != nil {
+		slog.Error("Unreact", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if !okDelete && !okReact {
 		middleware.WriteError(w, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -488,27 +518,35 @@ func (h *EmojisHandler) AdminListTypes(w http.ResponseWriter, r *http.Request, _
 }
 
 // PATCH /api/v1/admin/emoji-types/:emojiid  (Phase 6d)
-// Body: { "is_active": bool }
-// Requires: authenticated + (PermAdmin or PermEmojiAdmin).
+// Body: any subset of { "is_active": bool, "alt_text": "..." } — alt_text
+// (PLAN2.md Phase 2a) is the "changing uploaded emoji name" PermEmojiModify
+// is meant to gate; is_active predates it (Phase 6d) and continues to work
+// unchanged.
+// Requires: authenticated + (PermAdmin or PermEmojiAdmin or PermEmojiModify).
 func (h *EmojisHandler) AdminUpdateType(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	ctx := r.Context()
 	emojiid := ps.ByName("emojiid")
 	userID, _ := middleware.UserID(ctx)
 	exhibitionID := middleware.ExhibitionID(ctx)
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermEmojiAdmin); err != nil || !ok {
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermEmojiAdmin, permissions.PermEmojiModify); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
 
 	var req struct {
-		IsActive *bool `json:"is_active"`
+		IsActive *bool   `json:"is_active"`
+		AltText  *string `json:"alt_text"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		middleware.WriteError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	if req.IsActive == nil {
-		middleware.WriteError(w, http.StatusBadRequest, "is_active is required")
+	if req.IsActive == nil && req.AltText == nil {
+		middleware.WriteError(w, http.StatusBadRequest, "is_active or alt_text is required")
+		return
+	}
+	if req.AltText != nil && strings.TrimSpace(*req.AltText) == "" {
+		middleware.WriteError(w, http.StatusBadRequest, "alt_text cannot be empty")
 		return
 	}
 
@@ -536,7 +574,23 @@ func (h *EmojisHandler) AdminUpdateType(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	ct, err := h.DB.Exec(ctx, `UPDATE emoji_types SET is_active = $1 WHERE emojiid = $2`, *req.IsActive, emojiid)
+	hasIsActive := req.IsActive != nil
+	var isActiveVal bool
+	if hasIsActive {
+		isActiveVal = *req.IsActive
+	}
+	hasAltText := req.AltText != nil
+	var altTextVal string
+	if hasAltText {
+		altTextVal = strings.TrimSpace(*req.AltText)
+	}
+
+	ct, err := h.DB.Exec(ctx, `
+		UPDATE emoji_types SET
+		    is_active = CASE WHEN $3 THEN $1 ELSE is_active END,
+		    alt_text  = CASE WHEN $4 THEN $2 ELSE alt_text  END
+		WHERE emojiid = $5
+	`, isActiveVal, altTextVal, hasIsActive, hasAltText, emojiid)
 	if err != nil {
 		slog.Error("AdminUpdateType", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -637,7 +691,9 @@ func (h *EmojisHandler) UploadType(w http.ResponseWriter, r *http.Request, _ htt
 	ctx := r.Context()
 	userID := middleware.MustUserID(ctx)
 	exhibitionID := middleware.ExhibitionID(ctx)
-	if ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermEmojiUpload); err != nil || !ok {
+	// PermEmojiCreate is PLAN2.md Phase 2a's alternate name for
+	// PermEmojiUpload — accepting either keeps existing role grants working.
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermEmojiUpload, permissions.PermEmojiCreate); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "forbidden")
 		return
 	}

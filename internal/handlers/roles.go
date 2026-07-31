@@ -86,7 +86,7 @@ func roleExhibitionID(w http.ResponseWriter, r *http.Request, pool *db.Pool, rol
 }
 
 // GET /api/v1/admin/roles?exhibitionid=&search=&offset=&limit=  (Phase 6h, 6i)
-// Requires: authenticated + (PermAdmin or PermPermissionsAdmin).
+// Requires: authenticated + (PermAdmin or PermPermissionsAdmin or PermRoleView).
 func (h *RolesHandler) List(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	ctx := r.Context()
 	userID, _ := middleware.UserID(ctx)
@@ -94,7 +94,7 @@ func (h *RolesHandler) List(w http.ResponseWriter, r *http.Request, _ httprouter
 	if exhibitionID == "" {
 		exhibitionID = middleware.ExhibitionID(ctx)
 	}
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin); err != nil || !ok {
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleView); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -166,7 +166,7 @@ func (h *RolesHandler) List(w http.ResponseWriter, r *http.Request, _ httprouter
 // POST /api/v1/admin/roles?exhibitionid=  (Phase 6i)
 // Body: {"name": "...", "description": "..."}. Creates a role with an empty
 // permission bundle — permissions are added afterward via AddPermission.
-// Requires: authenticated + (PermAdmin or PermPermissionsAdmin).
+// Requires: authenticated + (PermAdmin or PermPermissionsAdmin or PermRoleCreate).
 func (h *RolesHandler) Create(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	ctx := r.Context()
 	userID, _ := middleware.UserID(ctx)
@@ -174,7 +174,7 @@ func (h *RolesHandler) Create(w http.ResponseWriter, r *http.Request, _ httprout
 	if exhibitionID == "" {
 		exhibitionID = middleware.ExhibitionID(ctx)
 	}
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin); err != nil || !ok {
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleCreate); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -223,7 +223,7 @@ func (h *RolesHandler) Create(w http.ResponseWriter, r *http.Request, _ httprout
 
 // PATCH /api/v1/admin/roles/:roleid  (Phase 6i)
 // Body: any subset of {"name": "...", "description": "..."}
-// Requires: authenticated + (PermAdmin or PermPermissionsAdmin).
+// Requires: authenticated + (PermAdmin or PermPermissionsAdmin or PermRoleModify).
 func (h *RolesHandler) Update(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	ctx := r.Context()
 	roleID := ps.ByName("roleid")
@@ -233,7 +233,7 @@ func (h *RolesHandler) Update(w http.ResponseWriter, r *http.Request, ps httprou
 	if !ok {
 		return
 	}
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin); err != nil || !ok {
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleModify); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -287,7 +287,7 @@ func (h *RolesHandler) Update(w http.ResponseWriter, r *http.Request, ps httprou
 // the role granted — the role_permissions and entity_role_grants cleanup
 // below is proactive hygiene (no dangling rows left referencing a dead
 // role), not a correctness fix.
-// Requires: authenticated + (PermAdmin or PermPermissionsAdmin).
+// Requires: authenticated + (PermAdmin or PermPermissionsAdmin or PermRoleDelete).
 func (h *RolesHandler) Delete(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	ctx := r.Context()
 	roleID := ps.ByName("roleid")
@@ -297,7 +297,7 @@ func (h *RolesHandler) Delete(w http.ResponseWriter, r *http.Request, ps httprou
 	if !ok {
 		return
 	}
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin); err != nil || !ok {
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleDelete); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -337,7 +337,7 @@ func (h *RolesHandler) Delete(w http.ResponseWriter, r *http.Request, ps httprou
 
 // POST /api/v1/admin/roles/:roleid/permissions  (Phase 6i)
 // Body: {"permission": "..."}
-// Requires: authenticated + (PermAdmin or PermPermissionsAdmin).
+// Requires: authenticated + (PermAdmin or PermPermissionsAdmin or PermRoleModify).
 func (h *RolesHandler) AddPermission(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	ctx := r.Context()
 	roleID := ps.ByName("roleid")
@@ -347,7 +347,7 @@ func (h *RolesHandler) AddPermission(w http.ResponseWriter, r *http.Request, ps 
 	if !ok {
 		return
 	}
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin); err != nil || !ok {
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleModify); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -378,7 +378,7 @@ func (h *RolesHandler) AddPermission(w http.ResponseWriter, r *http.Request, ps 
 }
 
 // DELETE /api/v1/admin/roles/:roleid/permissions/:permission  (Phase 6i)
-// Requires: authenticated + (PermAdmin or PermPermissionsAdmin).
+// Requires: authenticated + (PermAdmin or PermPermissionsAdmin or PermRoleModify).
 func (h *RolesHandler) RemovePermission(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	ctx := r.Context()
 	roleID := ps.ByName("roleid")
@@ -389,7 +389,7 @@ func (h *RolesHandler) RemovePermission(w http.ResponseWriter, r *http.Request, 
 	if !ok {
 		return
 	}
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin); err != nil || !ok {
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleModify); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -409,7 +409,7 @@ func (h *RolesHandler) RemovePermission(w http.ResponseWriter, r *http.Request, 
 // Returns every known permission, grouped for display — populates the roles
 // admin page's permission checkbox grid. Static data; still gated behind
 // admin auth for consistency with every other /api/v1/admin/* endpoint.
-// Requires: authenticated + (PermAdmin or PermPermissionsAdmin).
+// Requires: authenticated + (PermAdmin or PermPermissionsAdmin or PermRoleView).
 func (h *RolesHandler) PermissionCatalog(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	ctx := r.Context()
 	userID, _ := middleware.UserID(ctx)
@@ -417,7 +417,7 @@ func (h *RolesHandler) PermissionCatalog(w http.ResponseWriter, r *http.Request,
 	if exhibitionID == "" {
 		exhibitionID = middleware.ExhibitionID(ctx)
 	}
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin); err != nil || !ok {
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleView); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}

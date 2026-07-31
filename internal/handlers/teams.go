@@ -62,7 +62,7 @@ func teamExhibitionID(w http.ResponseWriter, r *http.Request, pool *db.Pool, tea
 }
 
 // GET /api/v1/admin/teams?exhibitionid=&search=&offset=&limit=  (Phase 6f)
-// Requires: authenticated + (PermAdmin or PermTeamAdmin).
+// Requires: authenticated + (PermAdmin or PermTeamAdmin or PermTeamView).
 func (h *TeamsHandler) List(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	ctx := r.Context()
 	userID, _ := middleware.UserID(ctx)
@@ -70,7 +70,7 @@ func (h *TeamsHandler) List(w http.ResponseWriter, r *http.Request, _ httprouter
 	if exhibitionID == "" {
 		exhibitionID = middleware.ExhibitionID(ctx)
 	}
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermTeamAdmin); err != nil || !ok {
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermTeamAdmin, permissions.PermTeamView); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -145,7 +145,7 @@ func (h *TeamsHandler) List(w http.ResponseWriter, r *http.Request, _ httprouter
 
 // POST /api/v1/admin/teams?exhibitionid=  (Phase 6f)
 // Body: {"name": "...", "description": "..."}
-// Requires: authenticated + (PermAdmin or PermTeamAdmin).
+// Requires: authenticated + (PermAdmin or PermTeamAdmin or PermTeamCreate).
 func (h *TeamsHandler) Create(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	ctx := r.Context()
 	userID, _ := middleware.UserID(ctx)
@@ -153,7 +153,7 @@ func (h *TeamsHandler) Create(w http.ResponseWriter, r *http.Request, _ httprout
 	if exhibitionID == "" {
 		exhibitionID = middleware.ExhibitionID(ctx)
 	}
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermTeamAdmin); err != nil || !ok {
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermTeamAdmin, permissions.PermTeamCreate); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -197,7 +197,7 @@ func (h *TeamsHandler) Create(w http.ResponseWriter, r *http.Request, _ httprout
 
 // PATCH /api/v1/admin/teams/:teamid  (Phase 6f)
 // Body: any subset of {"name": "...", "description": "..."}
-// Requires: authenticated + (PermAdmin or PermTeamAdmin).
+// Requires: authenticated + (PermAdmin or PermTeamAdmin or PermTeamModify).
 func (h *TeamsHandler) Update(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	ctx := r.Context()
 	teamID := ps.ByName("teamid")
@@ -207,7 +207,7 @@ func (h *TeamsHandler) Update(w http.ResponseWriter, r *http.Request, ps httprou
 	if !ok {
 		return
 	}
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermTeamAdmin); err != nil || !ok {
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermTeamAdmin, permissions.PermTeamModify); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -256,7 +256,7 @@ func (h *TeamsHandler) Update(w http.ResponseWriter, r *http.Request, ps httprou
 // alone and does not itself check teams.deleted_at (see
 // internal/permissions/permissions.go) — leaving either behind would let a
 // "deleted" team keep conferring permissions.
-// Requires: authenticated + (PermAdmin or PermTeamAdmin).
+// Requires: authenticated + (PermAdmin or PermTeamAdmin or PermTeamDelete).
 func (h *TeamsHandler) Delete(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	ctx := r.Context()
 	teamID := ps.ByName("teamid")
@@ -266,7 +266,7 @@ func (h *TeamsHandler) Delete(w http.ResponseWriter, r *http.Request, ps httprou
 	if !ok {
 		return
 	}
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermTeamAdmin); err != nil || !ok {
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermTeamAdmin, permissions.PermTeamDelete); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -305,7 +305,7 @@ func (h *TeamsHandler) Delete(w http.ResponseWriter, r *http.Request, ps httprou
 }
 
 // GET /api/v1/admin/teams/:teamid/members  (Phase 6f)
-// Requires: authenticated + (PermAdmin or PermTeamAdmin).
+// Requires: authenticated + (PermAdmin or PermTeamAdmin or PermTeamView).
 func (h *TeamsHandler) ListMembers(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	ctx := r.Context()
 	teamID := ps.ByName("teamid")
@@ -315,7 +315,7 @@ func (h *TeamsHandler) ListMembers(w http.ResponseWriter, r *http.Request, ps ht
 	if !ok {
 		return
 	}
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermTeamAdmin); err != nil || !ok {
+	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermTeamAdmin, permissions.PermTeamView); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -354,7 +354,7 @@ func (h *TeamsHandler) ListMembers(w http.ResponseWriter, r *http.Request, ps ht
 }
 
 // POST /api/v1/admin/teams/:teamid/members?userid=  (Phase 6f)
-// Requires: authenticated + (PermAdmin or PermTeamAdmin).
+// Requires: authenticated + (PermAdmin or PermTeamAdmin or PermTeamModify).
 func (h *TeamsHandler) AddMember(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	ctx := r.Context()
 	teamID := ps.ByName("teamid")
@@ -369,7 +369,7 @@ func (h *TeamsHandler) AddMember(w http.ResponseWriter, r *http.Request, ps http
 	if !ok {
 		return
 	}
-	if ok, err := h.Checker.HasAny(ctx, callerUserID, exhibitionID, permissions.PermAdmin, permissions.PermTeamAdmin); err != nil || !ok {
+	if ok, err := h.Checker.HasAny(ctx, callerUserID, exhibitionID, permissions.PermAdmin, permissions.PermTeamAdmin, permissions.PermTeamModify); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -387,7 +387,7 @@ func (h *TeamsHandler) AddMember(w http.ResponseWriter, r *http.Request, ps http
 }
 
 // DELETE /api/v1/admin/teams/:teamid/members/:userid  (Phase 6f)
-// Requires: authenticated + (PermAdmin or PermTeamAdmin).
+// Requires: authenticated + (PermAdmin or PermTeamAdmin or PermTeamModify).
 func (h *TeamsHandler) RemoveMember(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	ctx := r.Context()
 	teamID := ps.ByName("teamid")
@@ -398,7 +398,7 @@ func (h *TeamsHandler) RemoveMember(w http.ResponseWriter, r *http.Request, ps h
 	if !ok {
 		return
 	}
-	if ok, err := h.Checker.HasAny(ctx, callerUserID, exhibitionID, permissions.PermAdmin, permissions.PermTeamAdmin); err != nil || !ok {
+	if ok, err := h.Checker.HasAny(ctx, callerUserID, exhibitionID, permissions.PermAdmin, permissions.PermTeamAdmin, permissions.PermTeamModify); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
