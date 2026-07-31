@@ -294,6 +294,27 @@ func CreateDisplay(t *testing.T, pool *db.Pool, galleryID string) string {
 	return id
 }
 
+// PlacePhotoInSlot inserts a display_slots row putting photoID into slot 0
+// of displayID (PLAN2.md Phase 2d — indirect PhotoView resolution via
+// DisplayView/GalleryView correlates against this table; see
+// internal/handlers/fetch.go's photoAccessibleViaDisplaySQL). No handler
+// exposes a plain "put this photo in this slot" endpoint in a single call
+// (DisplaysHandler's SlotUpdate does, but pulling in the full handler/HTTP
+// plumbing just to seed a fixture would be more indirection than the direct
+// insert below), so this writes the row directly, mirroring the same
+// direct-SQL-fixture pattern already used elsewhere in this package (e.g.
+// CreateEmojiType's variant rows in labels/emojis tests).
+func PlacePhotoInSlot(t *testing.T, pool *db.Pool, displayID, photoID string) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(), `
+		INSERT INTO display_slots (displayid, slot_index, photoid)
+		VALUES ($1::uuid, 0, $2::uuid)
+	`, displayID, photoID)
+	if err != nil {
+		t.Fatalf("testutil.PlacePhotoInSlot: %v", err)
+	}
+}
+
 // CreateTeam inserts a team within exhibitionID and returns its teamid.
 func CreateTeam(t *testing.T, pool *db.Pool, exhibitionID string) string {
 	t.Helper()

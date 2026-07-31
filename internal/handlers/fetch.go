@@ -52,6 +52,82 @@ func photoIsPublicSQL(photoIDExpr string) string {
 	)`, photoIDExpr)
 }
 
+// photoAccessibleViaDisplaySQL returns a boolean SQL expression that's TRUE
+// when the caller identified by userIDExpr holds DisplayView or GalleryView
+// — scoped to a display containing the photo, that display's gallery, its
+// exhibition, its organization, or globally — for at least one non-deleted
+// display currently showing the photo identified by photoIDExpr.
+//
+// PLAN2.md Phase 2d ("Photo access resolution: indirect grants via
+// display/gallery View permissions"; TODO2.md: "DisplayView grants
+// PhotoView for all photos used within the displays for which the
+// permission is granted" / "GalleryView grants PhotoView for all photos
+// used within displays within the galleries for which the permission is
+// granted"). DisplayView and GalleryView are checked independently — a
+// grant of one does not imply the other (see Checker.Check's own doc);
+// either is independently sufficient here because both TODO2.md bullets
+// independently promise a PhotoView cascade.
+//
+// This mirrors Checker.Check's own Global → Organization → Exhibition →
+// Gallery → Display resolution chain (see permissions.go) but correlates
+// against display_slots instead of one fixed galleryID/resourceRef pair,
+// since a photo can appear in several displays/galleries at once and any
+// single one granting access is enough. NULLIF(userIDExpr, '')::uuid
+// mirrors Checker.Check's own team-membership subquery cast — safe here for
+// the same reason it's safe there: userIDExpr is always also used elsewhere
+// in the same overall query as a plain text comparison (the owner-exception
+// clause every call site already has), so Postgres infers its parameter
+// type as text, not uuid, and this is just an explicit, NULLIF-guarded
+// runtime cast rather than a native uuid-typed bind parameter (see
+// nullableUUID's doc in permissions.go for why that distinction matters).
+//
+// This is an alternative path to holding PhotoView directly, not to
+// PrivatePhotoView — a photo found accessible this way is still separately
+// gated by the Public-label/PrivatePhotoView check every visibility call
+// site already applies (see the permissions package doc's "Photo
+// visibility" section). Checked once per candidate photo row, so this is
+// necessarily more expensive than the single-boolean PermPhotoView check;
+// migrations/023_display_slots_photoid_index.sql adds the supporting index.
+func photoAccessibleViaDisplaySQL(photoIDExpr, userIDExpr string) string {
+	return fmt.Sprintf(`EXISTS (
+	    SELECT 1
+	    FROM   display_slots     ds
+	    JOIN   displays           d   ON d.displayid   = ds.displayid AND d.deleted_at IS NULL
+	    JOIN   galleries          g   ON g.galleryid   = d.galleryid  AND g.deleted_at  IS NULL
+	    LEFT   JOIN exhibitions   ex  ON ex.exhibitionid = g.exhibitionid
+	    JOIN   entity_role_grants erg ON TRUE
+	    JOIN   role_permissions   rp  ON rp.roleid = erg.roleid
+	    JOIN   roles               r  ON r.roleid  = erg.roleid AND r.deleted_at IS NULL
+	    WHERE  ds.photoid = %[1]s
+	      AND  (
+	               erg.entity_type = 'Public'
+	            OR (%[2]s <> '' AND erg.entity_type = 'LoggedIn')
+	            OR (%[2]s <> '' AND erg.entity_type = 'User' AND erg.entity_ref = %[2]s)
+	            OR (%[2]s <> '' AND erg.entity_type = 'Team'
+	                             AND erg.entity_ref IN (
+	                                     SELECT teamid::text
+	                                     FROM   team_members
+	                                     WHERE  userid = NULLIF(%[2]s, '')::uuid
+	                                 ))
+	           )
+	      AND  (
+	               (rp.permission = 'DisplayView' AND (
+	                        (erg.resource_type = 'Display' AND erg.resource_ref = d.displayid::text)
+	                     OR (erg.resource_type = 'Gallery' AND erg.resource_ref = g.galleryid::text)
+	                     OR (erg.exhibitionid = g.exhibitionid AND erg.resource_type IS NULL)
+	                     OR (erg.organizationid IS NOT NULL AND erg.organizationid = ex.organizationid)
+	                     OR (erg.exhibitionid IS NULL AND erg.resource_type IS NULL AND erg.organizationid IS NULL)
+	               ))
+	            OR (rp.permission = 'GalleryView' AND (
+	                        (erg.resource_type = 'Gallery' AND erg.resource_ref = g.galleryid::text)
+	                     OR (erg.exhibitionid = g.exhibitionid AND erg.resource_type IS NULL)
+	                     OR (erg.organizationid IS NOT NULL AND erg.organizationid = ex.organizationid)
+	                     OR (erg.exhibitionid IS NULL AND erg.resource_type IS NULL AND erg.organizationid IS NULL)
+	               ))
+	           )
+	)`, photoIDExpr, userIDExpr)
+}
+
 // fetchLabels returns a page of labels for a photo plus the total count.
 func fetchLabels(ctx context.Context, pool *db.Pool, photoid string, offset, limit int) ([]models.Label, int, error) {
 	// total count
@@ -175,10 +251,11 @@ func fetchEmojiUsers(ctx context.Context, pool *db.Pool, photoid, emojiid string
 }
 
 // fetchRelated returns all related photos for a given photo, scoped to the exhibition.
-// canSeePrivate and hasPhotoView together gate visibility per the
-// permissions package doc's "Photo visibility" section; currentUserID
-// additionally always includes the caller's own photos (see the owner
-// exception in PhotoHandler.ServeHTTP for why).
+// canSeePrivate and hasPhotoView (held directly or indirectly via a
+// DisplayView/GalleryView grant — PLAN2.md Phase 2d) together gate
+// visibility per the permissions package doc's "Photo visibility" section;
+// currentUserID additionally always includes the caller's own photos (see
+// the owner exception in PhotoHandler.ServeHTTP for why).
 func fetchRelated(ctx context.Context, pool *db.Pool, photoid, exhibitionID string, canSeePrivate, hasPhotoView bool, currentUserID string) ([]models.RelatedPhoto, error) {
 	rows, err := pool.Query(ctx, fmt.Sprintf(`
 		SELECT rp.related_photoid::text,
@@ -190,9 +267,9 @@ func fetchRelated(ctx context.Context, pool *db.Pool, photoid, exhibitionID stri
 		WHERE  rp.photoid = $1
 		  AND  p.deleted_at IS NULL
 		  AND  ($2 = '' OR p.exhibitionid::text = $2)
-		  AND  (($4 <> '' AND p.owner_userid::text = $4) OR ($5 AND (%s OR $3)))
+		  AND  (($4 <> '' AND p.owner_userid::text = $4) OR (($5 OR %s) AND (%s OR $3)))
 		ORDER  BY rp.sort_order
-	`, photoIsPublicSQL("p.photoid")), photoid, exhibitionID, canSeePrivate, currentUserID, hasPhotoView)
+	`, photoAccessibleViaDisplaySQL("p.photoid", "$4"), photoIsPublicSQL("p.photoid")), photoid, exhibitionID, canSeePrivate, currentUserID, hasPhotoView)
 	if err != nil {
 		return nil, err
 	}
@@ -212,10 +289,11 @@ func fetchRelated(ctx context.Context, pool *db.Pool, photoid, exhibitionID stri
 
 // fetchRelatedByLabel returns up to 8 photos that share the same label name+value
 // as the given labelID, excluding the current photo, scoped to the exhibition.
-// canSeePrivate and hasPhotoView together gate visibility per the
-// permissions package doc's "Photo visibility" section; currentUserID
-// additionally always includes the caller's own photos (see the owner
-// exception in PhotoHandler.ServeHTTP for why).
+// canSeePrivate and hasPhotoView (held directly or indirectly via a
+// DisplayView/GalleryView grant — PLAN2.md Phase 2d) together gate
+// visibility per the permissions package doc's "Photo visibility" section;
+// currentUserID additionally always includes the caller's own photos (see
+// the owner exception in PhotoHandler.ServeHTTP for why).
 func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID, exhibitionID string, canSeePrivate, hasPhotoView bool, currentUserID string) ([]models.RelatedPhoto, error) {
 	rows, err := pool.Query(ctx, fmt.Sprintf(`
 		WITH label_info AS (
@@ -230,7 +308,7 @@ func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID, e
 			  AND  p.deleted_at IS NULL
 			  AND  l.deleted_at IS NULL
 			  AND  ($3 = '' OR p.exhibitionid::text = $3)
-			  AND  (($5 <> '' AND p.owner_userid::text = $5) OR ($6 AND (%s OR $4)))
+			  AND  (($5 <> '' AND p.owner_userid::text = $5) OR (($6 OR %s) AND (%s OR $4)))
 		),
 		top_ten AS (
 			SELECT * FROM candidates ORDER BY view_count DESC LIMIT 10
@@ -244,7 +322,7 @@ func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID, e
 		SELECT photoid, image_url, image_width, image_height FROM random_three
 		UNION ALL
 		SELECT photoid, image_url, image_width, image_height FROM top_ten
-	`, photoIsPublicSQL("p.photoid")), labelID, photoid, exhibitionID, canSeePrivate, currentUserID, hasPhotoView)
+	`, photoAccessibleViaDisplaySQL("p.photoid", "$5"), photoIsPublicSQL("p.photoid")), labelID, photoid, exhibitionID, canSeePrivate, currentUserID, hasPhotoView)
 	if err != nil {
 		return nil, err
 	}

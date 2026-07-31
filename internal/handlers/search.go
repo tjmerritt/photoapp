@@ -150,10 +150,12 @@ func parseSearchQuery(raw string) parsedQuery {
 //	     find it in search even when it's private and they lack
 //	     PhotoView/PrivatePhotoView (see the owner exception in the WHERE
 //	     clause below).
-//	$4 = hasPhotoView bool (true when caller holds PhotoView — see the
-//	     permissions package doc's "Photo visibility" section; required,
+//	$4 = hasPhotoView bool (true when caller holds PhotoView directly — see
+//	     the permissions package doc's "Photo visibility" section; required,
 //	     together with canSeePrivate or being Public-labeled, to see any
-//	     photo except one's own).
+//	     photo except one's own. The WHERE clause below additionally checks
+//	     photoAccessibleViaDisplaySQL per-row as an alternative to $4, for
+//	     PLAN2.md Phase 2d's indirect DisplayView/GalleryView grants).
 //
 // Additional parameters are appended dynamically starting at $5.
 func buildSearchSQL(pq parsedQuery, exhibitionID string, canSeePrivate bool, currentUserID string, hasPhotoView bool) (string, []interface{}) {
@@ -307,7 +309,8 @@ scores(photoid, total_score) AS (
 	// ── WHERE ─────────────────────────────────────────────────────────────────
 	b.WriteString("WHERE p.deleted_at IS NULL\n")
 	b.WriteString("  AND ($1 = '' OR p.exhibitionid::text = $1)\n")
-	fmt.Fprintf(&b, "  AND (($3 <> '' AND p.owner_userid::text = $3) OR ($4 AND (%s OR $2)))\n", photoIsPublicSQL("p.photoid"))
+	fmt.Fprintf(&b, "  AND (($3 <> '' AND p.owner_userid::text = $3) OR (($4 OR %s) AND (%s OR $2)))\n",
+		photoAccessibleViaDisplaySQL("p.photoid", "$3"), photoIsPublicSQL("p.photoid"))
 
 	for _, tt := range pq.TitleTexts {
 		ta := next(tt)

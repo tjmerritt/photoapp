@@ -219,6 +219,32 @@ func TestCreateDisplay(t *testing.T) {
 	}
 }
 
+func TestPlacePhotoInSlot(t *testing.T) {
+	pool := RequireDB(t)
+	exhibitionID := CreateExhibition(t, pool)
+	owner := CreateUser(t, pool)
+	photoID := CreatePhoto(t, pool, exhibitionID, owner)
+	galleryID := CreateGallery(t, pool, exhibitionID)
+	displayID := CreateDisplay(t, pool, galleryID)
+
+	PlacePhotoInSlot(t, pool, displayID, photoID)
+
+	var gotPhotoID string
+	var gotSlotIndex int
+	err := pool.QueryRow(context.Background(),
+		`SELECT photoid::text, slot_index FROM display_slots WHERE displayid = $1::uuid`, displayID,
+	).Scan(&gotPhotoID, &gotSlotIndex)
+	if err != nil {
+		t.Fatalf("querying back the row PlacePhotoInSlot claims to have inserted: %v", err)
+	}
+	if gotPhotoID != photoID {
+		t.Errorf("photoid = %q, want %q", gotPhotoID, photoID)
+	}
+	if gotSlotIndex != 0 {
+		t.Errorf("slot_index = %d, want 0", gotSlotIndex)
+	}
+}
+
 func TestCreateTeam(t *testing.T) {
 	pool := RequireDB(t)
 	exhibitionID := CreateExhibition(t, pool)

@@ -173,6 +173,110 @@ func TestListPhotosHandler_PrivateIncludedWithGrant(t *testing.T) {
 	}
 }
 
+// ── PLAN2.md Phase 2d: indirect PhotoView via DisplayView/GalleryView ───────
+
+func TestListPhotosHandler_PrivateVisibleViaDisplayViewGrant(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.ListPhotosHandler{DB: env.Pool, Checker: env.Checker}
+
+	exhibitionID := testutil.CreateExhibition(t, env.Pool)
+	owner := testutil.CreateUser(t, env.Pool)
+	viewer := testutil.CreateUser(t, env.Pool)
+	photoID := testutil.CreatePhoto(t, env.Pool, exhibitionID, owner) // private
+
+	galleryID := testutil.CreateGallery(t, env.Pool, exhibitionID)
+	displayID := testutil.CreateDisplay(t, env.Pool, galleryID)
+	testutil.PlacePhotoInSlot(t, env.Pool, displayID, photoID)
+
+	// DisplayView scoped to this one specific display (not PhotoView, and
+	// not an exhibition-wide grant) plus PrivatePhotoView -- neither alone
+	// is enough (see TestListPhotosHandler_DisplayViewAlone_InsufficientForPrivatePhoto
+	// below), but together they satisfy the PhotoView-equivalent half and
+	// the private-access half of the combined visibility rule.
+	role := testutil.CreateRole(t, env.Pool, exhibitionID, "DisplayViewer", permissions.PermDisplayView, permissions.PermPrivatePhotoView)
+	testutil.Grant(t, env.Pool, role, testutil.GrantOptions{
+		EntityType: permissions.EntityUser, EntityRef: viewer,
+		ResourceType: permissions.ResourceDisplay, ResourceRef: displayID,
+	})
+
+	rec := doRequest(t, http.MethodGet, "/api/v1/photos", viewer, exhibitionID, nil, nil, h.ServeHTTP)
+	var resp models.PhotoListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 1 || len(resp.Photos) != 1 || resp.Photos[0].PhotoID != photoID {
+		t.Fatalf("got %+v, want the photo visible via its display's DisplayView grant", resp)
+	}
+}
+
+func TestListPhotosHandler_PrivateVisibleViaGalleryViewGrant(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.ListPhotosHandler{DB: env.Pool, Checker: env.Checker}
+
+	exhibitionID := testutil.CreateExhibition(t, env.Pool)
+	owner := testutil.CreateUser(t, env.Pool)
+	viewer := testutil.CreateUser(t, env.Pool)
+	photoID := testutil.CreatePhoto(t, env.Pool, exhibitionID, owner) // private
+
+	galleryID := testutil.CreateGallery(t, env.Pool, exhibitionID)
+	displayID := testutil.CreateDisplay(t, env.Pool, galleryID)
+	testutil.PlacePhotoInSlot(t, env.Pool, displayID, photoID)
+
+	// GalleryView scoped to the gallery containing the display (not
+	// DisplayView, and not PhotoView) plus PrivatePhotoView -- TODO2.md's
+	// "GalleryView grants PhotoView for all photos used within displays
+	// within the galleries for which the permission is granted".
+	role := testutil.CreateRole(t, env.Pool, exhibitionID, "GalleryViewer", permissions.PermGalleryView, permissions.PermPrivatePhotoView)
+	testutil.Grant(t, env.Pool, role, testutil.GrantOptions{
+		EntityType: permissions.EntityUser, EntityRef: viewer,
+		ResourceType: permissions.ResourceGallery, ResourceRef: galleryID,
+	})
+
+	rec := doRequest(t, http.MethodGet, "/api/v1/photos", viewer, exhibitionID, nil, nil, h.ServeHTTP)
+	var resp models.PhotoListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 1 || len(resp.Photos) != 1 || resp.Photos[0].PhotoID != photoID {
+		t.Fatalf("got %+v, want the photo visible via its gallery's GalleryView grant", resp)
+	}
+}
+
+func TestListPhotosHandler_DisplayViewAlone_InsufficientForPrivatePhoto(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.ListPhotosHandler{DB: env.Pool, Checker: env.Checker}
+
+	exhibitionID := testutil.CreateExhibition(t, env.Pool)
+	owner := testutil.CreateUser(t, env.Pool)
+	viewer := testutil.CreateUser(t, env.Pool)
+	photoID := testutil.CreatePhoto(t, env.Pool, exhibitionID, owner) // private
+
+	galleryID := testutil.CreateGallery(t, env.Pool, exhibitionID)
+	displayID := testutil.CreateDisplay(t, env.Pool, galleryID)
+	testutil.PlacePhotoInSlot(t, env.Pool, displayID, photoID)
+
+	// DisplayView on the display containing the photo, but no
+	// PrivatePhotoView anywhere and the photo isn't Public-labeled. The
+	// indirect DisplayView/GalleryView path is an alternative way to satisfy
+	// PhotoView, not a bypass of the separate Public-label/PrivatePhotoView
+	// gate (see permissions package doc's "Photo visibility" section) -- the
+	// photo must stay invisible.
+	role := testutil.CreateRole(t, env.Pool, exhibitionID, "DisplayViewer", permissions.PermDisplayView)
+	testutil.Grant(t, env.Pool, role, testutil.GrantOptions{
+		EntityType: permissions.EntityUser, EntityRef: viewer,
+		ResourceType: permissions.ResourceDisplay, ResourceRef: displayID,
+	})
+
+	rec := doRequest(t, http.MethodGet, "/api/v1/photos", viewer, exhibitionID, nil, nil, h.ServeHTTP)
+	var resp models.PhotoListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Total != 0 {
+		t.Fatalf("Total = %d, want 0 (DisplayView alone doesn't bypass the private-photo gate)", resp.Total)
+	}
+}
+
 // ── UserHandler (GET /api/v1/user) ───────────────────────────────────────────
 
 func TestUserHandler_Found(t *testing.T) {

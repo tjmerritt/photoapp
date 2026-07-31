@@ -107,41 +107,64 @@
 // performed. Ownership checks (e.g. "can only modify your own label") are
 // enforced in the handler after the permission check passes.
 //
-// # Photo visibility (PLAN2.md Phase 2a enforcement, Session 30)
+// # Photo visibility (PLAN2.md Phase 2a enforcement Session 30, Phase 2d Session 31)
 //
 // A photo is visible to a caller if, and only if:
 //
 //	caller is the photo's owner
-//	OR (caller holds PhotoView AND (photo has a Public/True label OR caller holds PrivatePhotoView))
+//	OR (
+//	      (caller holds PhotoView directly (exhibition/org/global — Session 30)
+//	       OR caller holds DisplayView or GalleryView covering a display
+//	          currently showing the photo (Session 31, see
+//	          internal/handlers/fetch.go's photoAccessibleViaDisplaySQL))
+//	      AND (photo has a Public/True label OR caller holds PrivatePhotoView)
+//	    )
 //
-// PhotoView and PrivatePhotoView are deliberately separate: PhotoView is the
-// blanket "can browse photos in this exhibition at all" gate, and
+// PhotoView and PrivatePhotoView are deliberately separate: PhotoView (direct
+// or indirect) is the "can browse these photos at all" gate, and
 // PrivatePhotoView additionally lifts the Public-label requirement for
-// someone who already holds PhotoView. Holding PrivatePhotoView alone,
-// without PhotoView, grants nothing — this mirrors PLAN2.md's own listing,
-// where PhotoView is a distinct, separately-grantable permission from
-// PrivatePhotoView, not implied by it.
+// someone who already clears that gate. Holding PrivatePhotoView alone,
+// without PhotoView (directly or indirectly), grants nothing — this mirrors
+// PLAN2.md's own listing, where PhotoView is a distinct, separately-
+// grantable permission from PrivatePhotoView, not implied by it.
 //
-// The owner exception exists independently of both permissions so that a
+// The indirect DisplayView/GalleryView path (PLAN2.md Phase 2d; TODO2.md:
+// "DisplayView grants PhotoView for all photos used within the displays for
+// which the permission is granted" / "GalleryView grants PhotoView for all
+// photos used within displays within the galleries for which the permission
+// is granted") is an alternative way to satisfy the same PhotoView gate, not
+// a separate visibility path — a photo reachable this way is still gated by
+// the same Public-label/PrivatePhotoView check as everything else. Either
+// DisplayView or GalleryView independently suffices; holding one does not
+// imply the other (see Check's own doc — they're resolved as distinct
+// permission strings with their own scope chains).
+//
+// The owner exception exists independently of all of the above so that a
 // user who just uploaded a photo (PhotoCreate) can always see their own
 // upload immediately, even in an exhibition where nobody has granted them
-// PhotoView yet.
+// any form of PhotoView yet.
 //
 // This check is applied at exactly four call sites — PhotoHandler.ServeHTTP,
 // ListPhotosHandler.ServeHTTP, fetchRelated/fetchRelatedByLabel, and
 // SearchHandler's buildSearchSQL — the same set that already applied the
-// Public-label/PrivatePhotoView check before PhotoView existed. It is
-// checked once per request as a single global/exhibition-level boolean via
-// Checker.Check, the same granularity PrivatePhotoView has always used —
-// NOT per-photo. A grant scoped to one specific Photo resource (or the
-// indirect Display/GalleryView → PhotoView cascade TODO2.md describes) is
-// Phase 2c/2d's job, not this pass's.
+// Public-label/PrivatePhotoView check before PhotoView existed. The direct
+// check is a single global/exhibition-level boolean via Checker.Check, the
+// same granularity PrivatePhotoView has always used; the indirect check is
+// necessarily per-photo (a correlated EXISTS against display_slots), since a
+// Display/Gallery-scoped grant only covers the specific photos currently
+// placed in that display/gallery, not every photo in the exhibition. A
+// grant scoped to one specific Photo resource directly (as opposed to via a
+// Display/Gallery it happens to appear in) is Phase 2c's job — parked
+// indefinitely per the user's own call, since it will fall out of Phase 3c's
+// label-based dynamic groups instead of being built standalone.
 //
-// Because of this, any exhibition with nobody holding PhotoView has no
+// Because of this, any exhibition with nobody holding PhotoView (directly or
+// via a Display/Gallery grant covering photos actually on display) has no
 // photos visible to anyone but each photo's own owner — every install must
-// grant PhotoView to whichever entities should be able to browse photos at
-// all. scripts/seed-exhibition.sh's Viewer and Contributor roles both
-// include it for exactly this reason.
+// grant PhotoView (or DisplayView/GalleryView on the relevant
+// displays/galleries) to whichever entities should be able to browse photos
+// at all. scripts/seed-exhibition.sh's Viewer and Contributor roles both
+// include PhotoView directly for exactly this reason.
 package permissions
 
 import (
@@ -197,10 +220,14 @@ const (
 	// PrivatePhotoView) to see any photo except one's own upload. See the
 	// package doc's "Photo visibility" section above for the exact rule and
 	// SUMMARIES2.md Sessions 25 (defined, deliberately unenforced), 27
-	// (is_public → Public label), and 30 (this permission's enforcement).
-	// Checked as a single global/exhibition-level boolean, the same
-	// granularity PrivatePhotoView uses — NOT resolved per-resource via
-	// Display/GalleryView grants, which remains Phase 2d's job.
+	// (is_public → Public label), 30 (direct enforcement), and 31 (indirect
+	// resolution via DisplayView/GalleryView). Direct grants are checked as
+	// a single global/exhibition-level boolean, the same granularity
+	// PrivatePhotoView uses; DisplayView/GalleryView grants scoped to a
+	// specific display/gallery are additionally resolved per-photo (see
+	// internal/handlers/fetch.go's photoAccessibleViaDisplaySQL) — a grant
+	// scoped to one specific Photo resource directly is Phase 2c's job,
+	// parked indefinitely in favor of Phase 3c's label-based dynamic groups.
 	PermPhotoView              = "PhotoView"
 	PermPhotoCreate            = "PhotoCreate"            // upload a new photo
 	PermPhotoDelete            = "PhotoDelete"            // delete a photo
