@@ -279,7 +279,15 @@ func main() {
 			},
 			label{
 				name: "Public",
-				value: fmt.Sprintf("%v", isPublic),
+				// PLAN2.md Phase 2b: "Public"/"True" or "Public"/"False" is
+				// the sole source of truth for photo visibility now (see
+				// internal/handlers/fetch.go's photoIsPublicSQL) -- must be
+				// capitalized to match that exact-match comparison and the
+				// casing every other write path uses (SetPublic, the
+				// browser upload endpoint). fmt.Sprintf("%v", isPublic)
+				// would produce lowercase "true"/"false" here instead,
+				// silently never matching.
+				value: map[bool]string{true: "True", false: "False"}[isPublic],
 			},
 		}
 		allLabels := mergeLabels(exifLabels, computedLabels)
@@ -324,7 +332,6 @@ func main() {
 			width:        w,
 			height:       h,
 			labels:       allLabels,
-			isPublic:     isPublic,
 		})
 		if err != nil {
 			slog.Warn("skipping URL", "url", rawURL, "error", err)
@@ -357,7 +364,6 @@ type upsertParams struct {
 	width        int
 	height       int
 	labels       []label
-	isPublic     bool
 }
 
 // upsertPhoto either inserts a new photo or, when hintID is supplied and the
@@ -387,13 +393,16 @@ func upsertPhoto(ctx context.Context, pool *pgxpool.Pool, p upsertParams) (strin
 		}
 	}
 
-	// Insert new photo.
+	// Insert new photo. Visibility is carried entirely by the "Public" label
+	// in p.labels (written below via replaceLabels) -- there is no
+	// photos.is_public column anymore (PLAN2.md Phase 2b,
+	// migrations/022_drop_is_public.sql).
 	var photoID string
 	err := pool.QueryRow(ctx, `
-		INSERT INTO photos (owner_userid, image_url, image_width, image_height, title_text, title_userid, exhibitionid, is_public)
-		VALUES ($1, $2, $3, $4, $5, $1, NULLIF($6,'')::uuid, $7)
+		INSERT INTO photos (owner_userid, image_url, image_width, image_height, title_text, title_userid, exhibitionid)
+		VALUES ($1, $2, $3, $4, $5, $1, NULLIF($6,'')::uuid)
 		RETURNING photoid::text
-	`, p.ownerID, p.rawURL, p.width, p.height, p.title, p.exhibitionID, p.isPublic).Scan(&photoID)
+	`, p.ownerID, p.rawURL, p.width, p.height, p.title, p.exhibitionID).Scan(&photoID)
 	if err != nil {
 		return "", "", fmt.Errorf("inserting photo: %w", err)
 	}

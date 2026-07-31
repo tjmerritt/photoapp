@@ -1,5 +1,13 @@
 -- scripts/sync_public_labels.sql
 --
+-- HISTORICAL — superseded by migrations/022_drop_is_public.sql (PLAN2.md
+-- Phase 2b), which folded this exact logic into its own backfill step and
+-- then dropped photos.is_public entirely. This script references that
+-- column and can no longer run once migration 022 has. Kept for the commit
+-- history / as a record of how production's data was verified consistent
+-- before the column was dropped — do not run this against a migrated
+-- database.
+--
 -- Ensures the "Public" label in the labels table is consistent with each
 -- photo's is_public flag.
 --

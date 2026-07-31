@@ -153,18 +153,20 @@ const (
 const (
 	// PermPhotoView is PLAN2.md Phase 2a's general "can view this photo"
 	// permission. Defined but NOT YET ENFORCED anywhere: today's actual
-	// photo-visibility gate is still the is_public column (see photo.go),
-	// and Phase 2b removes is_public in favor of a "Public" label while
-	// Phase 2d builds the direct + indirect (via DisplayView/GalleryView)
-	// grant resolution PhotoView needs before it can safely replace that
-	// check — flipping photo.go over to require PhotoView now, ahead of
-	// either, would make every photo invisible until every install
+	// photo-visibility gate is whether the photo has a "Public"/"True" label
+	// (see fetch.go's photoIsPublicSQL — Phase 2b, migrations/
+	// 022_drop_is_public.sql, replaced the old is_public column with this).
+	// Phase 2d still needs to build the direct + indirect (via
+	// DisplayView/GalleryView) grant resolution PermPhotoView itself needs
+	// before it can safely replace that Public-label check — flipping
+	// photo.go over to require PermPhotoView now, ahead of that, would make
+	// every non-Public-labeled photo invisible until every install
 	// re-granted it. It's defined now so it's valid to add to roles ahead
-	// of that cutover. See SUMMARIES2.md Session 25.
+	// of that cutover. See SUMMARIES2.md Sessions 25, 27.
 	PermPhotoView              = "PhotoView"
 	PermPhotoCreate            = "PhotoCreate"            // upload a new photo
 	PermPhotoDelete            = "PhotoDelete"            // delete a photo
-	PermPrivatePhotoView       = "PrivatePhotoView"        // view photos where is_public = false
+	PermPrivatePhotoView       = "PrivatePhotoView"        // view photos not labeled Public/True
 	PermPhotoDescriptionModify = "PhotoDescriptionModify" // edit a photo's title or description when not the owner
 )
 

@@ -28,6 +28,30 @@ func proxyImageURLPtr(u *string) *string {
 	return &proxied
 }
 
+// photoIsPublicSQL returns a boolean SQL expression that's TRUE exactly when
+// the photo identified by photoIDExpr (e.g. "p.photoid", or bare "photoid"
+// when the query has no alias) is public.
+//
+// PLAN2.md Phase 2b: this replaced the photos.is_public column (dropped by
+// migrations/022_drop_is_public.sql) as the single source of truth for photo
+// visibility. A photo is public iff it has a non-deleted label named
+// "Public" whose value is exactly "True" — the canonical casing every write
+// path uses (admin.go's SetPublic, upload.go, cmd/import-photos); a photo
+// with no such label (never explicitly toggled, or a value of "False") is
+// private, matching is_public's old default-FALSE behavior. See
+// scripts/sync_public_labels.sql (historical — folded into migration 022's
+// backfill) for how existing photos got this label before the column was
+// dropped.
+func photoIsPublicSQL(photoIDExpr string) string {
+	return fmt.Sprintf(`EXISTS (
+	    SELECT 1 FROM labels pub
+	    WHERE  pub.photoid    = %s
+	      AND  pub.name       = 'Public'
+	      AND  pub.value      = 'True'
+	      AND  pub.deleted_at IS NULL
+	)`, photoIDExpr)
+}
+
 // fetchLabels returns a page of labels for a photo plus the total count.
 func fetchLabels(ctx context.Context, pool *db.Pool, photoid string, offset, limit int) ([]models.Label, int, error) {
 	// total count
@@ -155,7 +179,7 @@ func fetchEmojiUsers(ctx context.Context, pool *db.Pool, photoid, emojiid string
 // currentUserID additionally always includes the caller's own photos (see the
 // owner exception in PhotoHandler.ServeHTTP for why).
 func fetchRelated(ctx context.Context, pool *db.Pool, photoid, exhibitionID string, canSeePrivate bool, currentUserID string) ([]models.RelatedPhoto, error) {
-	rows, err := pool.Query(ctx, `
+	rows, err := pool.Query(ctx, fmt.Sprintf(`
 		SELECT rp.related_photoid::text,
 		       COALESCE(rp.scaled_image_url, p.image_url),
 		       COALESCE(rp.click_url, '/photo?photoid=' || rp.related_photoid::text),
@@ -165,9 +189,9 @@ func fetchRelated(ctx context.Context, pool *db.Pool, photoid, exhibitionID stri
 		WHERE  rp.photoid = $1
 		  AND  p.deleted_at IS NULL
 		  AND  ($2 = '' OR p.exhibitionid::text = $2)
-		  AND  (p.is_public OR $3 OR ($4 <> '' AND p.owner_userid::text = $4))
+		  AND  (%s OR $3 OR ($4 <> '' AND p.owner_userid::text = $4))
 		ORDER  BY rp.sort_order
-	`, photoid, exhibitionID, canSeePrivate, currentUserID)
+	`, photoIsPublicSQL("p.photoid")), photoid, exhibitionID, canSeePrivate, currentUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +215,7 @@ func fetchRelated(ctx context.Context, pool *db.Pool, photoid, exhibitionID stri
 // currentUserID additionally always includes the caller's own photos (see the
 // owner exception in PhotoHandler.ServeHTTP for why).
 func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID, exhibitionID string, canSeePrivate bool, currentUserID string) ([]models.RelatedPhoto, error) {
-	rows, err := pool.Query(ctx, `
+	rows, err := pool.Query(ctx, fmt.Sprintf(`
 		WITH label_info AS (
 			SELECT name, value FROM labels WHERE labelid = $1 AND deleted_at IS NULL
 		),
@@ -204,7 +228,7 @@ func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID, e
 			  AND  p.deleted_at IS NULL
 			  AND  l.deleted_at IS NULL
 			  AND  ($3 = '' OR p.exhibitionid::text = $3)
-			  AND  (p.is_public OR $4 OR ($5 <> '' AND p.owner_userid::text = $5))
+			  AND  (%s OR $4 OR ($5 <> '' AND p.owner_userid::text = $5))
 		),
 		top_ten AS (
 			SELECT * FROM candidates ORDER BY view_count DESC LIMIT 10
@@ -218,7 +242,7 @@ func fetchRelatedByLabel(ctx context.Context, pool *db.Pool, photoid, labelID, e
 		SELECT photoid, image_url, image_width, image_height FROM random_three
 		UNION ALL
 		SELECT photoid, image_url, image_width, image_height FROM top_ten
-	`, labelID, photoid, exhibitionID, canSeePrivate, currentUserID)
+	`, photoIsPublicSQL("p.photoid")), labelID, photoid, exhibitionID, canSeePrivate, currentUserID)
 	if err != nil {
 		return nil, err
 	}

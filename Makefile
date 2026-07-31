@@ -45,6 +45,7 @@ migrate-up:
 	psql "$$DATABASE_URL" -f migrations/019_organizations.sql
 	psql "$$DATABASE_URL" -f migrations/020_emoji_ownership.sql
 	psql "$$DATABASE_URL" -f migrations/021_org_admin.sql
+	psql "$$DATABASE_URL" -f migrations/022_drop_is_public.sql
 
 #Commented out so that the database isn't destroyed accidentally
 #migrate-down:

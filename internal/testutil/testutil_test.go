@@ -123,11 +123,10 @@ func TestCreatePhoto(t *testing.T) {
 
 	var gotExhibitionID, gotOwnerID string
 	var width, height int
-	var isPublic bool
 	err := pool.QueryRow(context.Background(), `
-		SELECT exhibitionid::text, owner_userid::text, image_width, image_height, is_public
+		SELECT exhibitionid::text, owner_userid::text, image_width, image_height
 		FROM photos WHERE photoid = $1::uuid
-	`, photoID).Scan(&gotExhibitionID, &gotOwnerID, &width, &height, &isPublic)
+	`, photoID).Scan(&gotExhibitionID, &gotOwnerID, &width, &height)
 	if err != nil {
 		t.Fatalf("querying back the row CreatePhoto claims to have inserted: %v", err)
 	}
@@ -142,9 +141,15 @@ func TestCreatePhoto(t *testing.T) {
 	}
 	// MakePhotoPublic's own doc comment (and several handler tests, e.g.
 	// admin_test.go's SetPublic toggle test) depend on freshly created
-	// photos defaulting to private.
-	if isPublic {
-		t.Error("is_public = true, want false — CreatePhoto's fixtures are supposed to default private (see migrations/009_public_flag.sql)")
+	// photos defaulting to private — i.e. no "Public" label at all yet.
+	var labelCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM labels WHERE photoid = $1::uuid AND name = 'Public' AND deleted_at IS NULL`, photoID,
+	).Scan(&labelCount); err != nil {
+		t.Fatalf("counting Public labels: %v", err)
+	}
+	if labelCount != 0 {
+		t.Error("a fresh photo already has a Public label — CreatePhoto's fixtures are supposed to default private (no label at all, see fetch.go's photoIsPublicSQL)")
 	}
 }
 
@@ -156,15 +161,15 @@ func TestMakePhotoPublic(t *testing.T) {
 
 	MakePhotoPublic(t, pool, photoID)
 
-	var isPublic bool
+	var labelValue string
 	err := pool.QueryRow(context.Background(),
-		`SELECT is_public FROM photos WHERE photoid = $1::uuid`, photoID,
-	).Scan(&isPublic)
+		`SELECT value FROM labels WHERE photoid = $1::uuid AND name = 'Public' AND deleted_at IS NULL`, photoID,
+	).Scan(&labelValue)
 	if err != nil {
-		t.Fatalf("querying photos.is_public: %v", err)
+		t.Fatalf("querying Public label: %v", err)
 	}
-	if !isPublic {
-		t.Error("is_public = false after MakePhotoPublic, want true")
+	if labelValue != "True" {
+		t.Errorf("Public label value = %q after MakePhotoPublic, want %q", labelValue, "True")
 	}
 }
 

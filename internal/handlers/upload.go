@@ -120,11 +120,13 @@ func (h *UploadPhotosHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, 
 // and batch) in a single transaction so a photo never ends up committed
 // without its labels (or vice versa).
 //
-// The new photo is always created with is_public=false. Unlike
-// cmd/import-photos, this endpoint does not run face detection (that logic
-// depends on gocv/OpenCV, a native dependency deliberately not linked into
-// the main server binary — see internal/photoimport's package doc) — false
-// is the same safe default the CLI itself falls back to without --cascade.
+// The new photo always gets an explicit "Public"="False" label (PLAN2.md
+// Phase 2b — see fetch.go's photoIsPublicSQL doc comment; there is no
+// photos.is_public column anymore). Unlike cmd/import-photos, this endpoint
+// does not run face detection (that logic depends on gocv/OpenCV, a native
+// dependency deliberately not linked into the main server binary — see
+// internal/photoimport's package doc) — False is the same safe default the
+// CLI itself falls back to without --cascade.
 func (h *UploadPhotosHandler) uploadOne(
 	ctx context.Context, userID, exhibitionID string,
 	fh *multipart.FileHeader, batchLabels []photoimport.Label,
@@ -169,6 +171,7 @@ func (h *UploadPhotosHandler) uploadOne(
 	computed := []photoimport.Label{
 		{Name: "Resolution", Value: fmt.Sprintf("%dx%d", width, height)},
 		{Name: "Filename", Value: fh.Filename},
+		{Name: "Public", Value: "False"},
 	}
 	allLabels := photoimport.MergeLabels(exifLabels, computed)
 	allLabels = photoimport.MergeLabels(allLabels, batchLabels)
@@ -195,8 +198,8 @@ func (h *UploadPhotosHandler) uploadOne(
 
 	var photoID string
 	err = tx.QueryRow(ctx, `
-		INSERT INTO photos (owner_userid, image_url, image_width, image_height, title_text, title_userid, exhibitionid, is_public)
-		VALUES ($1, $2, $3, $4, $5, $1, $6::uuid, FALSE)
+		INSERT INTO photos (owner_userid, image_url, image_width, image_height, title_text, title_userid, exhibitionid)
+		VALUES ($1, $2, $3, $4, $5, $1, $6::uuid)
 		RETURNING photoid::text
 	`, userID, imageURL, width, height, title, nullableUUID(exhibitionID)).Scan(&photoID)
 	if err != nil {

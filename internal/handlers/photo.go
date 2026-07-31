@@ -49,7 +49,7 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// succeeded.
 	var row pgx.Row
 	if random {
-		row = h.DB.QueryRow(ctx, `
+		row = h.DB.QueryRow(ctx, fmt.Sprintf(`
 			SELECT
 				p.photoid, p.image_url, p.image_width, p.image_height,
 				COALESCE(p.title_text, ''), COALESCE(p.title_userid::text, ''),
@@ -59,12 +59,12 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			LEFT  JOIN users tu ON tu.userid = p.title_userid
 			WHERE p.deleted_at IS NULL
 			  AND ($1 = '' OR p.exhibitionid::text = $1)
-			  AND (p.is_public OR $2 OR ($3 <> '' AND p.owner_userid::text = $3))
+			  AND (%s OR $2 OR ($3 <> '' AND p.owner_userid::text = $3))
 			ORDER BY random()
 			LIMIT 1
-		`, exhibitionID, canSeePrivate, currentUser)
+		`, photoIsPublicSQL("p.photoid")), exhibitionID, canSeePrivate, currentUser)
 	} else {
-		row = h.DB.QueryRow(ctx, `
+		row = h.DB.QueryRow(ctx, fmt.Sprintf(`
 			SELECT
 				p.photoid, p.image_url, p.image_width, p.image_height,
 				COALESCE(p.title_text, ''), COALESCE(p.title_userid::text, ''),
@@ -74,8 +74,8 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			LEFT  JOIN users tu ON tu.userid = p.title_userid
 			WHERE p.photoid = $1 AND p.deleted_at IS NULL
 			  AND ($2 = '' OR p.exhibitionid::text = $2)
-			  AND (p.is_public OR $3 OR ($4 <> '' AND p.owner_userid::text = $4))
-		`, photoid, exhibitionID, canSeePrivate, currentUser)
+			  AND (%s OR $3 OR ($4 <> '' AND p.owner_userid::text = $4))
+		`, photoIsPublicSQL("p.photoid")), photoid, exhibitionID, canSeePrivate, currentUser)
 	}
 
 	var (
@@ -204,16 +204,16 @@ func (h *ListPhotosHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, _ 
 	// PhotoHandler.ServeHTTP above — otherwise a just-uploaded (private by
 	// default) photo would never appear in the uploader's own wall/gallery
 	// view unless they separately held PermPrivatePhotoView.
-	rows, err := h.DB.Query(ctx, `
+	rows, err := h.DB.Query(ctx, fmt.Sprintf(`
 		SELECT photoid::text, image_url, image_width, image_height,
 		       COUNT(*) OVER() AS total
 		FROM   photos
 		WHERE  deleted_at IS NULL
 		  AND  ($1 = '' OR exhibitionid::text = $1)
-		  AND  (is_public OR $2 OR ($3 <> '' AND owner_userid::text = $3))
+		  AND  (%s OR $2 OR ($3 <> '' AND owner_userid::text = $3))
 		ORDER  BY created_at DESC, photoid
 		LIMIT  $4 OFFSET $5
-	`, exhibitionID, canSeePrivate, userID, limit, offset)
+	`, photoIsPublicSQL("photoid")), exhibitionID, canSeePrivate, userID, limit, offset)
 	if err != nil {
 		slog.Error("ListPhotos", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")

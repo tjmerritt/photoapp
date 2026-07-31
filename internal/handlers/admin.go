@@ -160,12 +160,12 @@ func (h *AdminHandler) ListPhotos(w http.ResponseWriter, r *http.Request, _ http
 		SELECT p.photoid::text,
 		       p.image_url,
 		       COALESCE(p.title_text, ''),
-		       p.is_public
+		       %s AS is_public
 		FROM   photos p
 		WHERE  %s
 		ORDER  BY p.created_at DESC
 		LIMIT  $%d OFFSET $%d
-	`, countWhere, n, n+1), rowArgs...)
+	`, photoIsPublicSQL("p.photoid"), countWhere, n, n+1), rowArgs...)
 	if queryErr != nil {
 		slog.Error("ListPhotos", "error", queryErr)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -201,10 +201,20 @@ func (h *AdminHandler) ListPhotos(w http.ResponseWriter, r *http.Request, _ http
 // PATCH /api/v1/admin/photo?photoid=
 // Body: {"is_public": true|false}
 // Requires: authenticated + PermAdmin.
+//
+// PLAN2.md Phase 2b: the "Public" label (labels.name = 'Public') is the sole
+// source of truth for photo visibility now — see fetch.go's
+// photoIsPublicSQL — there is no photos.is_public column to keep in sync
+// with anymore (migrations/022_drop_is_public.sql dropped it). This
+// endpoint's request/response JSON keeps the is_public field name for API
+// compatibility; only the underlying storage changed. Because the label is
+// now authoritative rather than a best-effort mirror, a failure writing it
+// is a real error (500), not something to log and swallow.
 func (h *AdminHandler) SetPublic(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	userID, _ := middleware.UserID(r.Context())
-	exhibitionID := middleware.ExhibitionID(r.Context())
-	ok, err := h.Checker.Check(r.Context(), userID, exhibitionID, "", "", "", permissions.PermAdmin)
+	ctx := r.Context()
+	userID, _ := middleware.UserID(ctx)
+	exhibitionID := middleware.ExhibitionID(ctx)
+	ok, err := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermAdmin)
 	if err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
@@ -224,42 +234,44 @@ func (h *AdminHandler) SetPublic(w http.ResponseWriter, r *http.Request, _ httpr
 		return
 	}
 
-	ct, err := h.DB.Exec(r.Context(), `
-		UPDATE photos SET is_public = $1, updated_at = NOW()
-		WHERE  photoid = $2 AND deleted_at IS NULL
-	`, body.IsPublic, photoid)
-	if err != nil {
-		slog.Error("SetPublic", "error", err)
+	var exists bool
+	if err := h.DB.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM photos WHERE photoid = $1 AND deleted_at IS NULL)
+	`, photoid).Scan(&exists); err != nil {
+		slog.Error("SetPublic exists check", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	if ct.RowsAffected() == 0 {
+	if !exists {
 		middleware.WriteError(w, http.StatusNotFound, "photo not found")
 		return
 	}
 
-	// Keep the "Public" label in sync with is_public.
 	publicVal := "False"
 	if body.IsPublic {
 		publicVal = "True"
 	}
 
 	// Update an existing "Public" label if one exists.
-	ct2, err := h.DB.Exec(r.Context(), `
+	ct, err := h.DB.Exec(ctx, `
 		UPDATE labels
 		SET    value = $1, updated_at = NOW()
 		WHERE  photoid = $2 AND name = 'Public' AND deleted_at IS NULL
 	`, publicVal, photoid)
 	if err != nil {
 		slog.Error("SetPublic update label", "error", err)
-	} else if ct2.RowsAffected() == 0 {
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if ct.RowsAffected() == 0 {
 		// No existing label – insert one.
-		_, err = h.DB.Exec(r.Context(), `
+		if _, err := h.DB.Exec(ctx, `
 			INSERT INTO labels (photoid, added_by_userid, name, value)
 			VALUES ($1, $2, 'Public', $3)
-		`, photoid, userID, publicVal)
-		if err != nil {
+		`, photoid, userID, publicVal); err != nil {
 			slog.Error("SetPublic insert label", "error", err)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
 		}
 	}
 

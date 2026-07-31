@@ -230,16 +230,37 @@ func CreatePhoto(t *testing.T, pool *db.Pool, exhibitionID, ownerUserID string) 
 	return id
 }
 
-// MakePhotoPublic flips is_public to TRUE for photoID. Photos created by
-// CreatePhoto default to private (is_public defaults to FALSE — see
-// migrations/009_public_flag.sql), matching production's default for both
-// cmd/import-photos (without --cascade) and the browser upload endpoint.
+// MakePhotoPublic sets an explicit "Public" = "True" label on photoID,
+// updating one in place if it already has a "Public" label (e.g. from a
+// prior MakePhotoPublic call) rather than inserting a second row. Photos
+// created by CreatePhoto default to private — no "Public" label at all,
+// which internal/handlers/fetch.go's photoIsPublicSQL treats as private,
+// matching production's default for both cmd/import-photos (without
+// --cascade) and the browser upload endpoint. PLAN2.md Phase 2b removed the
+// photos.is_public column this used to flip directly
+// (migrations/022_drop_is_public.sql) — the "Public" label is now the sole
+// source of truth for visibility.
 func MakePhotoPublic(t *testing.T, pool *db.Pool, photoID string) {
 	t.Helper()
-	if _, err := pool.Exec(context.Background(), `
-		UPDATE photos SET is_public = TRUE WHERE photoid = $1::uuid
+	ctx := context.Background()
+
+	ct, err := pool.Exec(ctx, `
+		UPDATE labels
+		SET    value = 'True', updated_at = NOW()
+		WHERE  photoid = $1::uuid AND name = 'Public' AND deleted_at IS NULL
+	`, photoID)
+	if err != nil {
+		t.Fatalf("testutil.MakePhotoPublic: update: %v", err)
+	}
+	if ct.RowsAffected() > 0 {
+		return
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO labels (photoid, added_by_userid, name, value)
+		SELECT photoid, owner_userid, 'Public', 'True'
+		FROM   photos WHERE photoid = $1::uuid
 	`, photoID); err != nil {
-		t.Fatalf("testutil.MakePhotoPublic: %v", err)
+		t.Fatalf("testutil.MakePhotoPublic: insert: %v", err)
 	}
 }
 

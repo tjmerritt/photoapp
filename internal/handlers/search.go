@@ -302,7 +302,7 @@ scores(photoid, total_score) AS (
 	// ── WHERE ─────────────────────────────────────────────────────────────────
 	b.WriteString("WHERE p.deleted_at IS NULL\n")
 	b.WriteString("  AND ($1 = '' OR p.exhibitionid::text = $1)\n")
-	b.WriteString("  AND (p.is_public OR $2 OR ($3 <> '' AND p.owner_userid::text = $3))\n")
+	fmt.Fprintf(&b, "  AND (%s OR $2 OR ($3 <> '' AND p.owner_userid::text = $3))\n", photoIsPublicSQL("p.photoid"))
 
 	for _, tt := range pq.TitleTexts {
 		ta := next(tt)

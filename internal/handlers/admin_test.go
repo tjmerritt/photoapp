@@ -140,13 +140,6 @@ func TestAdminHandler_SetPublic_TogglesFlagAndSyncsLabel(t *testing.T) {
 		t.Fatalf("SetPublic(true): status = %d, body = %s", rec.Code, rec.Body)
 	}
 
-	var isPublic bool
-	if err := env.Pool.QueryRow(context.Background(), `SELECT is_public FROM photos WHERE photoid = $1::uuid`, photoID).Scan(&isPublic); err != nil {
-		t.Fatalf("query is_public: %v", err)
-	}
-	if !isPublic {
-		t.Error("is_public was not set to true")
-	}
 	var labelValue string
 	if err := env.Pool.QueryRow(context.Background(),
 		`SELECT value FROM labels WHERE photoid = $1::uuid AND name = 'Public' AND deleted_at IS NULL`, photoID,
