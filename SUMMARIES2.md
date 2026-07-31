@@ -590,3 +590,23 @@ No live Postgres/Go toolchain available in this sandbox (same constraint as ever
 - Ask the user to rebuild/restart and spot-check: creating a team/role/emoji-type-rename with only the new granular permission (not `PermAdmin`/`PermTeamAdmin`/etc.) actually works, and that the Roles admin page's checkbox grid now shows the new permission groups (Label names, Teams, Roles, and the expanded Photo/Photo emoji/Photo comments/Emoji types groups).
 - Phase 2b (remove `is_public`, add `Public` label) and Phase 2d (photo access resolution, direct + indirect via Display/GalleryView) are the natural next pieces of this phase — `PermPhotoView` and the View-cascade behavior stay inert until those land.
 - `PermCommentEmojiReact` has no feature yet; flag to the user before assuming it's "done" — the permission name exists and is grantable, but reacting to a comment isn't a real capability in the app yet.
+
+---
+
+## Session 26 — PhotoView ordering + seed script grants every permission
+
+### What was done
+Two small, related follow-ups to Session 25's Phase 2a work.
+
+**PhotoView first in every Photo enumeration**: reordered `PermPhotoView` to be the first constant in `permissions.go`'s "Photo permissions" const block and the first entry in `PermissionCatalog()`'s "Photo" group (both previously had it appended last, from when it was added in Session 25). Checked for other places photo permissions are listed together — `internal/handlers/exhibitions.go` has curated default-role permission lists, but `PermPhotoView` isn't in them (deliberately, per Session 25 — it isn't enforced yet), so there was nothing to reorder there.
+
+**seed-exhibition.sh grants every permission to the initial admin**: both of the script's "Admin" role permission bundles (the organization-level Admin role that's actually granted to `inituser`, and the exhibition-level Admin role granted to the seeded "Admins" team) were hand-curated lists that had already drifted out of sync with each other and, as of Session 25, were both missing every Phase 2a permission entirely — `inituser` only had access to those newer capabilities incidentally, via the blanket `PermAdmin` bypass every `HasAny` check accepts, not because the role actually held them. Replaced both curated lists with a single `_all_permissions` temp table (`CREATE TEMP TABLE ... ON COMMIT DROP`, populated once, referenced by both `role_permissions` inserts) containing literally every permission string in `PermissionCatalog()` — verified by extracting both lists programmatically (grep/join over `permissions.go`'s const declarations and catalog identifiers vs. the script's `VALUES` list) and diffing them: exact match, all 49 permissions, no drift, no duplicates. Left the Viewer and Contributor role bundles untouched — those are deliberately restricted, not meant to be "all permissions."
+
+Since there's no DB table to query "all known permissions" from (`PermissionCatalog()` is pure Go), this list still has to be kept in sync by hand — flagged clearly in a comment above `_all_permissions` so the next new permission constant gets added here too, in one place instead of two.
+
+### Testing notes
+No live Postgres/Go toolchain available in this sandbox. Verified `bash -n scripts/seed-exhibition.sh` (syntax only, no execution). Verified the `_all_permissions` list's completeness and lack of duplicates programmatically rather than by eye: extracted every `Perm* = "..."` const from `permissions.go`, cross-referenced against every `Perm*` identifier used inside `PermissionCatalog()`'s function body to resolve the actual 49 string values the catalog exposes, and diffed that against the seed script's list — empty diff. Re-read the full script afterward to confirm the temp table is created before both of its use sites and that the existing `ON CONFLICT DO NOTHING` idempotency on the `role_permissions` inserts themselves is unaffected by the refactor.
+
+### Open items
+- Ask the user to re-run `seed-exhibition.sh` (safe to re-run — idempotent) and spot check that `inituser`'s org-level Admin role and the exhibition-level Admin role both now list all 49 permissions on the Roles admin page, not just the previously-curated subset.
+- The same hand-maintained-list caveat applies here as it does to `PermissionCatalog()` itself: the next new permission constant needs to be added to `_all_permissions` too, or the seeded admin roles will silently miss it (masked by the `PermAdmin` bypass for `inituser` specifically, but not for anyone granted only the exhibition-level Admin role without also holding a `PermAdmin`-bearing grant).

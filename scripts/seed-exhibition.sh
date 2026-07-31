@@ -12,7 +12,10 @@
 #   - User         inituser / inituser@example.com / password "noyet"
 #   - An organization-level Admin role + grant for inituser (PLAN2.md Phase
 #     1c) -- covers every exhibition under Initial Org, present and future,
-#     not just the one created here.
+#     not just the one created here. This Admin role (and the exhibition-
+#     level one below) is granted every permission known to
+#     internal/permissions/permissions.go's PermissionCatalog(), not just
+#     PermAdmin -- see this file's _all_permissions temp table.
 #   - The standard exhibition-level Viewer/Contributor/Admin roles for
 #     Initial Exhibition (Viewer -> Public, Contributor -> LoggedIn,
 #     Admin -> an "Admins" team seeded with inituser) -- the same setup this
@@ -99,11 +102,35 @@ INSERT INTO user_exhibitions (userid, exhibitionid)
 VALUES ('$USER_ID'::uuid, '$EXHIBITION_ID'::uuid)
 ON CONFLICT (userid, exhibitionid) DO NOTHING;
 
+-- ── All permissions (shared by both Admin roles below) ───────────────────────
+--
+-- Every permission string known to internal/permissions/permissions.go's
+-- PermissionCatalog(), kept in the same grouping/order as that function so
+-- the two are easy to diff against each other by eye. There is no DB table
+-- to query this from -- PermissionCatalog() is pure Go -- so this list has
+-- to be maintained by hand; if you add a permission constant there, add it
+-- here too. A TEMP TABLE (not a CTE) so it can be referenced from both of
+-- the separate INSERT statements below within this one transaction/session.
+CREATE TEMP TABLE _all_permissions (perm text) ON COMMIT DROP;
+INSERT INTO _all_permissions (perm) VALUES
+    ('GalleryView'),   ('GalleryCreate'),   ('GalleryModify'),   ('GalleryDelete'),
+    ('DisplayView'),   ('DisplayCreate'),   ('DisplayModify'),   ('DisplayDelete'),
+    ('PhotoView'),     ('PhotoCreate'),     ('PhotoDelete'),     ('PrivatePhotoView'), ('PhotoDescriptionModify'),
+    ('PhotoLabelView'),   ('PhotoLabelCreate'),   ('PhotoLabelModify'),   ('PhotoLabelDelete'),
+    ('PhotoEmojiView'),   ('PhotoEmojiCreate'),   ('PhotoEmojiDelete'),   ('PhotoEmojiReact'),
+    ('PhotoCommentView'), ('PhotoCommentCreate'), ('PhotoCommentModify'), ('PhotoCommentDelete'), ('CommentEmojiReact'),
+    ('EmojiUpload'),   ('EmojiCreate'),     ('EmojiModify'),     ('EmojiDelete'),
+    ('LabelNameView'), ('LabelNameCreate'), ('LabelNameModify'), ('LabelNameDelete'),
+    ('TeamView'),      ('TeamCreate'),      ('TeamModify'),      ('TeamDelete'),
+    ('RoleView'),      ('RoleCreate'),      ('RoleModify'),      ('RoleDelete'),
+    ('Admin'), ('LabelAdmin'), ('EmojiAdmin'), ('UserAdmin'), ('GalleryAdmin'),
+    ('TeamAdmin'), ('PermissionsAdmin');
+
 -- ── Organization-level Admin (PLAN2.md Phase 1c) ─────────────────────────────
 --
--- Grants inituser PermAdmin (and everything else the Admin bundle below
--- includes) across every exhibition under Initial Org, present and future --
--- see migrations/021_org_admin.sql and internal/handlers/exhibitions.go's
+-- Grants inituser every known permission (via _all_permissions above) across
+-- every exhibition under Initial Org, present and future -- see
+-- migrations/021_org_admin.sql and internal/handlers/exhibitions.go's
 -- grantOrgAdmin, which this mirrors by hand the same way this script has
 -- always mirrored bootstrapExhibitionRoles for the exhibition-level roles
 -- below. uq_role_name_org is a partial unique index
@@ -119,18 +146,7 @@ ON CONFLICT (organizationid, name) WHERE organizationid IS NOT NULL DO NOTHING;
 
 INSERT INTO role_permissions (roleid, permission)
 SELECT roleid, perm
-FROM   roles,
-       (VALUES
-           ('GalleryView'),   ('GalleryCreate'),   ('GalleryModify'),   ('GalleryDelete'),
-           ('DisplayView'),   ('DisplayCreate'),   ('DisplayModify'),   ('DisplayDelete'),
-           ('PhotoCreate'),   ('PhotoDelete'),     ('PrivatePhotoView'),     ('PhotoDescriptionModify'),
-           ('PhotoLabelView'),   ('PhotoLabelCreate'),   ('PhotoLabelModify'),   ('PhotoLabelDelete'),
-           ('PhotoEmojiView'),   ('PhotoEmojiCreate'),   ('PhotoEmojiDelete'),
-           ('PhotoCommentView'), ('PhotoCommentCreate'), ('PhotoCommentModify'), ('PhotoCommentDelete'),
-           ('EmojiUpload'),
-           ('Admin'), ('LabelAdmin'), ('EmojiAdmin'), ('UserAdmin'), ('GalleryAdmin'),
-           ('TeamAdmin'), ('PermissionsAdmin')
-       ) AS p(perm)
+FROM   roles, _all_permissions
 WHERE  organizationid = '$ORG_ID'::uuid
   AND  name = 'Admin'
 ON CONFLICT DO NOTHING;
@@ -195,22 +211,11 @@ WHERE  exhibitionid = '$EXHIBITION_ID'::uuid
   AND  name = 'Contributor'
 ON CONFLICT DO NOTHING;
 
--- Admin: all permissions including gallery/display management, photo deletion,
--- and administrative controls.
+-- Admin: every known permission (via _all_permissions above), including
+-- gallery/display management, photo deletion, and administrative controls.
 INSERT INTO role_permissions (roleid, permission)
 SELECT roleid, perm
-FROM   roles,
-       (VALUES
-           ('GalleryView'),   ('GalleryCreate'),   ('GalleryModify'),   ('GalleryDelete'),
-           ('DisplayView'),   ('DisplayCreate'),   ('DisplayModify'),   ('DisplayDelete'),
-           ('PhotoCreate'),   ('PhotoDelete'),     ('PrivatePhotoView'),     ('PhotoDescriptionModify'),
-           ('PhotoLabelView'),   ('PhotoLabelCreate'),   ('PhotoLabelModify'),   ('PhotoLabelDelete'),
-           ('PhotoEmojiView'),   ('PhotoEmojiCreate'),   ('PhotoEmojiDelete'),
-           ('PhotoCommentView'), ('PhotoCommentCreate'), ('PhotoCommentModify'), ('PhotoCommentDelete'),
-           ('EmojiUpload'),
-           ('Admin'), ('LabelAdmin'), ('EmojiAdmin'), ('UserAdmin'), ('GalleryAdmin'),
-           ('TeamAdmin'), ('PermissionsAdmin')
-       ) AS p(perm)
+FROM   roles, _all_permissions
 WHERE  exhibitionid = '$EXHIBITION_ID'::uuid
   AND  name = 'Admin'
 ON CONFLICT DO NOTHING;
