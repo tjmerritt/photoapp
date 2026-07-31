@@ -23,6 +23,15 @@ func TestPhotoHandler_PublicPhoto_VisibleToAnonymous(t *testing.T) {
 	photoID := testutil.CreatePhoto(t, env.Pool, exhibitionID, owner)
 	testutil.MakePhotoPublic(t, env.Pool, photoID)
 
+	// PermPhotoView is the blanket "can browse photos in this exhibition at
+	// all" gate (see permissions package doc's "Photo visibility" section) —
+	// required in addition to the photo being Public-labeled, even for an
+	// anonymous caller.
+	viewerRole := testutil.CreateRole(t, env.Pool, exhibitionID, "Viewer", permissions.PermPhotoView)
+	testutil.Grant(t, env.Pool, viewerRole, testutil.GrantOptions{
+		EntityType: permissions.EntityPublic, ExhibitionID: exhibitionID,
+	})
+
 	rec := doRequest(t, http.MethodGet, "/api/v1/photo?photoid="+photoID, "", exhibitionID, nil, nil, adapt(h.ServeHTTP))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
@@ -70,7 +79,10 @@ func TestPhotoHandler_PrivatePhoto_VisibleWithPrivatePhotoViewGrant(t *testing.T
 	viewer := testutil.CreateUser(t, env.Pool)
 	photoID := testutil.CreatePhoto(t, env.Pool, exhibitionID, owner)
 
-	role := testutil.CreateRole(t, env.Pool, exhibitionID, "PrivateViewer", permissions.PermPrivatePhotoView)
+	// PrivatePhotoView alone grants nothing — it only lifts the Public-label
+	// requirement for a caller who already holds PhotoView (see permissions
+	// package doc's "Photo visibility" section), so the role needs both.
+	role := testutil.CreateRole(t, env.Pool, exhibitionID, "PrivateViewer", permissions.PermPrivatePhotoView, permissions.PermPhotoView)
 	testutil.Grant(t, env.Pool, role, testutil.GrantOptions{
 		EntityType: permissions.EntityUser, EntityRef: viewer, ExhibitionID: exhibitionID,
 	})
@@ -115,6 +127,13 @@ func TestListPhotosHandler_OnlyPublicVisibleToAnonymous(t *testing.T) {
 	testutil.MakePhotoPublic(t, env.Pool, publicPhoto)
 	testutil.CreatePhoto(t, env.Pool, exhibitionID, owner) // private, should be excluded
 
+	// PermPhotoView required even for the public photo — see PhotoHandler's
+	// visible-to-anonymous test above for why.
+	viewerRole := testutil.CreateRole(t, env.Pool, exhibitionID, "Viewer", permissions.PermPhotoView)
+	testutil.Grant(t, env.Pool, viewerRole, testutil.GrantOptions{
+		EntityType: permissions.EntityPublic, ExhibitionID: exhibitionID,
+	})
+
 	rec := doRequest(t, http.MethodGet, "/api/v1/photos", "", exhibitionID, nil, nil, h.ServeHTTP)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
@@ -137,7 +156,9 @@ func TestListPhotosHandler_PrivateIncludedWithGrant(t *testing.T) {
 	viewer := testutil.CreateUser(t, env.Pool)
 	testutil.CreatePhoto(t, env.Pool, exhibitionID, owner) // private
 
-	role := testutil.CreateRole(t, env.Pool, exhibitionID, "PrivateViewer", permissions.PermPrivatePhotoView)
+	// PrivatePhotoView alone grants nothing — see the PhotoHandler test's
+	// grant comment above for why both permissions are needed here.
+	role := testutil.CreateRole(t, env.Pool, exhibitionID, "PrivateViewer", permissions.PermPrivatePhotoView, permissions.PermPhotoView)
 	testutil.Grant(t, env.Pool, role, testutil.GrantOptions{
 		EntityType: permissions.EntityUser, EntityRef: viewer, ExhibitionID: exhibitionID,
 	})

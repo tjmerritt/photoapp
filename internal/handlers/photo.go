@@ -39,13 +39,16 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	exhibitionID := middleware.ExhibitionID(r.Context())
 	ctx := r.Context()
 	canSeePrivate, _ := h.Checker.Check(ctx, currentUser, exhibitionID, "", "", "", permissions.PermPrivatePhotoView)
+	hasPhotoView, _ := h.Checker.Check(ctx, currentUser, exhibitionID, "", "", "", permissions.PermPhotoView)
 
 	// ── Core photo row ────────────────────────────────────────────────────────
-	// Visibility: public photos are visible to everyone; private ones need
-	// PermPrivatePhotoView *or* being the photo's own owner — otherwise a
-	// user without PrivatePhotoView who just uploaded a photo (browser
-	// uploads are always created private — see upload.go) would have no way
-	// to ever see their own photo again, despite the upload having actually
+	// Visibility (see permissions package doc's "Photo visibility" section):
+	// the photo's own owner can always see it; otherwise the caller needs
+	// PermPhotoView *and* (the photo is Public-labeled OR the caller holds
+	// PermPrivatePhotoView). The owner exception exists so a user without
+	// PhotoView/PrivatePhotoView who just uploaded a photo (browser uploads
+	// are always created private — see upload.go) would have no way to ever
+	// see their own photo again, despite the upload having actually
 	// succeeded.
 	var row pgx.Row
 	if random {
@@ -59,10 +62,10 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			LEFT  JOIN users tu ON tu.userid = p.title_userid
 			WHERE p.deleted_at IS NULL
 			  AND ($1 = '' OR p.exhibitionid::text = $1)
-			  AND (%s OR $2 OR ($3 <> '' AND p.owner_userid::text = $3))
+			  AND (($3 <> '' AND p.owner_userid::text = $3) OR ($4 AND (%s OR $2)))
 			ORDER BY random()
 			LIMIT 1
-		`, photoIsPublicSQL("p.photoid")), exhibitionID, canSeePrivate, currentUser)
+		`, photoIsPublicSQL("p.photoid")), exhibitionID, canSeePrivate, currentUser, hasPhotoView)
 	} else {
 		row = h.DB.QueryRow(ctx, fmt.Sprintf(`
 			SELECT
@@ -74,8 +77,8 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			LEFT  JOIN users tu ON tu.userid = p.title_userid
 			WHERE p.photoid = $1 AND p.deleted_at IS NULL
 			  AND ($2 = '' OR p.exhibitionid::text = $2)
-			  AND (%s OR $3 OR ($4 <> '' AND p.owner_userid::text = $4))
-		`, photoIsPublicSQL("p.photoid")), photoid, exhibitionID, canSeePrivate, currentUser)
+			  AND (($4 <> '' AND p.owner_userid::text = $4) OR ($5 AND (%s OR $3)))
+		`, photoIsPublicSQL("p.photoid")), photoid, exhibitionID, canSeePrivate, currentUser, hasPhotoView)
 	}
 
 	var (
@@ -145,9 +148,9 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// ── Related photos ────────────────────────────────────────────────────────
 	var related []models.RelatedPhoto
 	if labelID != "" {
-		related, err = fetchRelatedByLabel(ctx, h.DB, photoid, labelID, exhibitionID, canSeePrivate, currentUser)
+		related, err = fetchRelatedByLabel(ctx, h.DB, photoid, labelID, exhibitionID, canSeePrivate, hasPhotoView, currentUser)
 	} else {
-		related, err = fetchRelated(ctx, h.DB, photoid, exhibitionID, canSeePrivate, currentUser)
+		related, err = fetchRelated(ctx, h.DB, photoid, exhibitionID, canSeePrivate, hasPhotoView, currentUser)
 	}
 	if err != nil {
 		slog.Error("ServeHTTP", "error", err)
@@ -186,6 +189,7 @@ func (h *ListPhotosHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, _ 
 	userID, _ := middleware.UserID(ctx)
 	exhibitionID := middleware.ExhibitionID(ctx)
 	canSeePrivate, _ := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermPrivatePhotoView)
+	hasPhotoView, _ := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermPhotoView)
 
 	limit := 40
 	if l := r.URL.Query().Get("limit"); l != "" {
@@ -200,20 +204,21 @@ func (h *ListPhotosHandler) ServeHTTP(w http.ResponseWriter, r *http.Request, _ 
 		}
 	}
 
-	// Visibility: same owner-can-always-see-their-own-photo exception as
+	// Visibility (see permissions package doc's "Photo visibility" section):
+	// same owner-can-always-see-their-own-photo exception as
 	// PhotoHandler.ServeHTTP above — otherwise a just-uploaded (private by
 	// default) photo would never appear in the uploader's own wall/gallery
-	// view unless they separately held PermPrivatePhotoView.
+	// view unless they separately held PermPhotoView/PermPrivatePhotoView.
 	rows, err := h.DB.Query(ctx, fmt.Sprintf(`
 		SELECT p.photoid::text, p.image_url, p.image_width, p.image_height,
 		       COUNT(*) OVER() AS total
 		FROM   photos p
 		WHERE  p.deleted_at IS NULL
 		  AND  ($1 = '' OR p.exhibitionid::text = $1)
-		  AND  (%s OR $2 OR ($3 <> '' AND p.owner_userid::text = $3))
+		  AND  (($3 <> '' AND p.owner_userid::text = $3) OR ($4 AND (%s OR $2)))
 		ORDER  BY p.created_at DESC, p.photoid
-		LIMIT  $4 OFFSET $5
-	`, photoIsPublicSQL("p.photoid")), exhibitionID, canSeePrivate, userID, limit, offset)
+		LIMIT  $5 OFFSET $6
+	`, photoIsPublicSQL("p.photoid")), exhibitionID, canSeePrivate, userID, hasPhotoView, limit, offset)
 	if err != nil {
 		slog.Error("ListPhotos", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")

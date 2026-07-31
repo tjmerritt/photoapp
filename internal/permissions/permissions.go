@@ -77,7 +77,11 @@
 //
 // Photo-level:
 //
-//	PhotoCreate, PhotoDelete, PrivatePhotoView, PhotoDescriptionModify
+//	PhotoView, PhotoCreate, PhotoDelete, PrivatePhotoView, PhotoDescriptionModify
+//
+// PhotoView gates whether a photo is visible at all (see "Photo visibility"
+// below) — every other Photo/label/emoji/comment permission is meaningless
+// for a photo the caller can't first see.
 //
 // Photo label permissions:
 //
@@ -102,6 +106,42 @@
 // Handlers check the fine-grained permission for the specific action being
 // performed. Ownership checks (e.g. "can only modify your own label") are
 // enforced in the handler after the permission check passes.
+//
+// # Photo visibility (PLAN2.md Phase 2a enforcement, Session 30)
+//
+// A photo is visible to a caller if, and only if:
+//
+//	caller is the photo's owner
+//	OR (caller holds PhotoView AND (photo has a Public/True label OR caller holds PrivatePhotoView))
+//
+// PhotoView and PrivatePhotoView are deliberately separate: PhotoView is the
+// blanket "can browse photos in this exhibition at all" gate, and
+// PrivatePhotoView additionally lifts the Public-label requirement for
+// someone who already holds PhotoView. Holding PrivatePhotoView alone,
+// without PhotoView, grants nothing — this mirrors PLAN2.md's own listing,
+// where PhotoView is a distinct, separately-grantable permission from
+// PrivatePhotoView, not implied by it.
+//
+// The owner exception exists independently of both permissions so that a
+// user who just uploaded a photo (PhotoCreate) can always see their own
+// upload immediately, even in an exhibition where nobody has granted them
+// PhotoView yet.
+//
+// This check is applied at exactly four call sites — PhotoHandler.ServeHTTP,
+// ListPhotosHandler.ServeHTTP, fetchRelated/fetchRelatedByLabel, and
+// SearchHandler's buildSearchSQL — the same set that already applied the
+// Public-label/PrivatePhotoView check before PhotoView existed. It is
+// checked once per request as a single global/exhibition-level boolean via
+// Checker.Check, the same granularity PrivatePhotoView has always used —
+// NOT per-photo. A grant scoped to one specific Photo resource (or the
+// indirect Display/GalleryView → PhotoView cascade TODO2.md describes) is
+// Phase 2c/2d's job, not this pass's.
+//
+// Because of this, any exhibition with nobody holding PhotoView has no
+// photos visible to anyone but each photo's own owner — every install must
+// grant PhotoView to whichever entities should be able to browse photos at
+// all. scripts/seed-exhibition.sh's Viewer and Contributor roles both
+// include it for exactly this reason.
 package permissions
 
 import (
@@ -152,17 +192,15 @@ const (
 // Photo permissions.
 const (
 	// PermPhotoView is PLAN2.md Phase 2a's general "can view this photo"
-	// permission. Defined but NOT YET ENFORCED anywhere: today's actual
-	// photo-visibility gate is whether the photo has a "Public"/"True" label
-	// (see fetch.go's photoIsPublicSQL — Phase 2b, migrations/
-	// 022_drop_is_public.sql, replaced the old is_public column with this).
-	// Phase 2d still needs to build the direct + indirect (via
-	// DisplayView/GalleryView) grant resolution PermPhotoView itself needs
-	// before it can safely replace that Public-label check — flipping
-	// photo.go over to require PermPhotoView now, ahead of that, would make
-	// every non-Public-labeled photo invisible until every install
-	// re-granted it. It's defined now so it's valid to add to roles ahead
-	// of that cutover. See SUMMARIES2.md Sessions 25, 27.
+	// permission — the blanket gate on browsing photos in an exhibition at
+	// all, required (alongside being Public-labeled or holding
+	// PrivatePhotoView) to see any photo except one's own upload. See the
+	// package doc's "Photo visibility" section above for the exact rule and
+	// SUMMARIES2.md Sessions 25 (defined, deliberately unenforced), 27
+	// (is_public → Public label), and 30 (this permission's enforcement).
+	// Checked as a single global/exhibition-level boolean, the same
+	// granularity PrivatePhotoView uses — NOT resolved per-resource via
+	// Display/GalleryView grants, which remains Phase 2d's job.
 	PermPhotoView              = "PhotoView"
 	PermPhotoCreate            = "PhotoCreate"            // upload a new photo
 	PermPhotoDelete            = "PhotoDelete"            // delete a photo

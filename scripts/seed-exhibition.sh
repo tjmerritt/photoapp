@@ -178,13 +178,19 @@ ON CONFLICT (exhibitionid, name) DO NOTHING;
 
 -- ── Role permissions ──────────────────────────────────────────────────────────
 
--- Viewer: read-only access to galleries, displays, photos, and their annotations.
+-- Viewer: read-only access to galleries, displays, photos, and their
+-- annotations. PhotoView is required here (PLAN2.md Phase 2a enforcement,
+-- SUMMARIES2.md Session 30) -- without it, granting Viewer to Public would
+-- no longer make any photo visible at all, since PhotoView now gates
+-- photo visibility itself, on top of the Public label / PrivatePhotoView
+-- check it's paired with.
 INSERT INTO role_permissions (roleid, permission)
 SELECT roleid, perm
 FROM   roles,
        (VALUES
            ('GalleryView'),
            ('DisplayView'),
+           ('PhotoView'),
            ('PhotoLabelView'),
            ('PhotoEmojiView'),
            ('PhotoCommentView')
@@ -196,12 +202,14 @@ ON CONFLICT DO NOTHING;
 -- Contributor: can browse galleries/displays, upload photos, and fully manage
 -- labels, emoji reactions, and comments. PhotoDelete and gallery/display
 -- creation/deletion are intentionally omitted -- only Admins may do those.
+-- PhotoView included for the same reason as Viewer above.
 INSERT INTO role_permissions (roleid, permission)
 SELECT roleid, perm
 FROM   roles,
        (VALUES
            ('GalleryView'),
            ('DisplayView'),
+           ('PhotoView'),
            ('PhotoCreate'),
            ('PhotoLabelView'),   ('PhotoLabelCreate'),   ('PhotoLabelModify'),   ('PhotoLabelDelete'),
            ('PhotoEmojiView'),   ('PhotoEmojiCreate'),   ('PhotoEmojiDelete'),

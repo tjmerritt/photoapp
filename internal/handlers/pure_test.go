@@ -179,12 +179,12 @@ func TestParsedQuery_IsEmpty(t *testing.T) {
 	}
 }
 
-func TestBuildSearchSQL_FixedParamsAlwaysFirstThree(t *testing.T) {
+func TestBuildSearchSQL_FixedParamsAlwaysFirstFour(t *testing.T) {
 	pq := parseSearchQuery("sunset")
-	sql, args := buildSearchSQL(pq, "exhib-1", true, "user-1")
+	sql, args := buildSearchSQL(pq, "exhib-1", true, "user-1", true)
 
-	if len(args) < 3 || args[0] != "exhib-1" || args[1] != true || args[2] != "user-1" {
-		t.Fatalf("args[:3] = %v, want [exhib-1 true user-1]", args[:min(3, len(args))])
+	if len(args) < 4 || args[0] != "exhib-1" || args[1] != true || args[2] != "user-1" || args[3] != true {
+		t.Fatalf("args[:4] = %v, want [exhib-1 true user-1 true]", args[:min(4, len(args))])
 	}
 	if sql == "" {
 		t.Fatal("buildSearchSQL returned empty SQL")
@@ -193,7 +193,7 @@ func TestBuildSearchSQL_FixedParamsAlwaysFirstThree(t *testing.T) {
 
 func TestBuildSearchSQL_FreeTextAddsScoringCTE(t *testing.T) {
 	pq := parseSearchQuery("sunset")
-	sql, _ := buildSearchSQL(pq, "", false, "")
+	sql, _ := buildSearchSQL(pq, "", false, "", false)
 	if !strings.Contains(sql, "WITH terms(term)") {
 		t.Error("expected a scoring CTE when free text terms are present")
 	}
@@ -201,7 +201,7 @@ func TestBuildSearchSQL_FreeTextAddsScoringCTE(t *testing.T) {
 
 func TestBuildSearchSQL_NoFreeText_NoScoringCTE(t *testing.T) {
 	pq := parseSearchQuery("label:Location")
-	sql, _ := buildSearchSQL(pq, "", false, "")
+	sql, _ := buildSearchSQL(pq, "", false, "", false)
 	if strings.Contains(sql, "WITH terms(term)") {
 		t.Error("did not expect a scoring CTE when there are no free text terms")
 	}
@@ -209,13 +209,13 @@ func TestBuildSearchSQL_NoFreeText_NoScoringCTE(t *testing.T) {
 
 func TestBuildSearchSQL_LabelFilterAddsJoinAndParams(t *testing.T) {
 	pq := parseSearchQuery("label:Location=Yosemite")
-	sql, args := buildSearchSQL(pq, "", false, "")
+	sql, args := buildSearchSQL(pq, "", false, "", false)
 	if !strings.Contains(sql, "JOIN labels lf0") {
 		t.Errorf("expected a labels JOIN for the label filter, got:\n%s", sql)
 	}
-	// exhibitionID, canSeePrivate, currentUserID, name, value
-	if len(args) != 5 || args[3] != "location" || args[4] != "yosemite" {
-		t.Errorf("args = %v, want [.. .. .. location yosemite]", args)
+	// exhibitionID, canSeePrivate, currentUserID, hasPhotoView, name, value
+	if len(args) != 6 || args[4] != "location" || args[5] != "yosemite" {
+		t.Errorf("args = %v, want [.. .. .. .. location yosemite]", args)
 	}
 }
 
