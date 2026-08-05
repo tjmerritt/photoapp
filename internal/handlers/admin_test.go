@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/julienschmidt/httprouter"
 	"github.com/tjmerritt/photoapp/internal/handlers"
 	"github.com/tjmerritt/photoapp/internal/permissions"
@@ -196,30 +197,77 @@ func TestAdminHandler_Stats_ExhibitionScopedCounts(t *testing.T) {
 	env := newTestEnv(t)
 	h := &handlers.AdminHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
 	exhibitionID, admin, _ := adminFixture(t, env) // admin + member already added as members
+	photoA := testutil.CreatePhoto(t, env.Pool, exhibitionID, admin)
 	testutil.CreatePhoto(t, env.Pool, exhibitionID, admin)
-	testutil.CreatePhoto(t, env.Pool, exhibitionID, admin)
+
+	// label_names is per-exhibition (unlike emoji_types, see below), so
+	// ActiveLabelCount is now scoped the same way UserCount/PhotoCount are
+	// and can be asserted exactly, using a fresh exhibitionid this test
+	// alone owns.
+	name1, name2 := "Loc-"+uuid.NewString(), "Cam-"+uuid.NewString()
+	if _, err := env.Pool.Exec(t.Context(), `
+		INSERT INTO labels (photoid, added_by_userid, name, value) VALUES ($1, $2, $3, 'x'), ($1, $2, $4, 'y')
+	`, photoA, admin, name1, name2); err != nil {
+		t.Fatalf("seed labels: %v", err)
+	}
 
 	rec := doRequest(t, http.MethodGet, "/api/v1/admin/stats?exhibitionid="+exhibitionID, admin, exhibitionID, nil, nil, h.Stats)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
 	}
 	var stats struct {
-		UserCount  int `json:"user_count"`
-		PhotoCount int `json:"photo_count"`
+		UserCount        int `json:"user_count"`
+		PhotoCount       int `json:"photo_count"`
+		ActiveLabelCount int `json:"active_label_count"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &stats); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	// UserCount/PhotoCount are scoped to this specific fresh exhibitionid,
-	// so exact assertions are safe. ActiveLabelCount/ActiveEmojiCount are
-	// deliberately not asserted on: label_names/emoji_types are site-wide
-	// tables with no exhibitionid column (see Stats's own doc comment), so
-	// their counts reflect every test's data, not just this one.
+	// UserCount/PhotoCount/ActiveLabelCount are all scoped to this specific
+	// fresh exhibitionid, so exact assertions are safe. ActiveEmojiCount is
+	// deliberately not asserted on: emoji_types is organization-scoped, not
+	// exhibition-scoped (see Stats's own doc comment), so its count reflects
+	// every test's data, not just this one.
 	if stats.UserCount != 2 {
 		t.Errorf("UserCount = %d, want 2 (admin + member)", stats.UserCount)
 	}
 	if stats.PhotoCount != 2 {
 		t.Errorf("PhotoCount = %d, want 2", stats.PhotoCount)
+	}
+	if stats.ActiveLabelCount != 2 {
+		t.Errorf("ActiveLabelCount = %d, want 2", stats.ActiveLabelCount)
+	}
+}
+
+// TestAdminHandler_Stats_ActiveLabelCountScopedToExhibition is the direct
+// regression test for the bug label_names' exhibitionid column fixes: a
+// label name used only in a different exhibition must not inflate this
+// exhibition's ActiveLabelCount.
+func TestAdminHandler_Stats_ActiveLabelCountScopedToExhibition(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.AdminHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
+	exhibitionID, admin, _ := adminFixture(t, env)
+
+	otherExhibitionID := testutil.CreateExhibition(t, env.Pool)
+	otherPhoto := testutil.CreatePhoto(t, env.Pool, otherExhibitionID, admin)
+	if _, err := env.Pool.Exec(t.Context(), `
+		INSERT INTO labels (photoid, added_by_userid, name, value) VALUES ($1, $2, $3, 'x')
+	`, otherPhoto, admin, "Other-"+uuid.NewString()); err != nil {
+		t.Fatalf("seed label in other exhibition: %v", err)
+	}
+
+	rec := doRequest(t, http.MethodGet, "/api/v1/admin/stats?exhibitionid="+exhibitionID, admin, exhibitionID, nil, nil, h.Stats)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
+	}
+	var stats struct {
+		ActiveLabelCount int `json:"active_label_count"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &stats); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if stats.ActiveLabelCount != 0 {
+		t.Errorf("ActiveLabelCount = %d, want 0 (the only label in this fixture belongs to a different exhibition)", stats.ActiveLabelCount)
 	}
 }
 

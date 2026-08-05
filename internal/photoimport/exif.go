@@ -155,28 +155,38 @@ type dbExecer interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// MarkNamesRestricted ensures each name has a label_names row, defaulting
-// restricted to TRUE the first time a name is ever seen. It never touches an
-// existing row's restricted flag — once a name has a row (whether created
-// here or via the admin panel), that row's restricted value is sticky and
-// can only change through an explicit PATCH /api/v1/label-names. This is
-// deliberate: an admin relaxing a name to unrestricted must not be silently
+// MarkNamesRestricted ensures each name has a label_names row for the given
+// exhibition, defaulting restricted to TRUE the first time a name is ever
+// seen in that exhibition — label_names is per-exhibition, so the same name
+// already restricted in one exhibition starts unrestricted (until this
+// marks it) in another. It never touches an existing row's restricted flag
+// — once a name has a row for this exhibition (whether created here or via
+// the admin panel), that row's restricted value is sticky and can only
+// change through an explicit PATCH /api/v1/label-names. This is deliberate:
+// an admin relaxing a name to unrestricted must not be silently
 // re-restricted the next time any photo carrying that label name is
 // uploaded or imported. Empty names are skipped. This is how "every label
 // name defaults to restricted until an admin says otherwise" is
 // implemented: both cmd/import-photos and the browser upload endpoint call
 // this with every label name they're about to write — EXIF-derived and
 // app-computed (Resolution, Filename, Public) alike — not just EXIF ones.
-func MarkNamesRestricted(ctx context.Context, db dbExecer, names []string) error {
+// exhibitionID == "" is a no-op (nothing to scope a label_names row to —
+// e.g. a browser upload with no resolved exhibition context, matching the
+// photo row itself getting a NULL exhibitionid in that same situation)
+// rather than an error.
+func MarkNamesRestricted(ctx context.Context, db dbExecer, exhibitionID string, names []string) error {
+	if exhibitionID == "" {
+		return nil
+	}
 	for _, name := range names {
 		if name == "" {
 			continue
 		}
 		if _, err := db.Exec(ctx, `
-			INSERT INTO label_names (name, restricted)
-			VALUES ($1, TRUE)
-			ON CONFLICT (name) DO NOTHING
-		`, name); err != nil {
+			INSERT INTO label_names (exhibitionid, name, restricted)
+			VALUES ($1, $2, TRUE)
+			ON CONFLICT (exhibitionid, name) DO NOTHING
+		`, exhibitionID, name); err != nil {
 			return fmt.Errorf("marking label name %q restricted: %w", name, err)
 		}
 	}

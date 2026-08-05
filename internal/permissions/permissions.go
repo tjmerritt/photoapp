@@ -294,10 +294,12 @@ const (
 	PermEmojiDelete = "EmojiDelete"
 )
 
-// Label name permissions — govern the shared label_names catalog (which
-// names exist, their restricted/enabled flags, and display color), distinct
-// from PermPhotoLabelCreate/Modify/Delete/View above, which govern
-// individual label VALUES attached to one specific photo.
+// Label name permissions — govern each exhibition's own label_names catalog
+// (which names exist, their restricted/enabled flags, and display color —
+// label_names is scoped per exhibition, so a grant for one exhibition has
+// no effect on another's catalog), distinct from
+// PermPhotoLabelCreate/Modify/Delete/View above, which govern individual
+// label VALUES attached to one specific photo.
 const (
 	PermLabelNameView = "LabelNameView"
 	// PermLabelNameCreate and PermLabelNameModify both apply to the same

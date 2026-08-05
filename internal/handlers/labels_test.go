@@ -176,14 +176,13 @@ func TestLabelsHandler_Create_RestrictedName_RequiresLabelAdmin(t *testing.T) {
 	h := &handlers.LabelsHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
 	fx := setupLabelsFixture(t, env)
 
-	// label_names is a global, app-wide catalog (name is its primary key),
-	// not scoped to an exhibition — unlike every other fixture here, this
-	// row has to be unique across every concurrently-running test on its
-	// own, not via the exhibition it happens to be used from.
+	// label_names is scoped per exhibition (PRIMARY KEY (exhibitionid,
+	// name)); fx uses its own freshly-created exhibition, so this name only
+	// needs to be unique within it.
 	restrictedName := "Sensitive-" + uuid.NewString()
 	if _, err := env.Pool.Exec(t.Context(), `
-		INSERT INTO label_names (name, restricted) VALUES ($1, TRUE)
-	`, restrictedName); err != nil {
+		INSERT INTO label_names (exhibitionid, name, restricted) VALUES ($1, $2, TRUE)
+	`, fx.exhibitionID, restrictedName); err != nil {
 		t.Fatalf("seed restricted label_names row: %v", err)
 	}
 
@@ -199,5 +198,38 @@ func TestLabelsHandler_Create_RestrictedName_RequiresLabelAdmin(t *testing.T) {
 	rec = doRequest(t, http.MethodPost, "/api/v1/labels?photoid="+fx.photoID, fx.labelAdmin, fx.exhibitionID, bytes.NewReader(body), nil, h.Create)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("Create (restricted, LabelAdmin): status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body)
+	}
+}
+
+// TestLabelsHandler_Create_RestrictedNameDoesNotLeakAcrossExhibitions is the
+// direct regression test, at the Create endpoint, for the bug label_names'
+// exhibitionid column fixes: marking a name restricted in one exhibition
+// must not restrict the same name in a different exhibition.
+func TestLabelsHandler_Create_RestrictedNameDoesNotLeakAcrossExhibitions(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.LabelsHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
+	fxA := setupLabelsFixture(t, env)
+	fxB := setupLabelsFixture(t, env)
+
+	name := "Sensitive-" + uuid.NewString()
+	if _, err := env.Pool.Exec(t.Context(), `
+		INSERT INTO label_names (exhibitionid, name, restricted) VALUES ($1, $2, TRUE)
+	`, fxA.exhibitionID, name); err != nil {
+		t.Fatalf("seed restricted label_names row for exhibition A: %v", err)
+	}
+
+	body, _ := json.Marshal(models.AddLabelRequest{Name: name, Value: "yes"})
+
+	// Restricted in A: an ordinary contributor there is forbidden.
+	rec := doRequest(t, http.MethodPost, "/api/v1/labels?photoid="+fxA.photoID, fxA.owner, fxA.exhibitionID, bytes.NewReader(body), nil, h.Create)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("Create in exhibition A (restricted, non-admin): status = %d, want %d, body = %s", rec.Code, http.StatusForbidden, rec.Body)
+	}
+
+	// Same name, exhibition B: never marked restricted there, so an
+	// ordinary contributor must be allowed.
+	rec = doRequest(t, http.MethodPost, "/api/v1/labels?photoid="+fxB.photoID, fxB.owner, fxB.exhibitionID, bytes.NewReader(body), nil, h.Create)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("Create in exhibition B (same name, not restricted there): status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body)
 	}
 }

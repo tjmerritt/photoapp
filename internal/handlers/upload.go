@@ -227,7 +227,7 @@ func (h *UploadPhotosHandler) uploadOne(
 	// unrestricted "Filename" (say) via the admin panel keeps that setting
 	// across every future upload.
 	restrictNames := append(photoimport.Names(exifLabels), photoimport.Names(computed)...)
-	if err := photoimport.MarkNamesRestricted(ctx, tx, restrictNames); err != nil {
+	if err := photoimport.MarkNamesRestricted(ctx, tx, exhibitionID, restrictNames); err != nil {
 		cleanup()
 		return "", fmt.Errorf("marking label names restricted: %w", err)
 	}

@@ -231,7 +231,7 @@ func main() {
 						action = "updated"
 						updated++
 						if restrictLabels {
-							if err := photoimport.MarkNamesRestricted(ctx, pool, names([]label(extraLabels))); err != nil {
+							if err := photoimport.MarkNamesRestricted(ctx, pool, exhibition, names([]label(extraLabels))); err != nil {
 								slog.Warn("failed to mark label names restricted", "photoid", hintID, "error", err)
 							}
 						}
@@ -302,14 +302,14 @@ func main() {
 		// panel is never undone by a later import. Both are no-ops in
 		// --dry-run mode, since nothing else is written to the DB either.
 		if !dryRun {
-			if err := photoimport.MarkNamesRestricted(ctx, pool, names(exifLabels)); err != nil {
+			if err := photoimport.MarkNamesRestricted(ctx, pool, exhibition, names(exifLabels)); err != nil {
 				slog.Warn("failed to mark EXIF label names restricted", "url", rawURL, "error", err)
 			}
-			if err := photoimport.MarkNamesRestricted(ctx, pool, names([]label(computedLabels))); err != nil {
+			if err := photoimport.MarkNamesRestricted(ctx, pool, exhibition, names([]label(computedLabels))); err != nil {
 				slog.Warn("failed to mark computed label names restricted", "url", rawURL, "error", err)
 			}
 			if restrictLabels {
-				if err := photoimport.MarkNamesRestricted(ctx, pool, names([]label(extraLabels))); err != nil {
+				if err := photoimport.MarkNamesRestricted(ctx, pool, exhibition, names([]label(extraLabels))); err != nil {
 					slog.Warn("failed to mark label names restricted", "url", rawURL, "error", err)
 				}
 			}

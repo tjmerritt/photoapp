@@ -129,7 +129,10 @@ func photoAccessibleViaDisplaySQL(photoIDExpr, userIDExpr string) string {
 }
 
 // fetchLabels returns a page of labels for a photo plus the total count.
-func fetchLabels(ctx context.Context, pool *db.Pool, photoid string, offset, limit int) ([]models.Label, int, error) {
+// exhibitionID scopes the label_names join — label_names is per-exhibition,
+// so this should be the photo's own exhibition (callers resolve it the same
+// way permission checks in this package do).
+func fetchLabels(ctx context.Context, pool *db.Pool, exhibitionID, photoid string, offset, limit int) ([]models.Label, int, error) {
 	// total count
 	var total int
 	err := pool.QueryRow(ctx, `
@@ -146,11 +149,11 @@ func fetchLabels(ctx context.Context, pool *db.Pool, photoid string, offset, lim
 		       ln.color_hex, COALESCE(ln.restricted, FALSE)
 		FROM   labels l
 		JOIN   users  u  ON u.userid = l.added_by_userid
-		LEFT   JOIN label_names ln ON ln.name = l.name
+		LEFT   JOIN label_names ln ON ln.name = l.name AND ln.exhibitionid = $4
 		WHERE  l.photoid = $1 AND l.deleted_at IS NULL
 		ORDER  BY l.created_at
 		LIMIT  $2 OFFSET $3
-	`, photoid, limit, offset)
+	`, photoid, limit, offset, exhibitionID)
 	if err != nil {
 		return nil, 0, err
 	}

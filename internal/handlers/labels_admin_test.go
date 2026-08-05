@@ -38,15 +38,16 @@ func TestLabelsHandler_Names(t *testing.T) {
 	h := &handlers.LabelsHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
 	fx := setupLabelsFixture(t, env)
 
-	// label_names is a global catalog keyed by name alone (see
-	// labels_test.go's TestLabelsHandler_Create_RestrictedName_RequiresLabelAdmin),
-	// so — like that test — this name has to be unique across every
-	// concurrently-running test on its own, not scoped by exhibition.
+	// label_names is scoped per exhibition; fx uses its own freshly-created
+	// exhibition (see setupLabelsFixture), so this name only needs to be
+	// unique within that isolated exhibition, not across every
+	// concurrently-running test.
 	name := "Camera-" + uuid.NewString()
 	createLabel(t, env, h, fx, name, "Nikon")
 
-	// Public endpoint — no permission grant, no exhibition context needed.
-	rec := doRequest(t, http.MethodGet, "/api/v1/label-names", "", "", nil, nil, h.Names)
+	// Public endpoint (no permission grant needed) but still exhibition-
+	// scoped — label_names/labels are only listed for fx's own exhibition.
+	rec := doRequest(t, http.MethodGet, "/api/v1/label-names", "", fx.exhibitionID, nil, nil, h.Names)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
 	}
@@ -94,11 +95,123 @@ func TestLabelsHandler_AdminListNames(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	// The search filter scopes this to exactly the name just created, so —
-	// unlike Names above — an exact-length assertion is safe here even
-	// though label_names is a global, unscoped catalog.
+	// The search filter scopes this to exactly the name just created, so an
+	// exact-length assertion is safe here regardless of exhibition scoping.
 	if len(resp.Names) != 1 || resp.Names[0].Name != name || resp.Names[0].UsageCount != 2 {
 		t.Fatalf("got %+v, want exactly one name %q with usage_count=2", resp.Names, name)
+	}
+}
+
+// TestLabelsHandler_Names_ScopedToExhibition and
+// TestLabelsHandler_AdminListNames_ScopedToExhibition are the direct
+// regression tests for the bug label_names' exhibitionid column fixes: a
+// label name used in one exhibition must not appear (and its
+// color/restricted/enabled attributes must not leak) into a different
+// exhibition's listing.
+
+func TestLabelsHandler_Names_ScopedToExhibition(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.LabelsHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
+	fxA := setupLabelsFixture(t, env)
+	fxB := setupLabelsFixture(t, env)
+	name := "Camera-" + uuid.NewString()
+
+	// Used only in exhibition A, and given a color override there.
+	createLabel(t, env, h, fxA, name, "Nikon")
+	body, _ := json.Marshal(map[string]any{"color_hex": "#ff00ff"})
+	rec := doRequest(t, http.MethodPatch, "/api/v1/label-names?name="+name, fxA.labelAdmin, fxA.exhibitionID, bytes.NewReader(body), nil, h.UpdateName)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("UpdateName in exhibition A: status = %d, body = %s", rec.Code, rec.Body)
+	}
+
+	// Exhibition B has never used this name — it must not show up in B's
+	// Names listing at all.
+	rec = doRequest(t, http.MethodGet, "/api/v1/label-names", "", fxB.exhibitionID, nil, nil, h.Names)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
+	}
+	var respB struct {
+		Names []models.LabelNameInfo `json:"names"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &respB); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, n := range respB.Names {
+		if n.Name == name {
+			t.Fatalf("exhibition B's Names listing includes %+v, want it absent (only ever used in exhibition A)", n)
+		}
+	}
+
+	// Now use the same name in exhibition B — it must default to
+	// unrestricted/no-color there, unaffected by A's override.
+	createLabel(t, env, h, fxB, name, "Canon")
+	rec = doRequest(t, http.MethodGet, "/api/v1/label-names", "", fxB.exhibitionID, nil, nil, h.Names)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
+	}
+	respB.Names = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &respB); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var gotB *models.LabelNameInfo
+	for i := range respB.Names {
+		if respB.Names[i].Name == name {
+			gotB = &respB.Names[i]
+		}
+	}
+	if gotB == nil {
+		t.Fatalf("name %q not found in exhibition B's Names listing after creating a label with it there", name)
+	}
+	if gotB.ColorHex != nil {
+		t.Errorf("exhibition B's ColorHex = %v, want nil (A's #ff00ff override must not leak into B)", *gotB.ColorHex)
+	}
+}
+
+func TestLabelsHandler_AdminListNames_ScopedToExhibition(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.LabelsHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
+	fxA := setupLabelsFixture(t, env)
+	fxB := setupLabelsFixture(t, env)
+	name := "Camera-" + uuid.NewString()
+
+	createLabel(t, env, h, fxA, name, "Nikon")
+
+	// fxB's admin listing, searched for the exact name, must find nothing —
+	// this name has never been used in fxB's exhibition.
+	rec := doRequest(t, http.MethodGet, "/api/v1/admin/label-names?search="+name, fxB.labelAdmin, fxB.exhibitionID, nil, nil, h.AdminListNames)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
+	}
+	var resp struct {
+		Names []models.LabelNameInfo `json:"names"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Names) != 0 {
+		t.Fatalf("fxB's AdminListNames found %+v for a name only ever used in fxA, want none", resp.Names)
+	}
+}
+
+func TestLabelsHandler_Names_EmptyExhibitionIDReturnsEmptyNotError(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.LabelsHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
+
+	// No resolved exhibition context (e.g. an unrecognized hostname) — must
+	// short-circuit to an empty list rather than erroring by binding "" to
+	// the exhibitionid uuid column.
+	rec := doRequest(t, http.MethodGet, "/api/v1/label-names", "", "", nil, nil, h.Names)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
+	}
+	var resp struct {
+		Names []models.LabelNameInfo `json:"names"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Names) != 0 {
+		t.Errorf("Names = %v, want empty", resp.Names)
 	}
 }
 

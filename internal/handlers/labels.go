@@ -25,13 +25,17 @@ type LabelsHandler struct {
 }
 
 // fetchLabelNameInfo returns a label name's color override, restricted flag
-// (Phase 5b), and enabled flag (Phase 6e) from label_names. A name with no
-// row at all has no color override, is not restricted, and is enabled —
-// those are exactly the right zero-value defaults, and a name only ever
-// gains a row once something explicitly marks it (EXIF import,
-// --restrict-labels, or the PATCH /api/v1/label-names endpoint below).
-func fetchLabelNameInfo(ctx context.Context, pool *db.Pool, name string) (colorHex *string, restricted bool, enabled bool, err error) {
-	err = pool.QueryRow(ctx, `SELECT color_hex, restricted, enabled FROM label_names WHERE name = $1`, name).
+// (Phase 5b), and enabled flag (Phase 6e) from label_names, scoped to the
+// given exhibition — label_names is per-exhibition (each exhibition has its
+// own independent catalog; the same name in two different exhibitions can
+// have different colors/restricted/enabled settings). A name with no row at
+// all in this exhibition has no color override, is not restricted, and is
+// enabled — those are exactly the right zero-value defaults, and a name
+// only ever gains a row once something explicitly marks it for this
+// exhibition (EXIF import, --restrict-labels, or the PATCH
+// /api/v1/label-names endpoint below).
+func fetchLabelNameInfo(ctx context.Context, pool *db.Pool, exhibitionID, name string) (colorHex *string, restricted bool, enabled bool, err error) {
+	err = pool.QueryRow(ctx, `SELECT color_hex, restricted, enabled FROM label_names WHERE exhibitionid = $1 AND name = $2`, exhibitionID, name).
 		Scan(&colorHex, &restricted, &enabled)
 	if err == pgx.ErrNoRows {
 		return nil, false, true, nil
@@ -60,7 +64,19 @@ func (h *LabelsHandler) List(w http.ResponseWriter, r *http.Request, _ httproute
 
 	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
 
-	labels, total, err := fetchLabels(ctx, h.DB, photoid, offset, limit)
+	// label_names is per-exhibition, so this needs the photo's own
+	// exhibition rather than the request context's — exhibitionID above can
+	// be "" (e.g. an unresolved hostname combined with a genuinely global
+	// PhotoLabelView grant), but the photo itself always belongs to a real
+	// exhibition.
+	photoExhibitionID, err := resolvePhotoExhibition(ctx, h.DB, photoid)
+	if err != nil {
+		slog.Error("List", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	labels, total, err := fetchLabels(ctx, h.DB, photoExhibitionID, photoid, offset, limit)
 	if err != nil {
 		slog.Error("List", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -126,7 +142,7 @@ func (h *LabelsHandler) Create(w http.ResponseWriter, r *http.Request, _ httprou
 	// and enabled flag — the latter two gate who may proceed, the color just
 	// rides along on the response so the frontend doesn't need a second
 	// round-trip.
-	colorHex, restricted, enabled, err := fetchLabelNameInfo(ctx, h.DB, req.Name)
+	colorHex, restricted, enabled, err := fetchLabelNameInfo(ctx, h.DB, exhibitionID, req.Name)
 	if err != nil {
 		slog.Error("Create", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -202,8 +218,14 @@ func (h *LabelsHandler) Update(w http.ResponseWriter, r *http.Request, ps httpro
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
+	exhibitionID, err := resolvePhotoExhibition(ctx, h.DB, photoid)
+	if err != nil {
+		slog.Error("Update", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
 	if ownerID != userID {
-		exhibitionID, _ := resolvePhotoExhibition(ctx, h.DB, photoid)
 		if ok, _ := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermLabelAdmin); !ok {
 			middleware.WriteError(w, http.StatusForbidden, "you may only edit your own labels")
 			return
@@ -219,7 +241,7 @@ func (h *LabelsHandler) Update(w http.ResponseWriter, r *http.Request, ps httpro
 		namesToCheck = append(namesToCheck, *req.Name)
 	}
 	for _, n := range namesToCheck {
-		_, restricted, enabled, err := fetchLabelNameInfo(ctx, h.DB, n)
+		_, restricted, enabled, err := fetchLabelNameInfo(ctx, h.DB, exhibitionID, n)
 		if err != nil {
 			slog.Error("Update", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -228,7 +250,6 @@ func (h *LabelsHandler) Update(w http.ResponseWriter, r *http.Request, ps httpro
 		if !restricted && enabled {
 			continue
 		}
-		exhibitionID, _ := resolvePhotoExhibition(ctx, h.DB, photoid)
 		if ok, _ := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermLabelAdmin); !ok {
 			if !enabled {
 				middleware.WriteError(w, http.StatusForbidden, fmt.Sprintf("label name %q is disabled", n))
@@ -260,7 +281,7 @@ func (h *LabelsHandler) Update(w http.ResponseWriter, r *http.Request, ps httpro
 	var username string
 	_ = h.DB.QueryRow(ctx, `SELECT username FROM users WHERE userid=$1`, userID).Scan(&username)
 
-	colorHex, restricted, _, err := fetchLabelNameInfo(ctx, h.DB, newName)
+	colorHex, restricted, _, err := fetchLabelNameInfo(ctx, h.DB, exhibitionID, newName)
 	if err != nil {
 		slog.Error("Update", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -298,8 +319,14 @@ func (h *LabelsHandler) Delete(w http.ResponseWriter, r *http.Request, ps httpro
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
+	exhibitionID, err := resolvePhotoExhibition(ctx, h.DB, photoid)
+	if err != nil {
+		slog.Error("Delete", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
 	if ownerID != userID {
-		exhibitionID, _ := resolvePhotoExhibition(ctx, h.DB, photoid)
 		if ok, _ := h.Checker.Check(ctx, userID, exhibitionID, "", "", "", permissions.PermLabelAdmin); !ok {
 			middleware.WriteError(w, http.StatusForbidden, "you may only delete your own labels")
 			return
@@ -308,12 +335,11 @@ func (h *LabelsHandler) Delete(w http.ResponseWriter, r *http.Request, ps httpro
 
 	// Phase 5b/6e: even the label's own creator may not delete it once its
 	// name is restricted or disabled — only Admin/LabelAdmin may.
-	if _, restricted, enabled, err := fetchLabelNameInfo(ctx, h.DB, name); err != nil {
+	if _, restricted, enabled, err := fetchLabelNameInfo(ctx, h.DB, exhibitionID, name); err != nil {
 		slog.Error("Delete", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	} else if restricted || !enabled {
-		exhibitionID, _ := resolvePhotoExhibition(ctx, h.DB, photoid)
 		if ok, _ := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermLabelAdmin); !ok {
 			if !enabled {
 				middleware.WriteError(w, http.StatusForbidden, fmt.Sprintf("label name %q is disabled", name))
@@ -337,19 +363,34 @@ func (h *LabelsHandler) Delete(w http.ResponseWriter, r *http.Request, ps httpro
 }
 
 // GET /api/v1/label-names  — distinct label names across all non-deleted
-// labels, annotated with each name's color override (Phase 5a), restricted
-// flag (Phase 5b), and enabled flag (Phase 6e) where set. Returns every name
-// regardless of enabled/restricted state — this feeds the color/lock-icon
-// rendering for labels that already exist on photos, not just the "add a new
-// label" suggestion list (which does its own client-side filtering).
+// labels *in the current exhibition*, annotated with each name's color
+// override (Phase 5a), restricted flag (Phase 5b), and enabled flag (Phase
+// 6e) — all three per-exhibition, since label_names is scoped per
+// exhibition (the same name in a different exhibition can have different
+// settings). Returns every name regardless of enabled/restricted state —
+// this feeds the color/lock-icon rendering for labels that already exist on
+// photos, not just the "add a new label" suggestion list (which does its
+// own client-side filtering).
 func (h *LabelsHandler) Names(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	rows, err := h.DB.Query(r.Context(), `
+	ctx := r.Context()
+	exhibitionID := middleware.ExhibitionID(ctx)
+	if exhibitionID == "" {
+		// No resolved exhibition context (e.g. an unrecognized hostname) —
+		// nothing to scope to, so there's nothing to return. Short-circuit
+		// before the query below, since binding "" against the exhibitionid
+		// uuid column would fail at the database level, not just match zero
+		// rows.
+		middleware.WriteJSON(w, http.StatusOK, map[string][]models.LabelNameInfo{"names": {}})
+		return
+	}
+	rows, err := h.DB.Query(ctx, `
 		SELECT DISTINCT l.name, ln.color_hex, COALESCE(ln.restricted, FALSE), COALESCE(ln.enabled, TRUE)
 		FROM   labels l
-		LEFT   JOIN label_names ln ON ln.name = l.name
-		WHERE  l.deleted_at IS NULL
+		JOIN   photos p ON p.photoid = l.photoid
+		LEFT   JOIN label_names ln ON ln.name = l.name AND ln.exhibitionid = p.exhibitionid
+		WHERE  l.deleted_at IS NULL AND p.exhibitionid = $1
 		ORDER  BY l.name
-	`)
+	`, exhibitionID)
 	if err != nil {
 		slog.Error("Names", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -368,9 +409,10 @@ func (h *LabelsHandler) Names(w http.ResponseWriter, r *http.Request, _ httprout
 }
 
 // GET /api/v1/admin/label-names?search=&include_disabled=&offset=&limit=  (Phase 6e)
-// Paginated admin listing of every distinct label name in use, each
-// annotated with its color override, restricted flag, enabled flag, and
-// usage count (how many non-deleted labels currently use it).
+// Paginated admin listing of every distinct label name in use *within the
+// current exhibition*, each annotated with its (per-exhibition) color
+// override, restricted flag, enabled flag, and usage count (how many
+// non-deleted labels in this exhibition currently use it).
 // Requires: authenticated + (PermAdmin or PermLabelAdmin or PermLabelNameView).
 func (h *LabelsHandler) AdminListNames(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	ctx := r.Context()
@@ -380,15 +422,28 @@ func (h *LabelsHandler) AdminListNames(w http.ResponseWriter, r *http.Request, _
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
+	if exhibitionID == "" {
+		// No resolved exhibition context — nothing to scope to, so nothing
+		// to list. Short-circuit before the query below, since binding ""
+		// against the exhibitionid uuid column would fail at the database
+		// level, not just match zero rows.
+		middleware.WriteJSON(w, http.StatusOK, map[string]any{
+			"total": 0, "offset": 0, "limit": h.Cfg.DefaultPageSize, "names": []models.LabelNameInfo{},
+		})
+		return
+	}
 
 	q := r.URL.Query()
 	search := strings.TrimSpace(q.Get("search"))
 	includeDisabled := q.Get("include_disabled") == "true"
 	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
 
-	where := "l.deleted_at IS NULL"
-	args := []any{}
-	n := 1
+	// $1 is always the current exhibition — scopes both the labels source
+	// (via the photos join) and the label_names join, since label_names is
+	// per-exhibition.
+	where := "l.deleted_at IS NULL AND p.exhibitionid = $1"
+	args := []any{exhibitionID}
+	n := 2
 	if !includeDisabled {
 		where += " AND COALESCE(ln.enabled, TRUE)"
 	}
@@ -402,7 +457,8 @@ func (h *LabelsHandler) AdminListNames(w http.ResponseWriter, r *http.Request, _
 	if err := h.DB.QueryRow(ctx, fmt.Sprintf(`
 		SELECT COUNT(DISTINCT l.name)
 		FROM   labels l
-		LEFT   JOIN label_names ln ON ln.name = l.name
+		JOIN   photos p ON p.photoid = l.photoid
+		LEFT   JOIN label_names ln ON ln.name = l.name AND ln.exhibitionid = p.exhibitionid
 		WHERE  %s
 	`, where), args...).Scan(&total); err != nil {
 		slog.Error("AdminListNames count", "error", err)
@@ -415,7 +471,8 @@ func (h *LabelsHandler) AdminListNames(w http.ResponseWriter, r *http.Request, _
 		SELECT l.name, ln.color_hex, COALESCE(ln.restricted, FALSE), COALESCE(ln.enabled, TRUE),
 		       COUNT(*) AS usage_count
 		FROM   labels l
-		LEFT   JOIN label_names ln ON ln.name = l.name
+		JOIN   photos p ON p.photoid = l.photoid
+		LEFT   JOIN label_names ln ON ln.name = l.name AND ln.exhibitionid = p.exhibitionid
 		WHERE  %s
 		GROUP  BY l.name, ln.color_hex, ln.restricted, ln.enabled
 		ORDER  BY l.name
@@ -459,8 +516,10 @@ func (h *LabelsHandler) AdminListNames(w http.ResponseWriter, r *http.Request, _
 // changed. An empty string for color_hex clears the override (falling back
 // to the client-side hash-based color again).
 //
-// This is an upsert (ON CONFLICT DO UPDATE below) — it creates a label_names
-// row if none exists yet, or updates one that does. LabelNameCreate and
+// This is an upsert (ON CONFLICT DO UPDATE below), scoped to the calling
+// exhibition — it creates a label_names row for this exhibition if none
+// exists yet, or updates the one that does, without touching any other
+// exhibition's settings for the same name. LabelNameCreate and
 // LabelNameModify are both accepted rather than distinguishing the two with
 // an extra existence-check query first; either is sufficient to perform
 // this single endpoint's one action. See permissions.PermLabelNameCreate's
@@ -480,6 +539,13 @@ func (h *LabelsHandler) UpdateName(w http.ResponseWriter, r *http.Request, _ htt
 		permissions.PermLabelNameCreate, permissions.PermLabelNameModify,
 	); err != nil || !ok {
 		middleware.WriteError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	if exhibitionID == "" {
+		// label_names rows require a real owning exhibition (NOT NULL FK) —
+		// no resolved exhibition context (e.g. an unrecognized hostname)
+		// means there's nothing valid to write into.
+		middleware.WriteError(w, http.StatusBadRequest, "no exhibition context")
 		return
 	}
 
@@ -521,20 +587,20 @@ func (h *LabelsHandler) UpdateName(w http.ResponseWriter, r *http.Request, _ htt
 	}
 
 	if _, err := h.DB.Exec(ctx, `
-		INSERT INTO label_names (name, color_hex, restricted, enabled)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (name) DO UPDATE SET
-			color_hex  = CASE WHEN $5 THEN $2 ELSE label_names.color_hex  END,
-			restricted = CASE WHEN $6 THEN $3 ELSE label_names.restricted END,
-			enabled    = CASE WHEN $7 THEN $4 ELSE label_names.enabled    END,
+		INSERT INTO label_names (exhibitionid, name, color_hex, restricted, enabled)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (exhibitionid, name) DO UPDATE SET
+			color_hex  = CASE WHEN $6 THEN $3 ELSE label_names.color_hex  END,
+			restricted = CASE WHEN $7 THEN $4 ELSE label_names.restricted END,
+			enabled    = CASE WHEN $8 THEN $5 ELSE label_names.enabled    END,
 			updated_at = NOW()
-	`, name, colorVal, restrictedVal, enabledVal, hasColor, hasRestricted, hasEnabled); err != nil {
+	`, exhibitionID, name, colorVal, restrictedVal, enabledVal, hasColor, hasRestricted, hasEnabled); err != nil {
 		slog.Error("UpdateName", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
 
-	colorHex, restricted, enabled, err := fetchLabelNameInfo(ctx, h.DB, name)
+	colorHex, restricted, enabled, err := fetchLabelNameInfo(ctx, h.DB, exhibitionID, name)
 	if err != nil {
 		slog.Error("UpdateName", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")

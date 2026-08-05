@@ -40,7 +40,7 @@ type adminExhibition struct {
 type adminStats struct {
 	UserCount        int `json:"user_count"`        // members of this exhibition
 	PhotoCount       int `json:"photo_count"`        // non-deleted photos in this exhibition
-	ActiveLabelCount int `json:"active_label_count"` // distinct, enabled label names in use (site-wide — label_names has no exhibitionid)
+	ActiveLabelCount int `json:"active_label_count"` // distinct, enabled label names in use in this exhibition (label_names is per-exhibition)
 	ActiveEmojiCount int `json:"active_emoji_count"` // active emoji types (site-wide — emoji_types has no exhibitionid)
 }
 
@@ -309,20 +309,26 @@ func (h *AdminHandler) Stats(w http.ResponseWriter, r *http.Request, _ httproute
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
 		}
+		// label_names is per-exhibition (each exhibition has its own
+		// independent catalog), so this count is scoped the same way
+		// UserCount/PhotoCount above are — left at zero if exhibitionID
+		// couldn't be resolved, same as those two.
+		if err := h.DB.QueryRow(ctx, `
+			SELECT COUNT(DISTINCT l.name)
+			FROM   labels l
+			JOIN   photos p ON p.photoid = l.photoid
+			LEFT   JOIN label_names ln ON ln.name = l.name AND ln.exhibitionid = p.exhibitionid
+			WHERE  l.deleted_at IS NULL AND p.exhibitionid = $1::uuid AND COALESCE(ln.enabled, TRUE)
+		`, exhibitionID).Scan(&stats.ActiveLabelCount); err != nil {
+			slog.Error("Stats label count", "error", err)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
 	}
-	// label_names / emoji_types are site-wide tables (no exhibitionid column),
-	// so these two counts are the same regardless of which exhibition is
-	// selected — see migrations/017_admin_phase6.sql's comment for why.
-	if err := h.DB.QueryRow(ctx, `
-		SELECT COUNT(DISTINCT l.name)
-		FROM   labels l
-		LEFT   JOIN label_names ln ON ln.name = l.name
-		WHERE  l.deleted_at IS NULL AND COALESCE(ln.enabled, TRUE)
-	`).Scan(&stats.ActiveLabelCount); err != nil {
-		slog.Error("Stats label count", "error", err)
-		middleware.WriteError(w, http.StatusInternalServerError, "db error")
-		return
-	}
+	// emoji_types is organization-scoped, not exhibition-scoped (Phase 1b —
+	// see internal/handlers/emojis.go), so this count doesn't vary by
+	// exhibitionid the way label_names now does; out of scope for the
+	// label_names fix above.
 	if err := h.DB.QueryRow(ctx, `
 		SELECT COUNT(*) FROM emoji_types WHERE is_active = TRUE
 	`).Scan(&stats.ActiveEmojiCount); err != nil {

@@ -114,8 +114,19 @@ func (h *PhotoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── Labels (first page) ───────────────────────────────────────────────────
+	// label_names is per-exhibition, so this needs the photo's own
+	// exhibition, not necessarily the request context's — exhibitionID above
+	// can be "" (the random/cross-exhibition lookup branches above explicitly
+	// support that), but the photo we just found always belongs to a real
+	// one.
 	const labelLimit = 10
-	labels, labelTotal, err := fetchLabels(ctx, h.DB, photoid, 0, labelLimit)
+	photoExhibitionID, err := resolvePhotoExhibition(ctx, h.DB, photoid)
+	if err != nil {
+		slog.Error("ServeHTTP", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	labels, labelTotal, err := fetchLabels(ctx, h.DB, photoExhibitionID, photoid, 0, labelLimit)
 	if err != nil {
 		slog.Error("ServeHTTP", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")

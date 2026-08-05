@@ -126,15 +126,16 @@ func TestExtractEXIF_GarbageDataReturnsNilNotPanic(t *testing.T) {
 func TestMarkNamesRestricted_UpsertsAndSkipsEmptyNames(t *testing.T) {
 	pool := testutil.RequireDB(t)
 	ctx := t.Context()
+	exhibitionID := testutil.CreateExhibition(t, pool)
 
-	err := photoimport.MarkNamesRestricted(ctx, pool, []string{"Camera Make", "", "ISO"})
+	err := photoimport.MarkNamesRestricted(ctx, pool, exhibitionID, []string{"Camera Make", "", "ISO"})
 	if err != nil {
 		t.Fatalf("MarkNamesRestricted: %v", err)
 	}
 
 	for _, name := range []string{"Camera Make", "ISO"} {
 		var restricted bool
-		if err := pool.QueryRow(ctx, `SELECT restricted FROM label_names WHERE name = $1`, name).Scan(&restricted); err != nil {
+		if err := pool.QueryRow(ctx, `SELECT restricted FROM label_names WHERE exhibitionid = $1 AND name = $2`, exhibitionID, name).Scan(&restricted); err != nil {
 			t.Fatalf("querying label_names for %q: %v", name, err)
 		}
 		if !restricted {
@@ -143,7 +144,7 @@ func TestMarkNamesRestricted_UpsertsAndSkipsEmptyNames(t *testing.T) {
 	}
 
 	var count int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM label_names WHERE name = ''`).Scan(&count); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM label_names WHERE exhibitionid = $1 AND name = ''`, exhibitionID).Scan(&count); err != nil {
 		t.Fatalf("querying label_names for empty name: %v", err)
 	}
 	if count != 0 {
@@ -151,30 +152,43 @@ func TestMarkNamesRestricted_UpsertsAndSkipsEmptyNames(t *testing.T) {
 	}
 }
 
-func TestMarkNamesRestricted_NeverUnrestricts(t *testing.T) {
+func TestMarkNamesRestricted_IsNoOpForEmptyExhibitionID(t *testing.T) {
 	pool := testutil.RequireDB(t)
 	ctx := t.Context()
 
-	// label_names is a global catalog (name is its primary key), not scoped
-	// to anything test-specific, and this seed row uses a plain INSERT
-	// rather than MarkNamesRestricted's own ON CONFLICT upsert — so unlike
-	// "Camera Make"/"ISO" in the test above (which go through the real
-	// idempotent upsert and are safe to reuse indefinitely), this name needs
-	// to be unique per run or a second run of this test would fail on the
-	// name's uniqueness constraint.
+	// No resolved exhibition context (e.g. a browser upload with no
+	// recognized hostname) must be a safe no-op, not an error — there's no
+	// valid exhibition to attach a label_names row to.
+	if err := photoimport.MarkNamesRestricted(ctx, pool, "", []string{"Camera Make"}); err != nil {
+		t.Fatalf("MarkNamesRestricted with empty exhibitionID: %v", err)
+	}
+}
+
+func TestMarkNamesRestricted_NeverUnrestricts(t *testing.T) {
+	pool := testutil.RequireDB(t)
+	ctx := t.Context()
+	exhibitionID := testutil.CreateExhibition(t, pool)
+
+	// label_names is scoped per exhibition (PRIMARY KEY (exhibitionid,
+	// name)); this seed row uses a plain INSERT rather than
+	// MarkNamesRestricted's own ON CONFLICT upsert — so unlike "Camera
+	// Make"/"ISO" in the test above (which go through the real idempotent
+	// upsert and are safe to reuse indefinitely), this name needs to be
+	// unique per run or a second run of this test would fail on the
+	// (exhibitionid, name) uniqueness constraint.
 	name := "Location-" + uuid.NewString()
-	if _, err := pool.Exec(ctx, `INSERT INTO label_names (name, restricted) VALUES ($1, TRUE)`, name); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO label_names (exhibitionid, name, restricted) VALUES ($1, $2, TRUE)`, exhibitionID, name); err != nil {
 		t.Fatalf("seed label_names: %v", err)
 	}
 
 	// Calling it again (idempotent upsert) must leave restricted = TRUE, not
 	// reset or clear it.
-	if err := photoimport.MarkNamesRestricted(ctx, pool, []string{name}); err != nil {
+	if err := photoimport.MarkNamesRestricted(ctx, pool, exhibitionID, []string{name}); err != nil {
 		t.Fatalf("MarkNamesRestricted: %v", err)
 	}
 
 	var restricted bool
-	if err := pool.QueryRow(ctx, `SELECT restricted FROM label_names WHERE name = $1`, name).Scan(&restricted); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT restricted FROM label_names WHERE exhibitionid = $1 AND name = $2`, exhibitionID, name).Scan(&restricted); err != nil {
 		t.Fatalf("query: %v", err)
 	}
 	if !restricted {
@@ -193,24 +207,63 @@ func TestMarkNamesRestricted_NeverUnrestricts(t *testing.T) {
 func TestMarkNamesRestricted_DoesNotReRestrictAdminUnrestrictedName(t *testing.T) {
 	pool := testutil.RequireDB(t)
 	ctx := t.Context()
+	exhibitionID := testutil.CreateExhibition(t, pool)
 
 	name := "Filename-" + uuid.NewString()
 	// Simulate: name already has a row (e.g. created by an earlier upload),
 	// and an admin has since explicitly unrestricted it.
-	if _, err := pool.Exec(ctx, `INSERT INTO label_names (name, restricted) VALUES ($1, FALSE)`, name); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO label_names (exhibitionid, name, restricted) VALUES ($1, $2, FALSE)`, exhibitionID, name); err != nil {
 		t.Fatalf("seed label_names: %v", err)
 	}
 
 	// A later upload/import sees this name again and calls MarkNamesRestricted.
-	if err := photoimport.MarkNamesRestricted(ctx, pool, []string{name}); err != nil {
+	if err := photoimport.MarkNamesRestricted(ctx, pool, exhibitionID, []string{name}); err != nil {
 		t.Fatalf("MarkNamesRestricted: %v", err)
 	}
 
 	var restricted bool
-	if err := pool.QueryRow(ctx, `SELECT restricted FROM label_names WHERE name = $1`, name).Scan(&restricted); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT restricted FROM label_names WHERE exhibitionid = $1 AND name = $2`, exhibitionID, name).Scan(&restricted); err != nil {
 		t.Fatalf("query: %v", err)
 	}
 	if restricted {
 		t.Error("restricted was flipped back to true, want the admin's unrestrict to stick")
+	}
+}
+
+// TestMarkNamesRestricted_SameNameDifferentExhibitionsIndependent is the
+// direct regression test for the bug this whole migration fixes: the same
+// label name in two different exhibitions must have independent restricted
+// flags, not share one global row.
+func TestMarkNamesRestricted_SameNameDifferentExhibitionsIndependent(t *testing.T) {
+	pool := testutil.RequireDB(t)
+	ctx := t.Context()
+	exhibitionA := testutil.CreateExhibition(t, pool)
+	exhibitionB := testutil.CreateExhibition(t, pool)
+	name := "Location-" + uuid.NewString()
+
+	// Exhibition A: admin has explicitly unrestricted this name.
+	if _, err := pool.Exec(ctx, `INSERT INTO label_names (exhibitionid, name, restricted) VALUES ($1, $2, FALSE)`, exhibitionA, name); err != nil {
+		t.Fatalf("seed label_names for exhibition A: %v", err)
+	}
+
+	// Exhibition B sees this name for the first time via MarkNamesRestricted
+	// — it should default to restricted, independent of exhibition A's
+	// setting for the same name.
+	if err := photoimport.MarkNamesRestricted(ctx, pool, exhibitionB, []string{name}); err != nil {
+		t.Fatalf("MarkNamesRestricted for exhibition B: %v", err)
+	}
+
+	var restrictedA, restrictedB bool
+	if err := pool.QueryRow(ctx, `SELECT restricted FROM label_names WHERE exhibitionid = $1 AND name = $2`, exhibitionA, name).Scan(&restrictedA); err != nil {
+		t.Fatalf("query exhibition A: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT restricted FROM label_names WHERE exhibitionid = $1 AND name = $2`, exhibitionB, name).Scan(&restrictedB); err != nil {
+		t.Fatalf("query exhibition B: %v", err)
+	}
+	if restrictedA {
+		t.Error("exhibition A's restricted flag changed, want it to remain false (unaffected by exhibition B)")
+	}
+	if !restrictedB {
+		t.Error("exhibition B's restricted flag = false, want true (first time seen in this exhibition)")
 	}
 }
