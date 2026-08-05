@@ -108,10 +108,18 @@
     <section>
       <div class="flex items-center gap-2 mb-2">
         <h2 class="text-sm font-bold text-gray-700 uppercase tracking-wide">Global grants</h2>
-        <span class="text-xs text-gray-400" x-text="'(' + globalTotal + ') — apply across every exhibition'"></span>
+        <span x-show="!globalAuthError" class="text-xs text-gray-400" x-text="'(' + globalTotal + ') — apply across every exhibition'"></span>
       </div>
       <div x-show="loading" class="h-24 bg-white rounded-2xl border border-gray-200 animate-pulse"></div>
-      <div x-show="!loading" class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-x-auto">
+      <!-- Grants that apply to every organization and exhibition require a
+           true global admin grant to view or manage (PLAN2.md Phase 2e) —
+           most exhibition admins visiting this page won't have one, and
+           that's expected, not an error with the page itself. -->
+      <div x-show="!loading && globalAuthError"
+           class="bg-white rounded-2xl border border-gray-200 shadow-sm py-10 text-center text-gray-400 text-sm">
+        Only global administrators can view or manage grants that apply to every exhibition.
+      </div>
+      <div x-show="!loading && !globalAuthError" class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-x-auto">
         <table class="w-full text-sm">
           <thead>
             <tr class="border-b border-gray-100 text-left text-xs text-gray-500 uppercase tracking-wide">
@@ -278,8 +286,12 @@
           </div>
         </div>
 
-        <!-- Global checkbox -->
-        <div>
+        <!-- Global checkbox — hidden for callers who aren't true global
+             admins (globalAuthError), since a global grant applies to every
+             organization and exhibition in the install and only a true
+             global admin can create or edit one (PLAN2.md Phase 2e); showing
+             it to anyone else would just guarantee a 403 on submit. -->
+        <div x-show="!globalAuthError">
           <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
             <input type="checkbox" x-model="formGlobal" @change="onGlobalChange()"
                    class="w-4 h-4 accent-[#e94560] cursor-pointer" />

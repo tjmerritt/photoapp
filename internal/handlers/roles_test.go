@@ -2,6 +2,7 @@ package handlers_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -197,6 +198,193 @@ func TestRolesHandler_Update_SingletonRoleRejected(t *testing.T) {
 	rec := doRequest(t, http.MethodPatch, "/api/v1/admin/roles/"+singletonRoleID, admin, exhibitionID, bytes.NewReader(body), params, h.Update)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d (singleton roles are auto-managed and not editable here)", rec.Code, http.StatusBadRequest)
+	}
+}
+
+// orgRolesAdmin creates an organization with a user granted a genuinely
+// organization-scoped PermAdmin grant (organizationid set on the grant, not
+// tied to any one exhibition — mirrors grantOrgAdmin in exhibitions.go). The
+// fixture itself creates one org-scoped role ("OrgSuperAdmin") to carry that
+// grant, so list-based assertions in these tests use a found-in-list check
+// rather than an exact count of 1, the same convention rolesAdmin uses for
+// its exhibition-scoped equivalent.
+func orgRolesAdmin(t *testing.T, env *testEnv) (organizationID, admin string) {
+	t.Helper()
+	organizationID = testutil.CreateOrganization(t, env.Pool)
+	admin = testutil.CreateUser(t, env.Pool)
+	role := testutil.CreateOrgRole(t, env.Pool, organizationID, "OrgSuperAdmin", permissions.PermAdmin)
+	testutil.Grant(t, env.Pool, role, testutil.GrantOptions{
+		EntityType: permissions.EntityUser, EntityRef: admin, OrganizationID: organizationID,
+	})
+	return organizationID, admin
+}
+
+// TestRolesHandler_OrgScoped_CreateListUpdateDelete is
+// TestRolesHandler_CreateListUpdateDelete's organization-scoped counterpart
+// (PLAN2.md Phase 2e) — before this phase, roleScope (then called
+// roleExhibitionID) treated any role with a NULL exhibitionid as "not
+// found," so an organization-scoped role could be created (via
+// grantOrgAdmin) but never edited, permissioned, or deleted through this
+// API. Exercises the full round trip using ?organizationid= in place of
+// ?exhibitionid= throughout.
+func TestRolesHandler_OrgScoped_CreateListUpdateDelete(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.RolesHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
+	organizationID, admin := orgRolesAdmin(t, env)
+
+	createBody, _ := json.Marshal(map[string]string{"name": "OrgCurator", "description": "Curates across the whole org"})
+	rec := doRequest(t, http.MethodPost, "/api/v1/admin/roles?organizationid="+organizationID, admin, "", bytes.NewReader(createBody), nil, h.Create)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("Create: status = %d, body = %s", rec.Code, rec.Body)
+	}
+	var created rolesAdminRole
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("Create: decode: %v", err)
+	}
+
+	rec = doRequest(t, http.MethodGet, "/api/v1/admin/roles?organizationid="+organizationID, admin, "", nil, nil, h.List)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("List: status = %d, body = %s", rec.Code, rec.Body)
+	}
+	var listResp struct {
+		Roles []rolesAdminRole `json:"roles"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("List: decode: %v", err)
+	}
+	found := false
+	for _, role := range listResp.Roles {
+		if role.RoleID == created.RoleID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("List: created org role not found in %+v", listResp.Roles)
+	}
+
+	params := httprouter.Params{{Key: "roleid", Value: created.RoleID}}
+
+	addBody, _ := json.Marshal(map[string]string{"permission": permissions.PermGalleryView})
+	rec = doRequest(t, http.MethodPost, "/api/v1/admin/roles/"+created.RoleID+"/permissions", admin, "", bytes.NewReader(addBody), params, h.AddPermission)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("AddPermission: status = %d, body = %s", rec.Code, rec.Body)
+	}
+
+	updateBody, _ := json.Marshal(map[string]string{"name": "Org Head Curator"})
+	rec = doRequest(t, http.MethodPatch, "/api/v1/admin/roles/"+created.RoleID, admin, "", bytes.NewReader(updateBody), params, h.Update)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("Update: status = %d, body = %s", rec.Code, rec.Body)
+	}
+
+	rec = doRequest(t, http.MethodGet, "/api/v1/admin/roles?organizationid="+organizationID, admin, "", nil, nil, h.List)
+	_ = json.Unmarshal(rec.Body.Bytes(), &listResp)
+	var afterUpdate rolesAdminRole
+	for _, role := range listResp.Roles {
+		if role.RoleID == created.RoleID {
+			afterUpdate = role
+		}
+	}
+	if afterUpdate.Name != "Org Head Curator" || len(afterUpdate.Permissions) != 1 || afterUpdate.Permissions[0] != permissions.PermGalleryView {
+		t.Fatalf("after Update/AddPermission: role = %+v, want Name='Org Head Curator' Permissions=[%s]", afterUpdate, permissions.PermGalleryView)
+	}
+
+	removeParams := httprouter.Params{{Key: "roleid", Value: created.RoleID}, {Key: "permission", Value: permissions.PermGalleryView}}
+	rec = doRequest(t, http.MethodDelete, "/api/v1/admin/roles/"+created.RoleID+"/permissions/"+permissions.PermGalleryView, admin, "", nil, removeParams, h.RemovePermission)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("RemovePermission: status = %d, body = %s", rec.Code, rec.Body)
+	}
+
+	rec = doRequest(t, http.MethodDelete, "/api/v1/admin/roles/"+created.RoleID, admin, "", nil, params, h.Delete)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("Delete: status = %d, body = %s", rec.Code, rec.Body)
+	}
+	rec = doRequest(t, http.MethodDelete, "/api/v1/admin/roles/"+created.RoleID, admin, "", nil, params, h.Delete)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("Delete (already deleted): status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+// TestRolesHandler_OrgScoped_Create_RequiresOrgAdmin is the cross-organization
+// isolation guard: an admin of organization A must not be able to create a
+// role under organization B.
+func TestRolesHandler_OrgScoped_Create_RequiresOrgAdmin(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.RolesHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
+	_, adminA := orgRolesAdmin(t, env)
+	organizationB := testutil.CreateOrganization(t, env.Pool)
+
+	body, _ := json.Marshal(map[string]string{"name": "Sneaky"})
+	rec := doRequest(t, http.MethodPost, "/api/v1/admin/roles?organizationid="+organizationB, adminA, "", bytes.NewReader(body), nil, h.Create)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d (org A's admin must not create a role under org B)", rec.Code, http.StatusForbidden)
+	}
+}
+
+// TestRolesHandler_OrgScoped_ExhibitionAdminWithinOrgAllowed mirrors
+// TestGrantsHandler_ListForOrganization_ExhibitionAdminWithinOrgAllowed for
+// roles: an admin of just one exhibition within an organization can still
+// list that organization's roles — isOrgAdmin's third tier.
+func TestRolesHandler_OrgScoped_ExhibitionAdminWithinOrgAllowed(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.RolesHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
+	organizationID := testutil.CreateOrganization(t, env.Pool)
+	exhibitionID := testutil.CreateExhibitionInOrg(t, env.Pool, organizationID)
+	exhibitionAdmin := testutil.CreateUser(t, env.Pool)
+	role := testutil.CreateRole(t, env.Pool, exhibitionID, "ExAdminForOrgRoles", permissions.PermAdmin)
+	testutil.Grant(t, env.Pool, role, testutil.GrantOptions{
+		EntityType: permissions.EntityUser, EntityRef: exhibitionAdmin, ExhibitionID: exhibitionID,
+	})
+
+	rec := doRequest(t, http.MethodGet, "/api/v1/admin/roles?organizationid="+organizationID, exhibitionAdmin, exhibitionID, nil, nil, h.List)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s (an exhibition admin within the org should see the org's roles)", rec.Code, rec.Body)
+	}
+}
+
+// TestRolesHandler_OrgScoped_UpdateDelete_RequiresOrgAdmin covers Update/
+// Delete/AddPermission/RemovePermission's roleScope-based check: an admin of
+// a DIFFERENT organization must not be able to touch an existing org-scoped
+// role, even knowing its roleid.
+func TestRolesHandler_OrgScoped_UpdateDelete_RequiresOrgAdmin(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.RolesHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
+	organizationID, admin := orgRolesAdmin(t, env)
+	roleID := testutil.CreateOrgRole(t, env.Pool, organizationID, "TargetOrgRole")
+	t.Cleanup(func() {
+		if _, err := env.Pool.Exec(context.Background(), `DELETE FROM roles WHERE roleid = $1`, roleID); err != nil {
+			t.Errorf("cleanup: delete target org role: %v", err)
+		}
+	})
+	_, otherAdmin := orgRolesAdmin(t, env)
+
+	body, _ := json.Marshal(map[string]string{"name": "Hijacked"})
+	params := httprouter.Params{{Key: "roleid", Value: roleID}}
+	rec := doRequest(t, http.MethodPatch, "/api/v1/admin/roles/"+roleID, otherAdmin, "", bytes.NewReader(body), params, h.Update)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("Update by other org's admin: status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+
+	// The role's own admin can still edit it, confirming the 403 above is
+	// really about cross-org isolation and not a broken check.
+	rec = doRequest(t, http.MethodPatch, "/api/v1/admin/roles/"+roleID, admin, "", bytes.NewReader(body), params, h.Update)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("Update by the role's own org admin: status = %d, body = %s", rec.Code, rec.Body)
+	}
+}
+
+// TestRolesHandler_List_RequiresExhibitionIdOrOrganizationId covers List's
+// 400 path when neither scope is resolvable — same ordering guard as
+// TestGrantsHandler_ListForExhibition_RequiresExhibitionID: an org-scoped
+// admin grant (not tied to any one exhibition) is needed so the permission
+// check itself doesn't 403 first.
+func TestRolesHandler_List_RequiresExhibitionIdOrOrganizationId(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.RolesHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
+	admin := trueGlobalAdmin(t, env)
+
+	rec := doRequest(t, http.MethodGet, "/api/v1/admin/roles", admin, "", nil, nil, h.List)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 }
 

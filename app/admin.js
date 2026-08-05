@@ -817,6 +817,15 @@ function adminPermissions() {
   return Object.assign({
     globalGrants:       [],
     globalTotal:        0,
+    // Set on a 403/404 from loadGlobal() specifically — kept separate from
+    // authError (below) on purpose. Viewing/editing global grants (ones
+    // that apply to every organization and exhibition in the install) now
+    // requires a true global admin grant (PLAN2.md Phase 2e), which most
+    // exhibition admins visiting this page won't have; that must only hide
+    // the "Global grants" section, not the whole page — this page's
+    // exhibition-scoped grants (loadForExhibition) are still exactly what
+    // a normal exhibition admin is here to manage.
+    globalAuthError:    false,
     exGrants:           [],
     exTotal:            0,
     loading:            true,
@@ -864,7 +873,8 @@ function adminPermissions() {
     async loadGlobal() {
       try {
         const r = await fetch('/api/v1/admin/grants/global?limit=200');
-        if (r.status === 403 || r.status === 404) { this.authError = true; return; }
+        if (r.status === 403 || r.status === 404) { this.globalAuthError = true; return; }
+        this.globalAuthError = false;
         const data = await r.json();
         this.globalGrants = data.grants || [];
         this.globalTotal  = data.total  || 0;

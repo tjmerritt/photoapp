@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -48,67 +49,113 @@ type adminRole struct {
 	GrantCount  int      `json:"grant_count"`
 }
 
-// roleExhibitionID resolves the exhibition a (non-deleted, non-singleton)
-// role belongs to, used both to scope the permission check and to 404 on a
-// bad/singleton roleid before doing anything else.
+// roleScope resolves whether a (non-deleted, non-singleton) role belongs to
+// an exhibition or an organization, and which one — used both to pick the
+// matching admin check (HasAny for an exhibition-scoped role, isOrgAdmin for
+// an organization-scoped one) and to 404 on a bad/singleton roleid before
+// doing anything else.
 //
-// Since migrations/021_org_admin.sql (PLAN2.md Phase 1c), a role's
-// exhibitionid can be NULL — organization-scoped roles have organizationid
-// set instead. This whole handler is an exhibition-scoped admin API (every
-// endpoint takes/derives an exhibitionid), so an org-scoped role is
-// correctly "not found" from here rather than a value to return; there is
-// no org-roles admin UI/API yet (see grantOrgAdmin in exhibitions.go for the
-// only thing that creates one today).
-func roleExhibitionID(w http.ResponseWriter, r *http.Request, pool *db.Pool, roleID string) (string, bool) {
-	var exhibitionID *string
+// Before PLAN2.md Phase 2e this only ever resolved an exhibitionid — a
+// role's exhibitionid has been nullable since migrations/021_org_admin.sql
+// (Phase 1c) added organization-scoped roles (roles.organizationid,
+// mutually exclusive with exhibitionid via chk_roles_scope_exclusive), but
+// this whole handler treated a NULL exhibitionid the same as "not found,"
+// so an organization-scoped role could never be edited, permissioned, or
+// deleted through this API — only created, via grantOrgAdmin in
+// exhibitions.go. kind is "exhibition" or "organization"; scopeID is that
+// tier's ID.
+func roleScope(w http.ResponseWriter, r *http.Request, pool *db.Pool, roleID string) (kind, scopeID string, ok bool) {
+	var exhibitionID, organizationID *string
 	var name string
 	err := pool.QueryRow(r.Context(), `
-		SELECT exhibitionid::text, name FROM roles WHERE roleid = $1 AND deleted_at IS NULL
-	`, roleID).Scan(&exhibitionID, &name)
+		SELECT exhibitionid::text, organizationid::text, name FROM roles WHERE roleid = $1 AND deleted_at IS NULL
+	`, roleID).Scan(&exhibitionID, &organizationID, &name)
 	if err == pgx.ErrNoRows {
 		middleware.WriteError(w, http.StatusNotFound, "role not found")
-		return "", false
+		return "", "", false
 	}
 	if err != nil {
-		slog.Error("roleExhibitionID", "error", err)
+		slog.Error("roleScope", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
-		return "", false
-	}
-	if exhibitionID == nil {
-		middleware.WriteError(w, http.StatusNotFound, "role not found")
-		return "", false
+		return "", "", false
 	}
 	if strings.HasPrefix(name, singletonRolePrefix) {
 		middleware.WriteError(w, http.StatusBadRequest, "this role is auto-managed and cannot be edited here")
-		return "", false
+		return "", "", false
 	}
-	return *exhibitionID, true
+	switch {
+	case exhibitionID != nil:
+		return "exhibition", *exhibitionID, true
+	case organizationID != nil:
+		return "organization", *organizationID, true
+	default:
+		// chk_roles_scope_exclusive guarantees exactly one of these is set
+		// for any real row reaching here — this branch means the row itself
+		// is malformed, not a legitimate "not found."
+		slog.Error("roleScope: role has neither exhibitionid nor organizationid", "roleid", roleID)
+		middleware.WriteError(w, http.StatusInternalServerError, "role has no scope")
+		return "", "", false
+	}
+}
+
+// checkRoleScopeAdmin applies the admin check matching kind/scopeID as
+// resolved by roleScope — HasAny for an exhibition-scoped role, isOrgAdmin
+// for an organization-scoped one. Shared by every roles.go endpoint that
+// operates on an existing role (Update, Delete, AddPermission,
+// RemovePermission).
+func (h *RolesHandler) checkRoleScopeAdmin(ctx context.Context, userID, kind, scopeID string, perms ...string) (bool, error) {
+	if kind == "organization" {
+		return isOrgAdmin(ctx, h.DB, h.Checker, userID, scopeID, perms...)
+	}
+	return h.Checker.HasAny(ctx, userID, scopeID, perms...)
 }
 
 // GET /api/v1/admin/roles?exhibitionid=&search=&offset=&limit=  (Phase 6h, 6i)
-// Requires: authenticated + (PermAdmin or PermPermissionsAdmin or PermRoleView).
+// GET /api/v1/admin/roles?organizationid=&search=&offset=&limit=  (Phase 2e)
+// organizationid and exhibitionid are mutually exclusive — pass exactly one
+// to list that tier's roles. Requires: authenticated + (PermAdmin or
+// PermPermissionsAdmin or PermRoleView) at the requested tier (isOrgAdmin
+// for organizationid, HasAny for exhibitionid).
 func (h *RolesHandler) List(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	ctx := r.Context()
 	userID, _ := middleware.UserID(ctx)
+	organizationID := strings.TrimSpace(r.URL.Query().Get("organizationid"))
 	exhibitionID := r.URL.Query().Get("exhibitionid")
-	if exhibitionID == "" {
+	if organizationID == "" && exhibitionID == "" {
 		exhibitionID = middleware.ExhibitionID(ctx)
 	}
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleView); err != nil || !ok {
-		middleware.WriteError(w, http.StatusForbidden, "admin access required")
+
+	var where string
+	var args []any
+	var ok bool
+	var err error
+	n := 2
+	if organizationID != "" {
+		ok, err = isOrgAdmin(ctx, h.DB, h.Checker, userID, organizationID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleView)
+		where = "r.organizationid = $1::uuid AND r.deleted_at IS NULL AND LEFT(r.name, 8) <> '" + singletonRolePrefix + "'"
+		args = []any{organizationID}
+	} else {
+		if exhibitionID == "" {
+			middleware.WriteError(w, http.StatusBadRequest, "exhibitionid or organizationid is required")
+			return
+		}
+		ok, err = h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleView)
+		where = "r.exhibitionid = $1::uuid AND r.deleted_at IS NULL AND LEFT(r.name, 8) <> '" + singletonRolePrefix + "'"
+		args = []any{exhibitionID}
+	}
+	if err != nil {
+		slog.Error("Roles.List check", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	if exhibitionID == "" {
-		middleware.WriteError(w, http.StatusBadRequest, "exhibitionid is required")
+	if !ok {
+		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
 
 	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
 	search := strings.TrimSpace(r.URL.Query().Get("search"))
 
-	where := "r.exhibitionid = $1::uuid AND r.deleted_at IS NULL AND LEFT(r.name, 8) <> '" + singletonRolePrefix + "'"
-	args := []any{exhibitionID}
-	n := 2
 	if search != "" {
 		where += fmt.Sprintf(" AND r.name ILIKE $%d", n)
 		args = append(args, "%"+search+"%")
@@ -164,22 +211,39 @@ func (h *RolesHandler) List(w http.ResponseWriter, r *http.Request, _ httprouter
 }
 
 // POST /api/v1/admin/roles?exhibitionid=  (Phase 6i)
+// POST /api/v1/admin/roles?organizationid=  (Phase 2e)
 // Body: {"name": "...", "description": "..."}. Creates a role with an empty
 // permission bundle — permissions are added afterward via AddPermission.
-// Requires: authenticated + (PermAdmin or PermPermissionsAdmin or PermRoleCreate).
+// organizationid and exhibitionid are mutually exclusive — pass exactly one
+// to create a role at that tier. Requires: authenticated + (PermAdmin or
+// PermPermissionsAdmin or PermRoleCreate) at the requested tier.
 func (h *RolesHandler) Create(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	ctx := r.Context()
 	userID, _ := middleware.UserID(ctx)
+	organizationID := strings.TrimSpace(r.URL.Query().Get("organizationid"))
 	exhibitionID := r.URL.Query().Get("exhibitionid")
-	if exhibitionID == "" {
+	if organizationID == "" && exhibitionID == "" {
 		exhibitionID = middleware.ExhibitionID(ctx)
 	}
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleCreate); err != nil || !ok {
-		middleware.WriteError(w, http.StatusForbidden, "admin access required")
+
+	var ok bool
+	var err error
+	if organizationID != "" {
+		ok, err = isOrgAdmin(ctx, h.DB, h.Checker, userID, organizationID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleCreate)
+	} else {
+		if exhibitionID == "" {
+			middleware.WriteError(w, http.StatusBadRequest, "exhibitionid or organizationid is required")
+			return
+		}
+		ok, err = h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleCreate)
+	}
+	if err != nil {
+		slog.Error("Roles.Create check", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
 	}
-	if exhibitionID == "" {
-		middleware.WriteError(w, http.StatusBadRequest, "exhibitionid is required")
+	if !ok {
+		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
 
@@ -202,11 +266,19 @@ func (h *RolesHandler) Create(w http.ResponseWriter, r *http.Request, _ httprout
 	}
 
 	var roleID string
-	err := h.DB.QueryRow(ctx, `
-		INSERT INTO roles (exhibitionid, name, description)
-		VALUES ($1::uuid, $2, NULLIF($3, ''))
-		RETURNING roleid::text
-	`, exhibitionID, req.Name, req.Description).Scan(&roleID)
+	if organizationID != "" {
+		err = h.DB.QueryRow(ctx, `
+			INSERT INTO roles (organizationid, name, description)
+			VALUES ($1::uuid, $2, NULLIF($3, ''))
+			RETURNING roleid::text
+		`, organizationID, req.Name, req.Description).Scan(&roleID)
+	} else {
+		err = h.DB.QueryRow(ctx, `
+			INSERT INTO roles (exhibitionid, name, description)
+			VALUES ($1::uuid, $2, NULLIF($3, ''))
+			RETURNING roleid::text
+		`, exhibitionID, req.Name, req.Description).Scan(&roleID)
+	}
 	if err != nil {
 		slog.Error("Roles.Create", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "could not create role (name may already be in use)")
@@ -229,11 +301,15 @@ func (h *RolesHandler) Update(w http.ResponseWriter, r *http.Request, ps httprou
 	roleID := ps.ByName("roleid")
 	userID, _ := middleware.UserID(ctx)
 
-	exhibitionID, ok := roleExhibitionID(w, r, h.DB, roleID)
+	kind, scopeID, ok := roleScope(w, r, h.DB, roleID)
 	if !ok {
 		return
 	}
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleModify); err != nil || !ok {
+	if ok, err := h.checkRoleScopeAdmin(ctx, userID, kind, scopeID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleModify); err != nil {
+		slog.Error("Roles.Update check", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	} else if !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -293,11 +369,15 @@ func (h *RolesHandler) Delete(w http.ResponseWriter, r *http.Request, ps httprou
 	roleID := ps.ByName("roleid")
 	userID, _ := middleware.UserID(ctx)
 
-	exhibitionID, ok := roleExhibitionID(w, r, h.DB, roleID)
+	kind, scopeID, ok := roleScope(w, r, h.DB, roleID)
 	if !ok {
 		return
 	}
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleDelete); err != nil || !ok {
+	if ok, err := h.checkRoleScopeAdmin(ctx, userID, kind, scopeID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleDelete); err != nil {
+		slog.Error("Roles.Delete check", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	} else if !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -343,11 +423,15 @@ func (h *RolesHandler) AddPermission(w http.ResponseWriter, r *http.Request, ps 
 	roleID := ps.ByName("roleid")
 	userID, _ := middleware.UserID(ctx)
 
-	exhibitionID, ok := roleExhibitionID(w, r, h.DB, roleID)
+	kind, scopeID, ok := roleScope(w, r, h.DB, roleID)
 	if !ok {
 		return
 	}
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleModify); err != nil || !ok {
+	if ok, err := h.checkRoleScopeAdmin(ctx, userID, kind, scopeID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleModify); err != nil {
+		slog.Error("Roles.AddPermission check", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	} else if !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}
@@ -385,11 +469,15 @@ func (h *RolesHandler) RemovePermission(w http.ResponseWriter, r *http.Request, 
 	permission := ps.ByName("permission")
 	userID, _ := middleware.UserID(ctx)
 
-	exhibitionID, ok := roleExhibitionID(w, r, h.DB, roleID)
+	kind, scopeID, ok := roleScope(w, r, h.DB, roleID)
 	if !ok {
 		return
 	}
-	if ok, err := h.Checker.HasAny(ctx, userID, exhibitionID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleModify); err != nil || !ok {
+	if ok, err := h.checkRoleScopeAdmin(ctx, userID, kind, scopeID, permissions.PermAdmin, permissions.PermPermissionsAdmin, permissions.PermRoleModify); err != nil {
+		slog.Error("Roles.RemovePermission check", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	} else if !ok {
 		middleware.WriteError(w, http.StatusForbidden, "admin access required")
 		return
 	}

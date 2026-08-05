@@ -154,13 +154,17 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	r.DELETE("/api/v1/admin/teams/:teamid/members/:userid", auth(teams.RemoveMember))
 
 	// Phase 6g/6h/6j: permission-grants viewer + creation + editing (PermAdmin/PermPermissionsAdmin enforced in handler)
+	// Phase 2e: grants/organization — organization-scoped grants (isOrgAdmin enforced in handler)
 	r.GET("/api/v1/admin/grants/global",       auth(grants.ListGlobal))
+	r.GET("/api/v1/admin/grants/organization", auth(grants.ListForOrganization))
 	r.GET("/api/v1/admin/grants/exhibition",   auth(grants.ListForExhibition))
 	r.POST("/api/v1/admin/grants",             auth(grants.Create))
 	r.PATCH("/api/v1/admin/grants/:grantid",   auth(grants.Update))
 	r.DELETE("/api/v1/admin/grants/:grantid",  auth(grants.Revoke))
 
 	// Phase 6i: roles admin (PermAdmin/PermPermissionsAdmin enforced in handler)
+	// Phase 2e: every route below also accepts ?organizationid= in place of
+	// ?exhibitionid= for organization-scoped roles (isOrgAdmin enforced in handler)
 	r.GET("/api/v1/admin/roles",                            auth(roles.List))
 	r.POST("/api/v1/admin/roles",                           auth(roles.Create))
 	r.PATCH("/api/v1/admin/roles/:roleid",                  auth(roles.Update))
