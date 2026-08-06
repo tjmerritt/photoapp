@@ -45,7 +45,18 @@
 {{end}}
 
 {{if .Header.ShowAdminLinks}}
-        <a href="/gallery-admin.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Gallery Admin</a>
+        <!-- Phase 4b: "Gallery Manager" (renamed from "Gallery Admin"; the
+             page itself was later renamed gallery-admin.html →
+             gallery-manager.html to match). Greyed out and non-navigating
+             unless the current user holds GalleryView, the same permission
+             the page itself needs to show anything — see galleryManagerLink
+             in app.js. -->
+        <div x-data="galleryManagerLink">
+          <a href="/gallery-manager.html"
+             @click="if (!canManage) $event.preventDefault()"
+             :class="canManage ? 'hover:bg-gray-50 cursor-pointer' : 'opacity-40 cursor-default'"
+             class="block px-4 py-2.5 text-sm font-medium">Gallery Manager</a>
+        </div>
         <a href="/template-admin.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Template Admin</a>
         <a href="/admin-master.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Admin</a>
 {{end}}

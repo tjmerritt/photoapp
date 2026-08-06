@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en" x-data="galleryAdminApp">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gallery Manager — PhotoApp</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+
+  <link rel="stylesheet" href="/tailwind.css">
+  <script src="/app.js"></script>
+  <script defer src="/alpinejs.min.js"></script>
+  <link rel="stylesheet" href="/fonts.css">
+
+  <style>
+    :root {
+      --brand:  #1a1a2e;
+      --accent: #e94560;
+      --surface:#f7f5f2;
+      --card:   #ffffff;
+      --muted:  #6b7280;
+      --border: #e5e1db;
+    }
+    body { font-family: 'DM Sans', sans-serif; background: var(--surface); color: var(--brand); }
+    h1,h2,h3 { font-family: 'DM Serif Display', serif; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+    @keyframes fadeIn  { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes scaleIn { from { opacity:0; transform:scale(.95);      } to { opacity:1; transform:scale(1);      } }
+    .animate-fadein  { animation: fadeIn  .25s ease both; }
+    .animate-scalein { animation: scaleIn .2s  ease both; }
+    [x-cloak] { display: none !important; }
+
+    .gallery-row {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .gallery-row-header {
+      padding: 1rem 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .display-row {
+      padding: 0.625rem 1.25rem 0.625rem 2.5rem;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: var(--surface);
+      font-size: 0.8125rem;
+    }
+    .display-row:last-child {
+      border-radius: 0 0 10px 10px;
+    }
+
+    .btn-icon {
+      padding: 0.25rem;
+      border-radius: 5px;
+      color: var(--muted);
+      cursor: pointer;
+      transition: background .15s, color .15s;
+      background: none;
+      border: none;
+    }
+    .btn-icon:hover { background: var(--border); color: var(--brand); }
+    .btn-icon.danger:hover { background: #fee2e2; color: #dc2626; }
+
+    .btn-primary {
+      background: var(--brand);
+      color: #fff;
+      border: none;
+      padding: 0.5rem 1rem;
+      border-radius: 7px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity .15s;
+    }
+    .btn-primary:hover { opacity: .85; }
+    .btn-primary:disabled { opacity: .4; cursor: default; }
+
+    .btn-secondary {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--brand);
+      padding: 0.5rem 1rem;
+      border-radius: 7px;
+      font-size: 0.875rem;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .btn-secondary:hover { background: var(--surface); }
+
+    .input {
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.875rem;
+      background: #fff;
+      color: var(--brand);
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+      font-family: inherit;
+    }
+    .input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(233,69,96,.12);
+    }
+
+    .backdrop { background: rgba(26,26,46,.55); backdrop-filter: blur(3px); }
+    .modal-card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 20px 50px rgba(0,0,0,.25);
+      width: 100%;
+      max-width: 26rem;
+      padding: 1.25rem;
+    }
+    .placard-modal {
+      max-width: 36rem;
+      max-height: 88vh;
+      overflow-y: auto;
+    }
+
+    /* Mini live preview of one gallery's placard box — item chips are
+       draggable (startItemDrag()) to set each item's x/y position (percent
+       of this box), the same coordinate space used to render real
+       placards. */
+    .placard-preview {
+      position: relative;
+      width: 100%;
+      max-width: 22rem;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .placard-preview-item {
+      position: absolute;
+      white-space: nowrap;
+      cursor: grab;
+      padding: 1px 3px;
+      border-radius: 2px;
+      user-select: none;
+    }
+    .placard-preview-item:hover { outline: 1px dashed var(--accent); }
+    .placard-preview-item:active { cursor: grabbing; }
+
+    .placard-item-row {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.625rem;
+      background: #fff;
+    }
+  </style>
+</head>
+
+<body class="min-h-screen flex flex-col">
+
+<!-- ══ NAVBAR ══════════════════════════════════════════════════════════════ -->
+<nav class="sticky top-0 z-40 bg-white border-b border-[var(--border)] shadow-sm">
+  <div class="max-w-7xl mx-auto px-4 flex items-center gap-3 h-14">
+
+    <!-- Hamburger -->
+    <div class="relative" x-data="{ open: false }">
+      <button @click="open = !open" class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="Menu">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+      <div x-show="open" @click.outside="open=false" x-transition
+           class="absolute left-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-52 py-1 animate-scalein">
+        <a href="/" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Photos</a>
+
+        <div x-data="galleriesNav">
+          <span x-show="!loaded" class="block px-4 py-2.5 text-sm text-gray-300 cursor-default">Galleries</span>
+          <span x-show="loaded && galleries.length === 0"
+                class="block px-4 py-2.5 text-sm text-gray-300 cursor-default">Galleries</span>
+          <a x-show="loaded && galleries.length > 0"
+             :href="galleriesHref"
+             class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Galleries</a>
+          <div x-show="loaded && galleries.length > 1">
+            <template x-for="g in galleries" :key="g.galleryid">
+              <a :href="'/galleries.html?galleryid=' + g.galleryid"
+                 class="block pl-7 pr-4 py-1.5 text-xs text-[var(--muted)] hover:text-[var(--brand)] hover:bg-gray-50 truncate">
+                <span x-text="g.title"></span>
+              </a>
+            </template>
+          </div>
+        </div>
+
+        <a href="/gallery-manager.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Gallery Manager</a>
+        <a href="/template-admin.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Template Admin</a>
+        <a href="/admin-master.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Admin</a>
+      </div>
+    </div>
+
+    <!-- Logo -->
+    <a href="/" class="flex items-center gap-2 shrink-0">
+      <div class="w-8 h-8 rounded-lg bg-[var(--brand)] flex items-center justify-center">
+        <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/>
+        </svg>
+      </div>
+      <span class="font-serif text-lg font-bold text-[var(--brand)] hidden sm:block">Phōtos</span>
+    </a>
+  </div>
+</nav>
+
+<!-- ══ MAIN ══════════════════════════════════════════════════════════════════ -->
+<main class="flex-1 max-w-3xl mx-auto w-full px-4 py-10">
+
+  <h1 class="text-3xl font-serif mb-1">Gallery Manager</h1>
+  <p class="text-sm text-[var(--muted)] mb-8">Manage galleries and their display order.</p>
+
+  <!-- Loading -->
+  <div x-show="loading" class="flex items-center justify-center py-24 gap-3">
+    <svg class="w-6 h-6 text-[var(--accent)] animate-spin" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+    </svg>
+    <span class="text-sm text-[var(--muted)]">Loading…</span>
+  </div>
+
+  <!-- Error / no permission -->
+  <div x-show="!loading && error"
+       class="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm mb-8"
+       x-text="error">
+  </div>
+
+  <div x-show="!loading" class="animate-fadein">
+
+    <!-- ── Create gallery form ─────────────────────────────────────────── -->
+    <div class="mb-8 p-5 bg-white border border-[var(--border)] rounded-xl">
+      <h2 class="text-base font-semibold mb-3">Create New Gallery</h2>
+      <div class="flex gap-2 items-start flex-wrap">
+        <input class="input flex-1 min-w-[180px]"
+               type="text"
+               x-model="newTitle"
+               placeholder="Gallery title"
+               @keyup.enter="createGallery()" />
+        <button class="btn-primary shrink-0"
+                @click="createGallery()"
+                :disabled="creating || !newTitle.trim()">
+          <span x-show="!creating">+ Create</span>
+          <span x-show="creating">Creating…</span>
+        </button>
+      </div>
+      <p x-show="createError" class="text-red-500 text-xs mt-2" x-text="createError"></p>
+    </div>
+
+    <!-- ── Gallery list ───────────────────────────────────────────────── -->
+    <div x-show="galleries.length === 0 && !error" class="text-center py-12 text-[var(--muted)] text-sm">
+      No galleries yet. Create your first gallery above.
+    </div>
+
+    <div class="flex flex-col gap-4">
+      <template x-for="g in galleries" :key="g.galleryid">
+        <div class="gallery-row">
+
+          <!-- Gallery header row -->
+          <div class="gallery-row-header">
+
+            <!-- Title / rename -->
+            <div class="flex-1 min-w-0">
+              <!-- View mode -->
+              <div x-show="editingGalleryId !== g.galleryid" class="flex items-center gap-2">
+                <span class="font-semibold truncate" x-text="g.title"></span>
+                <span class="text-xs text-[var(--muted)] shrink-0"
+                      x-text="'(' + g.display_count + ' display' + (g.display_count === 1 ? ')' : 's)')"></span>
+              </div>
+              <!-- Edit mode -->
+              <div x-show="editingGalleryId === g.galleryid" class="flex items-center gap-2">
+                <input class="input flex-1 text-sm py-1"
+                       type="text"
+                       x-model="editTitle"
+                       @keyup.enter="saveTitle(g.galleryid)"
+                       @keyup.escape="cancelEdit()" />
+                <button class="btn-primary text-xs py-1 px-3 shrink-0"
+                        @click="saveTitle(g.galleryid)"
+                        :disabled="savingTitle">Save</button>
+                <button class="btn-secondary text-xs py-1 px-3 shrink-0"
+                        @click="cancelEdit()">Cancel</button>
+              </div>
+            </div>
+
+            <!-- Action buttons -->
+            <div class="flex items-center gap-1 shrink-0">
+              <!-- View gallery -->
+              <a :href="'/galleries.html?galleryid=' + g.galleryid"
+                 class="btn-icon" title="View gallery">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                </svg>
+              </a>
+              <!-- Rename -->
+              <button class="btn-icon" title="Rename" @click="startEdit(g)">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                </svg>
+              </button>
+              <!-- Expand/collapse displays -->
+              <button class="btn-icon" title="Manage displays" @click="toggleDisplays(g.galleryid)">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </button>
+              <!-- Delete -->
+              <button class="btn-icon danger" title="Delete gallery" @click="deleteGallery(g.galleryid)">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Expanded: displays list -->
+          <div x-show="expandedGalleryId === g.galleryid">
+
+            <!-- Loading displays -->
+            <div x-show="loadingDisplays"
+                 class="px-5 py-3 border-t border-[var(--border)] text-sm text-[var(--muted)] bg-[var(--surface)]">
+              Loading displays…
+            </div>
+
+            <!-- Display rows -->
+            <template x-for="(d, idx) in expandedDisplays" :key="d.displayid">
+              <div class="display-row">
+                <!-- Reorder -->
+                <div class="flex flex-col gap-0.5 shrink-0">
+                  <button class="btn-icon p-0.5" title="Move up" @click="moveDisplay(d.displayid, 'up')">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M5 15l7-7 7 7"/>
+                    </svg>
+                  </button>
+                  <button class="btn-icon p-0.5" title="Move down" @click="moveDisplay(d.displayid, 'down')">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+                    </svg>
+                  </button>
+                </div>
+
+                <!-- Display info -->
+                <span class="flex-1 text-[var(--muted)] flex items-center gap-2 flex-wrap">
+                  <span class="shrink-0">Display <span x-text="idx + 1"></span></span>
+                  <span x-show="d.template" class="text-xs shrink-0">
+                    (<span x-text="d.filled_slots"></span>/<span x-text="d.slot_count"></span> filled)
+                  </span>
+                  <!-- x-init re-syncs the DOM value after the nested x-for below has
+                       actually created its <option> elements. Without this, x-model's
+                       initial binding runs before those options exist (Alpine processes
+                       a select's own directives before walking into its children), so
+                       the browser silently falls back to the first <option> ("No
+                       template") and never corrects itself since nothing re-triggers
+                       the x-model effect afterward. syncTemplateSelect() is a plain
+                       component method (not an inline arrow function) because the CSP
+                       build's expression parser doesn't support arrow-function bodies
+                       inside directive attributes. -->
+                  <select class="input text-xs py-1 pr-6"
+                          x-model="d.selectedTemplateId"
+                          x-init="syncTemplateSelect($el, d)"
+                          @change="setDisplayTemplate(d.displayid, d.selectedTemplateId)">
+                    <option value="">No template</option>
+                    <template x-for="t in templates" :key="t.templateid">
+                      <option :value="t.templateid" x-text="t.name + ' (' + t.photo_count + ')'"></option>
+                    </template>
+                  </select>
+                </span>
+
+                <!-- View display (public, read-only) -->
+                <a :href="'/display.html?displayid=' + d.displayid"
+                   class="btn-icon shrink-0" title="View display">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                  </svg>
+                </a>
+
+                <!-- Edit photos -->
+                <a :href="'/display-edit.html?displayid=' + d.displayid"
+                   class="btn-icon shrink-0" title="Edit photos">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                  </svg>
+                </a>
+
+                <!-- Delete display -->
+                <button class="btn-icon danger shrink-0" title="Remove display"
+                        @click="deleteDisplay(d.displayid, g.galleryid)">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                  </svg>
+                </button>
+              </div>
+            </template>
+
+            <!-- Empty displays state -->
+            <div x-show="!loadingDisplays && expandedDisplays.length === 0"
+                 class="display-row text-[var(--muted)] italic text-xs">
+              No displays in this gallery yet.
+            </div>
+
+            <!-- Add display button -->
+            <div class="px-5 py-3 border-t border-[var(--border)] bg-[var(--surface)] flex items-center gap-2 flex-wrap">
+              <button class="text-sm text-[var(--accent)] hover:underline font-medium"
+                      @click="addDisplay(g.galleryid)">
+                + Add Display
+              </button>
+              <select class="input text-xs py-1 pr-6" x-model="newDisplayTemplateId">
+                <option value="">No template</option>
+                <template x-for="t in templates" :key="t.templateid">
+                  <option :value="t.templateid" x-text="t.name + ' (' + t.photo_count + ')'"></option>
+                </template>
+              </select>
+            </div>
+
+            <!-- Placard settings — gallery-wide size/appearance/content,
+                 applied consistently to every display's placard boxes. -->
+            <div class="px-5 py-3 border-t border-[var(--border)] flex items-center gap-2 flex-wrap">
+              <button class="btn-secondary text-xs py-1" @click="openPlacardSettings(g.galleryid)">
+                Placard Settings
+              </button>
+              <span class="text-xs text-[var(--muted)]"
+                    x-text="(expandedGalleryPlacard && expandedGalleryPlacard.items && expandedGalleryPlacard.items.length)
+                              ? (expandedGalleryPlacard.items.length + ' item' + (expandedGalleryPlacard.items.length === 1 ? '' : 's') + ' configured')
+                              : 'No placard items configured yet'"></span>
+            </div>
+          </div>
+
+        </div>
+      </template>
+    </div>
+
+  </div>
+</main>
+
+<!-- ══ PLACARD SETTINGS MODAL ══════════════════════════════════════════════ -->
+<div x-show="placardModalOpen" x-cloak x-transition
+     class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
+     @click.self="closePlacardSettings()"
+     @keydown.escape.window="closePlacardSettings()">
+  <div class="modal-card placard-modal animate-scalein">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-serif text-lg">Placard Settings</h3>
+      <button class="text-[var(--muted)] hover:text-[var(--brand)] text-xl leading-none px-1" @click="closePlacardSettings()">&times;</button>
+    </div>
+
+    <template x-if="placardDraft">
+      <div class="flex flex-col gap-4">
+        <div class="flex items-start justify-between gap-3">
+          <p class="text-xs text-[var(--muted)]">
+            Size and appearance apply to every display in this gallery, for
+            consistency. Drag an item in the preview to position it. Item text
+            can include <code>{LabelName}</code> to pull from a photo's labels
+            — e.g. <code>Photographer: {Photographer}</code>.
+          </p>
+          <!-- :checked (not x-model) so togglePlacardJsonMode() can veto
+               leaving JSON mode when the text doesn't parse — the checkbox
+               only reflects placardJsonMode after the toggle actually
+               succeeds, rather than flipping unconditionally on click. -->
+          <label class="text-xs flex items-center gap-1.5 text-[var(--muted)] shrink-0 whitespace-nowrap">
+            <input type="checkbox" :checked="placardJsonMode" @change="togglePlacardJsonMode()" />
+            Edit as JSON
+          </label>
+        </div>
+
+        <!-- Raw JSON editor — an escape hatch for precise numeric tweaks
+             (exact item x/y, font sizes, etc.) once the general layout is
+             already right. Shows/edits the exact placard_defaults shape
+             that gets saved; switching back to the visual editor (or
+             clicking Save while this is open) applies it first. -->
+        <template x-if="placardJsonMode">
+          <div class="flex flex-col gap-2">
+            <textarea class="input w-full" rows="16" spellcheck="false"
+                      x-model="placardJsonText"></textarea>
+            <p x-show="placardJsonError" class="text-red-500 text-xs" x-text="placardJsonError"></p>
+            <p class="text-xs text-[var(--muted)]">
+              <code>widthIn</code>/<code>heightIn</code> are the placard's own physical size
+              in inches — the exact same numbers shown in the "Placard width"/"Placard
+              height" fields below (converted to/from cm there if that's the active unit);
+              <code>boardWidthIn</code>/<code>unit</code> are the physical-size reference and
+              display unit the visual editor uses. Each item in <code>items</code>:
+              <code>text</code> (supports
+              <code>{LabelName}</code>), <code>xIn</code>/<code>yIn</code> — a fixed distance
+              in inches from the placard's own top-left corner (not a percentage, so it
+              doesn't move if you resize the placard), <code>fontFamily</code>,
+              <code>fontSize</code> (px), <code>fontWeight</code>, <code>fontStyle</code>,
+              <code>color</code>, and <code>hideIfMissing</code> (skip the item entirely if
+              a referenced label is missing from the photo).
+            </p>
+            <button class="btn-secondary text-xs self-start" @click="togglePlacardJsonMode()">
+              Apply &amp; back to visual editor
+            </button>
+          </div>
+        </template>
+
+        <template x-if="!placardJsonMode">
+        <div class="flex flex-col gap-4">
+        <div class="flex gap-3 flex-wrap items-end">
+          <label class="text-xs font-medium text-[var(--muted)]">
+            Unit
+            <select class="input mt-1" x-model="placardDraft.unit" @change="onPlacardUnitChange()">
+              <option value="in">inches</option>
+              <option value="cm">centimeters</option>
+            </select>
+          </label>
+          <label class="text-xs font-medium text-[var(--muted)]">
+            Board width
+            <input class="input w-24 mt-1" type="number" min="0.1" step="0.1"
+                   :value="placardDraft.boardWidthDisplay"
+                   @input="placardUnitInput('boardWidth', $event.target.value)" />
+          </label>
+          <label class="text-xs font-medium text-[var(--muted)]">
+            Placard width
+            <input class="input w-24 mt-1" type="number" min="0" step="0.1"
+                   :value="placardDraft.widthDisplay"
+                   @input="placardUnitInput('width', $event.target.value)" />
+          </label>
+          <label class="text-xs font-medium text-[var(--muted)]">
+            Placard height
+            <input class="input w-24 mt-1" type="number" min="0" step="0.1"
+                   :value="placardDraft.heightDisplay"
+                   @input="placardUnitInput('height', $event.target.value)" />
+          </label>
+          <label class="text-xs font-medium text-[var(--muted)]">
+            Background
+            <input class="input mt-1" type="color" x-model="placardDraft.background" style="padding:2px; width:2.75rem;" />
+          </label>
+          <label class="text-xs font-medium text-[var(--muted)]">
+            Border
+            <input class="input mt-1" type="color" x-model="placardDraft.borderColor" style="padding:2px; width:2.75rem;" />
+          </label>
+        </div>
+        <p class="text-xs text-[var(--muted)] -mt-2">
+          "Board width" is the physical width the whole display represents
+          (e.g. an actual 48in wide wall board) — it's just a reference so
+          placard width/height can be set in real-world units; the display
+          itself still renders responsively at any screen size.
+        </p>
+
+        <!-- Live preview — item chips are draggable to set position. The
+             preview's own aspect ratio is the placard's real physical
+             width/height ratio, so it's accurate regardless of unit. An
+             item's position is a fixed physical offset from this box's own
+             top-left corner (previewItemStyle()) — dragging it here sets
+             that fixed offset; it does NOT move if you change the width/
+             height fields above, since it isn't stored as a percentage of
+             this box's size. -->
+        <div>
+          <p class="text-xs font-medium text-[var(--muted)] mb-1">Preview — drag items to position them</p>
+          <div class="placard-preview" x-ref="placardCanvas"
+               :style="'aspect-ratio: ' + placardDraft.widthIn + ' / ' + placardDraft.heightIn + '; background: ' + placardDraft.background + '; border: 1px solid ' + placardDraft.borderColor + ';'">
+            <template x-for="item in placardDraft.items" :key="item.id">
+              <div class="placard-preview-item"
+                   :style="previewItemStyle(item)"
+                   @mousedown="startItemDrag(item, $event)"
+                   @touchstart="startItemDrag(item, $event)">
+                <span x-text="item.text || '(empty item)'"></span>
+              </div>
+            </template>
+            <span x-show="placardDraft.items.length === 0" class="text-xs text-[var(--muted)] italic" style="position:absolute; left:6px; top:6px;">
+              No items yet — add one below.
+            </span>
+          </div>
+          <p class="text-xs text-[var(--muted)] mt-1">
+            An item's position is a fixed distance from this box's top-left
+            corner — resizing the placard above won't move items, but an
+            item can end up outside the box (and become invisible) if you
+            shrink the placard past it. Drag it back in, or enlarge the
+            placard again.
+          </p>
+        </div>
+
+        <!-- Item list -->
+        <div class="flex flex-col gap-3">
+          <p class="text-xs font-medium text-[var(--muted)]">Items</p>
+          <template x-for="item in placardDraft.items" :key="item.id">
+            <div class="placard-item-row">
+              <input class="input w-full text-xs" type="text" x-model="item.text"
+                     placeholder="e.g. Photographer: {Photographer}" />
+              <div class="flex gap-2 mt-2 flex-wrap items-center">
+                <input class="input text-xs w-28" type="text" x-model="item.fontFamily" placeholder="Font family" />
+                <input class="input text-xs w-14" type="number" x-model.number="item.fontSize" placeholder="Size" />
+                <select class="input text-xs py-1" x-model="item.fontWeight">
+                  <option value="400">Normal</option>
+                  <option value="700">Bold</option>
+                </select>
+                <select class="input text-xs py-1" x-model="item.fontStyle">
+                  <option value="normal">Normal</option>
+                  <option value="italic">Italic</option>
+                </select>
+                <input type="color" x-model="item.color" style="width:1.75rem; height:1.75rem; padding:2px; border:1px solid var(--border); border-radius:5px;" />
+                <label class="text-xs flex items-center gap-1 text-[var(--muted)]">
+                  <input type="checkbox" x-model="item.hideIfMissing" />
+                  Hide if label missing
+                </label>
+                <button class="btn-icon danger ml-auto" title="Remove item" @click="removePlacardItem(item.id)">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                  </svg>
+                </button>
+              </div>
+              <p class="text-xs text-[var(--muted)] mt-1" x-text="itemPositionLabel(item)"></p>
+            </div>
+          </template>
+          <button class="btn-secondary text-xs self-start" @click="addPlacardItem()">+ Add item</button>
+        </div>
+        </div>
+        </template>
+
+        <p x-show="placardError" class="text-red-500 text-xs" x-text="placardError"></p>
+
+        <div class="flex gap-2">
+          <button class="btn-primary text-sm" @click="savePlacardSettings()" :disabled="placardSaving">
+            <span x-show="!placardSaving">Save</span>
+            <span x-show="placardSaving">Saving…</span>
+          </button>
+          <button class="btn-secondary text-sm" @click="closePlacardSettings()">Cancel</button>
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
+
+<!-- ══ TOAST ═══════════════════════════════════════════════════════════════ -->
+<div x-show="toast.visible" x-transition
+     class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[var(--brand)] text-white text-sm px-5 py-2.5 rounded-full shadow-lg pointer-events-none"
+     x-text="toast.message">
+</div>
+
+</body>
+</html>

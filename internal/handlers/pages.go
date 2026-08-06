@@ -36,12 +36,20 @@ type AdminNavItem struct {
 }
 
 // adminNavItems is the full, fixed set of admin nav tabs, in display order.
-// Every admin-*.html page previously hand-duplicated this same 10-item list
+// Every admin-*.html page previously hand-duplicated this same list
 // (confirmed byte-identical modulo the active tab's class and one comment,
 // via a diff sweep during Phase 4a); admin.html itself was the one
 // exception worth double-checking, and turned out to already carry the
-// same 10 items — the shorter list seen in an earlier grep was a sed
+// same items — the shorter list seen in an earlier grep was a sed
 // line-range artifact, not a real difference.
+//
+// Phase 4b: "Galleries" (→ gallery-manager.html, née gallery-admin.html,
+// renamed "Gallery Manager" in the regular hamburger menu — see
+// header-regular.html) was removed from
+// this admin-section nav row on purpose. Gallery Manager isn't an
+// admin-only tool — it's gated on GalleryView, not PermAdmin — so it
+// doesn't belong grouped with the true admin pages; it's still reachable,
+// just from the regular menu instead.
 var adminNavItems = []struct {
 	Key   string
 	Href  string
@@ -55,7 +63,6 @@ var adminNavItems = []struct {
 	{"labels", "/admin-labels.html", "Labels"},
 	{"permissions", "/admin-permissions.html", "Permissions"},
 	{"roles", "/admin-roles.html", "Roles"},
-	{"galleries", "/gallery-admin.html", "Galleries"},
 	{"templates", "/template-admin.html", "Templates"},
 }
 
@@ -142,7 +149,7 @@ type pageConfig struct {
 // pageConfigs is the routing table for PagesHandler: which pages have been
 // migrated onto the shared header partials, and how each one fills them
 // in. Pages not listed here (galleries.html, photo.html, display-edit.html,
-// gallery-admin.html, template-admin.html, newdomain.html, and everything
+// gallery-manager.html, template-admin.html, newdomain.html, and everything
 // under photoapp_api_reference.html) keep serving as plain static files —
 // each of those has real page-specific header content of its own (e.g.
 // photo.html's search bar) that needs individual attention rather than a

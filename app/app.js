@@ -1855,6 +1855,27 @@ function galleriesNav() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// galleryManagerLink — Phase 4b. The hamburger menu's "Gallery Manager" link
+// (renamed from "Gallery Admin") greys itself out and stops navigating for
+// anyone without GalleryView — the same permission gallery-manager.html
+// itself requires to show anything, so a disabled user never lands on a page that
+// would just show them nothing. Nested x-data component, same
+// independently-fetching pattern as galleriesNav just above: whichever
+// top-level page component (wallApp/displayApp/...) the shared header
+// happens to be mounted inside doesn't need to know or expose this itself.
+// ─────────────────────────────────────────────────────────────────────────────
+function galleryManagerLink() {
+  return {
+    canManage: false,
+
+    async init() {
+      const summary = await fetchPermissionSummary(getAuthHeaders);
+      this.canManage = summary.includes('GalleryView');
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // galleriesApp — gallery list page + galleryid-based redirect.
 // If ?galleryid= is in the URL, fetches that gallery and redirects to its first
 // display.  If there is only one gallery total, also auto-redirects.
@@ -4493,6 +4514,7 @@ typeof document !== 'undefined' && document.addEventListener('alpine:init', () =
   Alpine.data('photoApp',        photoApp);
   Alpine.data('wallApp',         wallApp);
   Alpine.data('galleriesNav',    galleriesNav);
+  Alpine.data('galleryManagerLink', galleryManagerLink);
   Alpine.data('galleriesApp',    galleriesApp);
   Alpine.data('displayApp',      displayApp);
   Alpine.data('displayEditApp',  displayEditApp);
