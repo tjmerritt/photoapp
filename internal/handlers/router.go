@@ -41,6 +41,8 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	roles       := &RolesHandler{DB: pool, Cfg: cfg, Checker: checker}
 	exhibitions := &ExhibitionsHandler{DB: pool}
 	scope       := &ScopeHandler{DB: pool, Cfg: cfg, Checker: checker}
+	resLabels   := &ResourceLabelsHandler{DB: pool, Cfg: cfg, Checker: checker}
+	groups      := &GroupsHandler{DB: pool, Cfg: cfg, Checker: checker}
 
 	// Convenience: wrap a httprouter.Handle with RequireAuth
 	auth := func(h httprouter.Handle) httprouter.Handle {
@@ -72,6 +74,11 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	r.HandlerFunc(http.MethodGet, "/api/v1/search",       search.ServeHTTP)
 	r.GET("/api/v1/permissions",                          perms.ServeHTTP)
 
+	// Phase 3b: labels on Galleries/Displays/Exhibitions (read — no auth
+	// required, matches labels.List; permission-checked in handler via
+	// Checker.HasAny, which itself handles an empty/anonymous userID)
+	r.GET("/api/v1/resource-labels",                      resLabels.List)
+
 	// Galleries and displays (view — no auth required; permission-checked in handler)
 	r.GET("/api/v1/galleries",                            galleries.List)
 	r.GET("/api/v1/galleries/:galleryid",                 galleries.Get)
@@ -87,6 +94,10 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 
 	// Label names (write — PermAdmin/PermLabelAdmin enforced in handler)
 	r.PATCH("/api/v1/label-names",                        auth(labels.UpdateName))
+
+	// Phase 3b: labels on Galleries/Displays/Exhibitions (write — permission-checked in handler)
+	r.POST("/api/v1/resource-labels",                     auth(resLabels.Create))
+	r.DELETE("/api/v1/resource-labels/:labelid",          auth(resLabels.Delete))
 
 	// Emoji reactions
 	r.POST("/api/v1/emoji/react",                         auth(emojis.React))
@@ -171,6 +182,18 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	r.DELETE("/api/v1/admin/roles/:roleid",                 auth(roles.Delete))
 	r.POST("/api/v1/admin/roles/:roleid/permissions",       auth(roles.AddPermission))
 	r.DELETE("/api/v1/admin/roles/:roleid/permissions/:permission", auth(roles.RemovePermission))
+
+	// Phase 3a: resource groups admin (PermAdmin/PermGroup* enforced in
+	// handler). Accepts ?organizationid= in place of ?exhibitionid= for
+	// Exhibition-type groups (isOrgAdmin enforced in handler), same dispatch
+	// as roles above.
+	r.GET("/api/v1/admin/groups",                           auth(groups.List))
+	r.POST("/api/v1/admin/groups",                          auth(groups.Create))
+	r.PATCH("/api/v1/admin/groups/:groupid",                auth(groups.Update))
+	r.DELETE("/api/v1/admin/groups/:groupid",               auth(groups.Delete))
+	r.GET("/api/v1/admin/groups/:groupid/members",          auth(groups.ListMembers))
+	r.POST("/api/v1/admin/groups/:groupid/members",         auth(groups.AddMember))
+	r.DELETE("/api/v1/admin/groups/:groupid/members/:resourceref", auth(groups.RemoveMember))
 	r.GET("/api/v1/admin/permission-catalog",               auth(roles.PermissionCatalog))
 
 	// ── Static file serving for uploaded emoji images ─────────────────────────

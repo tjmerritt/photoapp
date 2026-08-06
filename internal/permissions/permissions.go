@@ -334,6 +334,24 @@ const (
 	PermRoleDelete = "RoleDelete"
 )
 
+// Group permissions (PLAN2.md Phase 3a) — resource_groups is its own
+// administrative construct, not a property of the resources it contains
+// (a Photo group's members are photos, but creating/editing the GROUP
+// itself doesn't require any permission on those photos), so it gets its
+// own permission tier exactly like Team/Role above rather than reusing
+// e.g. PermGalleryModify for a Gallery-type group. A single PermGroup* set
+// covers every resource_type a group can hold (Photo/Gallery/Display/
+// Exhibition) — see internal/handlers/groups.go's doc comment for how the
+// admin-tier check (exhibition-scoped HasAny vs. organization-scoped
+// isOrgAdmin) is chosen per group, independent of which permission is
+// being checked.
+const (
+	PermGroupView   = "GroupView"
+	PermGroupCreate = "GroupCreate"
+	PermGroupModify = "GroupModify" // also covers adding/removing group members
+	PermGroupDelete = "GroupDelete"
+)
+
 // Administrative permissions.
 const (
 	PermAdmin        = "Admin"
@@ -379,6 +397,7 @@ func PermissionCatalog() []PermissionGroup {
 		{Name: "Label names", Permissions: []string{PermLabelNameView, PermLabelNameCreate, PermLabelNameModify, PermLabelNameDelete}},
 		{Name: "Teams", Permissions: []string{PermTeamView, PermTeamCreate, PermTeamModify, PermTeamDelete}},
 		{Name: "Roles", Permissions: []string{PermRoleView, PermRoleCreate, PermRoleModify, PermRoleDelete}},
+		{Name: "Groups", Permissions: []string{PermGroupView, PermGroupCreate, PermGroupModify, PermGroupDelete}},
 		{Name: "Administrative", Permissions: []string{PermAdmin, PermLabelAdmin, PermEmojiAdmin, PermUserAdmin, PermGalleryAdmin, PermTeamAdmin, PermPermissionsAdmin}},
 	}
 }

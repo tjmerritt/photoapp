@@ -48,6 +48,8 @@ migrate-up:
 	psql "$$DATABASE_URL" -f migrations/022_drop_is_public.sql
 	psql "$$DATABASE_URL" -f migrations/023_display_slots_photoid_index.sql
 	psql "$$DATABASE_URL" -f migrations/024_label_names_per_exhibition.sql
+	psql "$$DATABASE_URL" -f migrations/025_resource_labels.sql
+	psql "$$DATABASE_URL" -f migrations/026_resource_groups.sql
 
 #Commented out so that the database isn't destroyed accidentally
 #migrate-down:
