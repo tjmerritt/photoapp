@@ -149,12 +149,13 @@ type pageConfig struct {
 // pageConfigs is the routing table for PagesHandler: which pages have been
 // migrated onto the shared header partials, and how each one fills them
 // in. Pages not listed here (galleries.html, photo.html, display-edit.html,
-// gallery-manager.html, template-admin.html, newdomain.html, and everything
-// under photoapp_api_reference.html) keep serving as plain static files —
-// each of those has real page-specific header content of its own (e.g.
-// photo.html's search bar) that needs individual attention rather than a
-// mechanical conversion, so they were deliberately left for a follow-up
-// pass. See SUMMARIES2.md's Phase 4a entry.
+// gallery-manager.html, newdomain.html, and everything under
+// photoapp_api_reference.html) keep serving as plain static files — each of
+// those has real page-specific header content of its own (e.g. photo.html's
+// search bar) that needs individual attention rather than a mechanical
+// conversion, so they were deliberately left for a follow-up pass. See
+// SUMMARIES2.md's Phase 4a entry. (template-admin.html was in this list too
+// until it moved into the Admin section — see its own pageConfigs entry.)
 var pageConfigs = map[string]pageConfig{
 	"/admin.html":             {file: "admin.html", title: "Photo Admin", countExpr: "offset + ' of ' + total + ' photos'", adminNav: "photos"},
 	"/admin-master.html":      {file: "admin-master.html", title: "Admin", adminNav: "overview"},
@@ -168,6 +169,17 @@ var pageConfigs = map[string]pageConfig{
 	"/admin-labels.html": {file: "admin-labels.html", title: "Label Admin", countExpr: "total + ' label names'", adminNav: "labels", hideScopePicker: true},
 	"/admin-permissions.html": {file: "admin-permissions.html", title: "Permissions Admin", adminNav: "permissions"},
 	"/admin-roles.html":       {file: "admin-roles.html", title: "Role Admin", countExpr: "total + ' roles'", adminNav: "roles"},
+	// template-admin.html moved into the Admin section (PermAdmin-gated,
+	// like every other page here) at the user's request — previously it
+	// lived in the regular hamburger menu with its own hand-written
+	// "regular" header. Its x-data component (templateAdminApp) lives in
+	// app.js, not admin.js — porting its drag/resize/placard-preview logic
+	// to admin.js's separate component set would be a much bigger change
+	// than "move it and match the visual style", so the page keeps
+	// <script src="/app.js"> and templateAdminApp; only the header/body
+	// chrome around it changed. templateAdminApp has no scopePickerMixin()
+	// either (same gap as adminEmojis/adminLabels), hence hideScopePicker.
+	"/template-admin.html": {file: "template-admin.html", title: "Template Admin", adminNav: "templates", hideScopePicker: true},
 }
 
 func init() {

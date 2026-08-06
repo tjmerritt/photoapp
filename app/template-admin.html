@@ -3,11 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Template Admin — PhotoApp</title>
+  <title>Template Admin</title>
   <link rel="icon" href="/favicon.ico">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 
   <link rel="stylesheet" href="/tailwind.css">
+  <!-- Deliberately app.js, not admin.js: templateAdminApp (drag/resize
+       slot editing, placard preview dragging) lives in app.js alongside
+       the other "regular" pages' components. Moving it into the Admin
+       section changed the header/body chrome only — see
+       internal/handlers/pages.go's pageConfigs entry for why the component
+       itself stayed put. -->
   <script src="/app.js"></script>
   <script defer src="/alpinejs.min.js"></script>
   <link rel="stylesheet" href="/fonts.css">
@@ -201,66 +207,13 @@
   </style>
 </head>
 
-<body class="min-h-screen flex flex-col">
+<body class="bg-gray-100 min-h-screen font-sans">
 
-<!-- ══ NAVBAR ══════════════════════════════════════════════════════════════ -->
-<nav class="sticky top-0 z-40 bg-white border-b border-[var(--border)] shadow-sm">
-  <div class="max-w-7xl mx-auto px-4 flex items-center gap-3 h-14">
+  {{template "admin-header" .}}
 
-    <!-- Hamburger -->
-    <div class="relative" x-data="{ open: false }">
-      <button @click="open = !open" class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="Menu">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
-        </svg>
-      </button>
-      <div x-show="open" @click.outside="open=false" x-transition
-           class="absolute left-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-52 py-1 animate-scalein">
-        <a href="/" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Photos</a>
+<div class="max-w-4xl mx-auto p-4">
 
-        <div x-data="galleriesNav">
-          <span x-show="!loaded" class="block px-4 py-2.5 text-sm text-gray-300 cursor-default">Galleries</span>
-          <span x-show="loaded && galleries.length === 0"
-                class="block px-4 py-2.5 text-sm text-gray-300 cursor-default">Galleries</span>
-          <a x-show="loaded && galleries.length > 0"
-             :href="galleriesHref"
-             class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Galleries</a>
-          <div x-show="loaded && galleries.length > 1">
-            <template x-for="g in galleries" :key="g.galleryid">
-              <a :href="'/galleries.html?galleryid=' + g.galleryid"
-                 class="block pl-7 pr-4 py-1.5 text-xs text-[var(--muted)] hover:text-[var(--brand)] hover:bg-gray-50 truncate">
-                <span x-text="g.title"></span>
-              </a>
-            </template>
-          </div>
-        </div>
-
-        <a href="/gallery-manager.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Gallery Manager</a>
-        <a href="/template-admin.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Template Admin</a>
-        <a href="/admin-master.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Admin</a>
-      </div>
-    </div>
-
-    <!-- Logo -->
-    <a href="/" class="flex items-center gap-2 shrink-0">
-      <div class="w-8 h-8 rounded-lg bg-[var(--brand)] flex items-center justify-center">
-        <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
-          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/>
-        </svg>
-      </div>
-      <span class="font-serif text-lg font-bold text-[var(--brand)] hidden sm:block">Phōtos</span>
-    </a>
-  </div>
-</nav>
-
-<!-- ══ MAIN ══════════════════════════════════════════════════════════════════ -->
-<main class="flex-1 max-w-3xl mx-auto w-full px-4 py-10">
-
-  <div class="flex items-start justify-between gap-4 mb-8">
-    <div>
-      <h1 class="text-3xl font-serif mb-1">Template Manager</h1>
-      <p class="text-sm text-[var(--muted)]">Manage display templates — slot count and display layout.</p>
-    </div>
+  <div class="flex items-center justify-end mb-4">
     <button class="btn-primary shrink-0" @click="openCreateModal()">Create Template</button>
   </div>
 
@@ -463,7 +416,7 @@
     </div>
 
   </div>
-</main>
+</div>
 
 <!-- ══ CREATE TEMPLATE MODAL ═══════════════════════════════════════════════ -->
 <div x-show="createModalOpen" x-cloak x-transition
