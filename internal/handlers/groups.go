@@ -318,12 +318,18 @@ func (h *GroupsHandler) Create(w http.ResponseWriter, r *http.Request, _ httprou
 		return
 	}
 
-	middleware.WriteJSON(w, http.StatusCreated, adminGroup{
+	resp := adminGroup{
 		GroupID:      groupID,
 		ResourceType: req.ResourceType,
 		Name:         req.Name,
 		Description:  req.Description,
-	})
+	}
+	if req.ResourceType == GroupResourceExhibition {
+		resp.OrganizationID = organizationID
+	} else {
+		resp.ExhibitionID = exhibitionID
+	}
+	middleware.WriteJSON(w, http.StatusCreated, resp)
 }
 
 // PATCH /api/v1/admin/groups/:groupid
