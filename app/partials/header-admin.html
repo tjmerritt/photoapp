@@ -1,0 +1,97 @@
+{{/* app/partials/header-admin.html — shared admin-style page header (Phase 4a).
+
+     Rendered via internal/handlers/pages.go's html/template set. Data comes
+     from handlers.pageData:
+       .Title      — H1 text, e.g. "Photo Admin", "User Admin"
+       .CountExpr  — optional Alpine x-text expression for the header's
+                     right-side counter (e.g. "total + ' users'"); empty
+                     string omits the counter entirely (admin-master.html,
+                     admin-permissions.html have none)
+       .AdminNav   — []handlers.AdminNavItem, the 10-item nav row shared by
+                     every admin page, precomputed per-route with the
+                     current page's own item marked Active
+       .HideScopePicker — true on the two admin pages (Emoji Admin, Label
+                     Admin) that never got Phase 1d's Organization/
+                     Exhibition picker wired up on the JS side
+                     (admin.js's adminEmojis/adminLabels don't mix in
+                     scopePickerMixin() or call loadAdminScope()); showing
+                     the picker markup there would render header fields and
+                     a popup that call undefined Alpine methods. Fixing
+                     that gap for real is a follow-up, not part of Phase
+                     4a's header-consolidation scope — see SUMMARIES2.md.
+
+     This partial bundles three blocks that always travel together in the
+     original hand-duplicated markup: the dark header bar, the
+     Organization/Exhibition picker popup it opens (Phase 1d), and the
+     admin section's nav row. */}}
+{{define "admin-header"}}
+  <!-- Header -->
+  <header class="bg-[#1a1a2e] text-white px-5 py-3.5 flex items-center justify-between gap-4">
+    <h1 class="text-lg font-bold tracking-tight shrink-0">{{.Title}}</h1>
+
+    <!-- Organization / Exhibition picker (Phase 1d) — plain text when
+         there's only one choice, clickable to open the search+select popup
+         when there's more than one. -->
+{{if not .HideScopePicker}}
+    <div class="flex items-center gap-4 flex-1 min-w-0">
+      <div class="min-w-0">
+        <div class="text-[10px] uppercase tracking-wide text-white/40 leading-none mb-0.5">Organization</div>
+        <button type="button" @click="openPicker('organization')"
+                :class="organizationsTotal > 1 ? 'hover:text-white cursor-pointer' : 'cursor-default'"
+                class="text-sm text-white/80 truncate max-w-[10rem] block text-left">
+          <span x-text="selectedOrganizationName || '—'"></span>
+        </button>
+      </div>
+      <div class="min-w-0">
+        <div class="text-[10px] uppercase tracking-wide text-white/40 leading-none mb-0.5">Exhibition</div>
+        <button type="button" @click="openPicker('exhibition')"
+                :class="exhibitionsTotal > 1 ? 'hover:text-white cursor-pointer' : 'cursor-default'"
+                class="text-sm text-white/80 truncate max-w-[10rem] block text-left">
+          <span x-text="selectedExhibitionName || '—'"></span>
+        </button>
+      </div>
+    </div>
+{{end}}
+
+    <div class="flex items-center gap-5 shrink-0">
+      {{if .CountExpr}}<span class="text-xs text-white/60" x-text="{{.CountExpr}}"></span>{{end}}
+      <a href="/" class="text-xs text-white/60 hover:text-white transition">← Back to app</a>
+    </div>
+  </header>
+
+{{if not .HideScopePicker}}
+  <!-- Organization/Exhibition picker popup (Phase 1d) -->
+  <div x-show="picker.open" class="fixed inset-0 z-50 bg-black/50 flex items-start justify-center pt-24" @click.self="closePicker()">
+    <div class="bg-white rounded-2xl shadow-xl w-full max-w-sm p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold text-[#1a1a2e]" x-text="picker.kind === 'organization' ? 'Select organization' : 'Select exhibition'"></h2>
+        <button type="button" @click="closePicker()" class="text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>
+      </div>
+      <input type="text" x-model="picker.search" @input.debounce.300ms="searchPicker()"
+             placeholder="Search…"
+             class="w-full text-sm border border-gray-200 rounded-lg px-3 py-1.5 mb-3 focus:outline-none focus:ring-2 focus:ring-accent/40">
+      <select :size="Math.min(8, Math.max(3, picker.items.length))"
+              @change="choosePickerItemByValue($event.target.value)"
+              class="w-full text-sm border border-gray-200 rounded-lg">
+        <template x-for="item in picker.items" :key="item.organizationid || item.exhibitionid">
+          <option :value="item.organizationid || item.exhibitionid" x-text="item.name"></option>
+        </template>
+      </select>
+      <div class="flex items-center justify-between mt-2">
+        <span class="text-xs text-gray-400" x-text="picker.items.length + ' of ' + picker.total"></span>
+        <button type="button" x-show="picker.items.length < picker.total" @click="loadMorePicker()"
+                :disabled="picker.loading"
+                class="text-xs text-accent hover:underline disabled:opacity-50">
+          <span x-text="picker.loading ? 'Loading…' : 'Load more'"></span>
+        </button>
+      </div>
+    </div>
+  </div>
+{{end}}
+
+  <!-- Admin page nav (shared across all admin pages) -->
+  <nav class="bg-white border-b border-gray-200 px-5 py-2.5 flex items-center gap-1 text-sm overflow-x-auto">
+    {{range .AdminNav}}<a href="{{.Href}}" class="px-3 py-1.5 rounded-lg {{if .Active}}font-semibold bg-gray-100{{else}}hover:bg-gray-50{{end}} whitespace-nowrap">{{.Label}}</a>
+    {{end}}
+  </nav>
+{{end}}

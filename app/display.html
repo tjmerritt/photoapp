@@ -219,55 +219,7 @@
 
 <body class="min-h-screen flex flex-col">
 
-<!-- ══ NAVBAR ══════════════════════════════════════════════════════════════ -->
-<nav class="sticky top-0 z-40 bg-white border-b border-[var(--border)] shadow-sm">
-  <div class="max-w-7xl mx-auto px-4 flex items-center gap-3 h-14">
-
-    <!-- Hamburger -->
-    <div class="relative" x-data="{ open: false }">
-      <button @click="open = !open" class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="Menu">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
-        </svg>
-      </button>
-      <div x-show="open" @click.outside="open=false" x-transition
-           class="absolute left-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-52 py-1 animate-scalein">
-        <a href="/" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Photos</a>
-
-        <div x-data="galleriesNav">
-          <span x-show="!loaded" class="block px-4 py-2.5 text-sm text-gray-300 cursor-default">Galleries</span>
-          <span x-show="loaded && galleries.length === 0"
-                class="block px-4 py-2.5 text-sm text-gray-300 cursor-default">Galleries</span>
-          <a x-show="loaded && galleries.length > 0"
-             :href="galleriesHref"
-             class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Galleries</a>
-          <div x-show="loaded && galleries.length > 1">
-            <template x-for="g in galleries" :key="g.galleryid">
-              <a :href="'/galleries.html?galleryid=' + g.galleryid"
-                 class="block pl-7 pr-4 py-1.5 text-xs text-[var(--muted)] hover:text-[var(--brand)] hover:bg-gray-50 truncate">
-                <span x-text="g.title"></span>
-              </a>
-            </template>
-          </div>
-        </div>
-
-        <a href="/gallery-admin.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Gallery Admin</a>
-        <a href="/template-admin.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Template Admin</a>
-        <a href="/admin-master.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Admin</a>
-      </div>
-    </div>
-
-    <!-- Logo -->
-    <a href="/" class="flex items-center gap-2 shrink-0">
-      <div class="w-8 h-8 rounded-lg bg-[var(--brand)] flex items-center justify-center">
-        <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
-          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/>
-        </svg>
-      </div>
-      <span class="font-serif text-lg font-bold text-[var(--brand)] hidden sm:block">Phōtos</span>
-    </a>
-  </div>
-</nav>
+{{template "regular-header" .}}
 
 <!-- ══ MAIN ══════════════════════════════════════════════════════════════════ -->
 <main class="flex-1 max-w-6xl mx-auto w-full px-4 py-8">

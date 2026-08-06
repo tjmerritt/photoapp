@@ -44,6 +44,15 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	resLabels   := &ResourceLabelsHandler{DB: pool, Cfg: cfg, Checker: checker}
 	groups      := &GroupsHandler{DB: pool, Cfg: cfg, Checker: checker}
 
+	// Phase 4a: shared header templating (see pages.go's package doc
+	// comment for why this is html/template rather than the
+	// golang.org/x/net/html PLAN2.md names — that package isn't reachable
+	// from this environment).
+	pages, err := NewPagesHandler(cfg.AppDir)
+	if err != nil {
+		return nil, err
+	}
+
 	// Convenience: wrap a httprouter.Handle with RequireAuth
 	auth := func(h httprouter.Handle) httprouter.Handle {
 		return func(w http.ResponseWriter, req *http.Request, ps httprouter.Params) {
@@ -203,6 +212,20 @@ func NewRouter(pool *db.Pool, cfg *config.Config, authHandler *AuthHandler, exhi
 	appFS := http.FileServer(http.Dir(cfg.AppDir))
 	r.NotFound = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if len(req.URL.Path) >= 4 && req.URL.Path[:4] == "/api" {
+			middleware.WriteError(w, http.StatusNotFound, "not found")
+			return
+		}
+		// Phase 4a: pages migrated onto the shared header partials are
+		// composed on the fly by PagesHandler; everything else (JS/CSS,
+		// images, and pages not yet migrated — see pageConfigs' doc
+		// comment) still goes straight through the static file server.
+		// app/partials/* is PagesHandler's own template source, not a
+		// page in its own right, so it's excluded from static serving too.
+		if pages.Handles(req.URL.Path) {
+			pages.ServeHTTP(w, req)
+			return
+		}
+		if len(req.URL.Path) >= 10 && req.URL.Path[:10] == "/partials/" {
 			middleware.WriteError(w, http.StatusNotFound, "not found")
 			return
 		}

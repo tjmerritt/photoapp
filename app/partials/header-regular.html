@@ -1,0 +1,313 @@
+{{/* app/partials/header-regular.html — shared regular page header (Phase 4a).
+     Rendered via internal/handlers/pages.go's html/template set. All fields
+     come from handlers.HeaderOptions (see pages.go) except where noted.
+     Elements are wrapped in {{if .Header.ShowX}} so pages like display.html
+     can render a reduced, distraction-free header by passing a
+     HeaderOptions with most fields false — PLAN2.md Phase 4a. */}}
+{{define "regular-header"}}
+<!-- ══ NAVBAR ══════════════════════════════════════════════════════════════ -->
+<nav class="sticky top-0 z-40 bg-white border-b border-[var(--border)] shadow-sm">
+  <div class="max-w-7xl mx-auto px-4 flex items-center gap-3 h-14">
+
+    <!-- Hamburger -->
+    <div class="relative" x-data="{ open: false }">
+      <button @click="open = !open" class="p-2 rounded-lg hover:bg-gray-100 transition" aria-label="Menu">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+      <div x-show="open" @click.outside="open=false" x-transition
+           class="absolute left-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-52 py-1 animate-scalein">
+        <a href="/" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Photos</a>
+
+        <!-- Galleries menu item (with sub-items) -->
+{{if .Header.ShowGalleriesMenu}}
+        <div x-data="galleriesNav">
+          <!-- Loading placeholder -->
+          <span x-show="!loaded" class="block px-4 py-2.5 text-sm text-gray-300 cursor-default">Galleries</span>
+          <!-- Grayed out when no galleries -->
+          <span x-show="loaded && galleries.length === 0"
+                class="block px-4 py-2.5 text-sm text-gray-300 cursor-default">Galleries</span>
+          <!-- Single gallery or "All Galleries" link -->
+          <a x-show="loaded && galleries.length > 0"
+             :href="galleriesHref"
+             class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Galleries</a>
+          <!-- Sub-items when there are multiple galleries -->
+          <div x-show="loaded && galleries.length > 1">
+            <template x-for="g in galleries" :key="g.galleryid">
+              <a :href="'/galleries.html?galleryid=' + g.galleryid"
+                 class="block pl-7 pr-4 py-1.5 text-xs text-[var(--muted)] hover:text-[var(--brand)] hover:bg-gray-50 truncate">
+                <span x-text="g.title"></span>
+              </a>
+            </template>
+          </div>
+        </div>
+{{end}}
+
+{{if .Header.ShowAdminLinks}}
+        <a href="/gallery-admin.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Gallery Admin</a>
+        <a href="/template-admin.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Template Admin</a>
+        <a href="/admin-master.html" class="block px-4 py-2.5 text-sm hover:bg-gray-50 font-medium">Admin</a>
+{{end}}
+
+{{if .Header.ShowSettings}}
+        <button @click="loggedInUser && ($store.ui.settingsOpen = !$store.ui.settingsOpen)"
+                :class="loggedInUser ? '' : 'opacity-40 cursor-default'"
+                class="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-center gap-3">
+          <svg class="w-4 h-4 text-muted shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+          Settings
+        </button>
+{{end}}
+      </div>
+    </div>
+
+    <!-- Site icon / home link -->
+    <a href="/" class="flex items-center gap-2 shrink-0">
+      <div class="w-8 h-8 rounded-lg bg-brand flex items-center justify-center">
+        <svg class="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/>
+        </svg>
+      </div>
+      <span class="font-serif text-lg font-bold text-brand hidden sm:block">Phōtos</span>
+    </a>
+
+    <div class="flex-1"></div>
+
+    <div class="ml-auto flex items-center gap-1">
+
+      <!-- User switcher — only visible when logged-in user has allow_multi_login -->
+{{if .Header.ShowUserSwitcher}}
+      <template x-if="loggedInUser && loggedInUser.allowMultiLogin">
+        <div class="relative" x-data="userSwitcher">
+          <button @click="toggle()"
+                  class="flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-gray-100 transition text-xs font-medium text-muted border border-dashed border-gray-300"
+                  title="Switch acting user">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a4 4 0 00-5-4M9 20H4v-2a4 4 0 015-4m0 0a4 4 0 110-8 4 4 0 010 8zm8-8a4 4 0 110-8 4 4 0 010 8z"/>
+            </svg>
+            <span x-text="testUser ? testUser.username : loggedInUser.username"></span>
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+            </svg>
+          </button>
+          <div x-show="open" @click.outside="open = false" x-transition
+               class="absolute right-0 top-10 bg-white border border-[var(--border)] rounded-xl shadow-lg w-52 py-1 z-50 animate-scalein">
+            <p class="px-3 py-1 text-xs font-semibold text-muted uppercase tracking-widest">Act as user</p>
+            <button @click="selectTestUser(null) || (open = false)"
+                    :class="!testUser ? 'bg-gray-50 font-semibold' : ''"
+                    class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
+              <img :src="loggedInUser.profileImage || ''" class="avatar w-6 h-6 rounded-full object-cover shrink-0" />
+              <div>
+                <div x-text="loggedInUser.username"></div>
+                <div class="text-xs text-muted">You (self)</div>
+              </div>
+            </button>
+            <div class="border-t border-[var(--border)] my-1"></div>
+            <template x-for="u in displayUsers" :key="u.userid">
+              <button @click="selectTestUser({ userid: u.userid, username: u.username, profileImage: u.profileImage }) || (open = false)"
+                      :class="testUser && testUser.userid === u.userid ? 'bg-accent/10 text-accent font-semibold' : ''"
+                      class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center gap-2">
+                <img :src="u.profileImage || ''" class="avatar w-6 h-6 rounded-full object-cover shrink-0" />
+                <span x-text="u.username"></span>
+              </button>
+            </template>
+          </div>
+        </div>
+      </template>
+{{end}}
+
+{{if .Header.ShowUpload}}
+      <!-- Upload photos. Gated on both being logged in AND holding PhotoCreate
+           (checked via wallApp.refreshPermissions, mirroring exactly what
+           POST /api/v1/photos/upload enforces server-side) — a user without
+           it never sees a clickable icon or the popup at all, rather than
+           discovering the rejection only after picking files. -->
+      <button @click="loggedInUser && canUploadPhotos && ($store.upload.open = true)"
+              @dragover.prevent
+              @drop.prevent="loggedInUser && canUploadPhotos && $store.upload.addFiles($event.dataTransfer.files)"
+              :class="loggedInUser && canUploadPhotos ? 'hover:bg-gray-100 cursor-pointer' : 'cursor-default opacity-40'"
+              class="p-2 rounded-lg transition"
+              :title="loggedInUser && !canUploadPhotos ? 'You do not have permission to upload photos' : 'Upload photos'">
+        <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+        </svg>
+      </button>
+{{end}}
+
+{{if .Header.ShowSettings}}
+      <!-- Settings -->
+      <div class="relative">
+        <button @click="loggedInUser && ($store.ui.settingsOpen = !$store.ui.settingsOpen)"
+                :class="loggedInUser ? 'hover:bg-gray-100 cursor-pointer' : 'cursor-default opacity-40'"
+                class="p-2 rounded-lg transition" title="Settings">
+          <svg class="w-5 h-5 text-muted" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+        </button>
+
+        <!-- Settings popup -->
+        <div x-show="$store.ui.settingsOpen" @click.outside="$store.ui.settingsOpen = false" x-transition
+             class="absolute right-0 top-11 bg-white border border-[var(--border)] rounded-2xl shadow-2xl w-80 p-5 z-50 animate-scalein">
+        <div x-data="avatarSettings">
+          <h2 class="font-serif text-xl mb-4">Settings</h2>
+          <div class="flex items-center gap-3 mb-4">
+            <img :src="(loggedInUser && loggedInUser.profileImage) || ''" class="avatar w-14 h-14 rounded-full object-cover ring-2 ring-[var(--border)]" />
+            <div>
+              <p class="text-sm font-semibold" x-text="loggedInUser && loggedInUser.username"></p>
+              <p class="text-xs text-muted">Profile image</p>
+            </div>
+          </div>
+          <template x-if="_profileImageSource">
+            <div class="mb-4">
+              <p class="text-xs font-semibold text-muted uppercase tracking-widest mb-2">Profile photo</p>
+              <div class="flex items-center gap-3">
+                <button @click="selectProfileImage()" :disabled="saving"
+                        :class="loggedInUser && loggedInUser.profileImage === _profileImageSource ? 'ring-2 ring-accent' : 'ring-1 ring-[var(--border)] hover:ring-accent/60'"
+                        class="rounded-xl overflow-hidden transition disabled:opacity-40 flex-shrink-0">
+                  <img :src="_profileImageSource" class="w-12 h-12 object-cover" />
+                </button>
+                <p class="text-xs text-muted">Your profile photo</p>
+              </div>
+            </div>
+          </template>
+          <p class="text-xs font-semibold text-muted uppercase tracking-widest mb-2">Choose avatar</p>
+          <div class="grid grid-cols-5 gap-1.5 mb-4">
+            <template x-for="hash in presets" :key="hash">
+              <button @click="selectPreset(hash)" :disabled="saving"
+                      :class="loggedInUser && loggedInUser.profileImage === '/avatars/' + hash ? 'ring-2 ring-accent' : 'ring-1 ring-[var(--border)] hover:ring-accent/60'"
+                      class="rounded-xl overflow-hidden transition disabled:opacity-40">
+                <img :src="'/avatars/' + hash" class="w-full aspect-square object-cover" />
+              </button>
+            </template>
+          </div>
+          <template x-if="_provider === 'local'">
+            <div>
+              <p class="text-xs font-semibold text-muted uppercase tracking-widest mb-2">Custom image</p>
+              <label class="flex items-center justify-center gap-2 w-full border border-dashed border-[var(--border)] rounded-xl py-2.5 cursor-pointer hover:bg-gray-50 transition text-sm text-muted"
+                     :class="uploading ? 'opacity-40 cursor-wait' : ''">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+                </svg>
+                <span x-text="uploading ? 'Uploading…' : 'Upload image'"></span>
+                <input type="file" accept="image/*" class="hidden" @change="uploadCustom($event)" :disabled="uploading" />
+              </label>
+            </div>
+          </template>
+        </div></div>
+      </div>
+{{end}}
+
+{{if .Header.ShowAuthPanel}}
+      <!-- Profile / Auth -->
+      <div class="relative" x-data="{ open: false }">
+        <button @click="open = !open" class="p-1 rounded-lg hover:bg-gray-100 transition" title="Account">
+          <template x-if="loggedInUser">
+            <img :src="avatarSrc(loggedInUser)" class="w-7 h-7 rounded-full object-cover" />
+          </template>
+          <template x-if="!loggedInUser">
+            <svg class="w-7 h-7 text-muted" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5.121 17.804A4 4 0 019 16h6a4 4 0 013.879 1.804M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
+            </svg>
+          </template>
+        </button>
+
+        <!-- Auth panel -->
+        <div x-show="open" @click.outside="open = false" x-transition
+             class="absolute right-0 top-11 bg-white border border-[var(--border)] rounded-2xl shadow-2xl w-80 p-5 z-50 animate-scalein">
+          <template x-if="loggedInUser">
+            <div>
+              <div class="flex items-center gap-3 mb-4">
+                <img :src="avatarSrc(loggedInUser)" class="w-12 h-12 rounded-full object-cover" />
+                <div>
+                  <div class="font-semibold text-sm" x-text="loggedInUser.username"></div>
+                  <div class="text-xs text-muted" x-text="loggedInUser.email"></div>
+                </div>
+              </div>
+              <button @click="logout() || (open = false)"
+                      class="w-full bg-gray-100 hover:bg-gray-200 text-brand text-sm py-2 rounded-xl transition font-medium">
+                Sign Out
+              </button>
+            </div>
+          </template>
+          <template x-if="!loggedInUser">
+            <div x-data="authModal">
+              <a x-show="authConfig.googleEnabled"
+                 href="/auth/google"
+                 class="flex items-center justify-center gap-3 w-full border border-[var(--border)] rounded-xl py-2.5 mb-3 hover:bg-gray-50 transition text-sm font-medium">
+                <svg class="w-5 h-5" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                Sign in with Google
+              </a>
+              <a x-show="authConfig.appleEnabled"
+                 href="/auth/apple"
+                 class="flex items-center justify-center gap-3 w-full bg-black text-white rounded-xl py-2.5 mb-4 hover:bg-gray-900 transition text-sm font-medium">
+                <svg class="w-5 h-5 fill-white" viewBox="0 0 24 24"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.7 9.05 7.07c1.22.07 2.08.67 2.82.68.96-.15 1.84-.78 2.96-.83 1.28-.07 2.5.54 3.24 1.52-2.79 1.68-2.32 5.34.28 6.66-.53 1.47-1.28 2.93-2.3 4.18zM12.03 7c-.09-2.29 1.79-4.27 3.97-4.35.28 2.51-2.3 4.43-3.97 4.35z"/></svg>
+                Sign in with Apple
+              </a>
+              <a x-show="authConfig.facebookEnabled"
+                 href="/auth/facebook"
+                 class="flex items-center justify-center gap-3 w-full bg-[#1877F2] text-white rounded-xl py-2.5 mb-4 hover:bg-[#166fe0] transition text-sm font-medium">
+                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="#fff"><path d="M14.5 8.5c0-1 .6-1.6 1.7-1.6h1.3V4.4s-.9-.1-1.9-.1c-2.2 0-3.6 1.3-3.6 3.7v2.1H9.6v2.9h2.4V21h3v-8h2.2l.4-2.9h-2.6z"/></svg>
+                Sign in with Facebook
+              </a>
+              <a x-show="authConfig.microsoftEnabled"
+                 href="/auth/microsoft"
+                 class="flex items-center justify-center gap-3 w-full border border-[var(--border)] rounded-xl py-2.5 mb-4 hover:bg-gray-50 transition text-sm font-medium">
+                <svg class="w-5 h-5" viewBox="0 0 23 23"><path fill="#f35325" d="M1 1h10v10H1z"/><path fill="#81bc06" d="M12 1h10v10H12z"/><path fill="#05a6f0" d="M1 12h10v10H1z"/><path fill="#ffba08" d="M12 12h10v10H12z"/></svg>
+                Sign in with Microsoft
+              </a>
+              <div x-show="authConfig.googleEnabled || authConfig.appleEnabled || authConfig.facebookEnabled || authConfig.microsoftEnabled" class="flex items-center gap-2 mb-4">
+                <div class="flex-1 border-t border-[var(--border)]"></div>
+                <span class="text-xs text-muted">or</span>
+                <div class="flex-1 border-t border-[var(--border)]"></div>
+              </div>
+              <div class="flex rounded-xl bg-gray-100 p-1 mb-4">
+                <button @click="(authTab = 'login') && (authError = '')"
+                        :class="authTab === 'login' ? 'bg-white shadow text-brand' : 'text-muted'"
+                        class="flex-1 text-sm py-1.5 rounded-lg font-medium transition">Login</button>
+                <button @click="(authTab = 'register') && (authError = '')"
+                        :class="authTab === 'register' ? 'bg-white shadow text-brand' : 'text-muted'"
+                        class="flex-1 text-sm py-1.5 rounded-lg font-medium transition">Register</button>
+              </div>
+              <p x-show="authError" x-text="authError" class="text-xs text-red-500 mb-3 -mt-2"></p>
+              <template x-if="authTab === 'login'">
+                <div class="space-y-3">
+                  <input x-model="authEmail" type="text" placeholder="Email or username"
+                         class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  <input x-model="authPassword" type="password" placeholder="Password"
+                         @keydown.enter="doLogin()"
+                         class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  <button @click="doLogin()" :disabled="authLoading"
+                          class="w-full bg-brand text-white py-2.5 rounded-xl font-medium hover:bg-accent transition text-sm disabled:opacity-40">
+                    <span x-text="authLoading ? 'Signing in…' : 'Log In'"></span>
+                  </button>
+                </div>
+              </template>
+              <template x-if="authTab === 'register'">
+                <div class="space-y-3">
+                  <input x-model="authUsername" type="text" placeholder="Username"
+                         class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  <input x-model="authEmail" type="email" placeholder="Email"
+                         class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  <input x-model="authPassword" type="password" placeholder="Password (min 8 chars)"
+                         @keydown.enter="doRegister()"
+                         class="w-full border border-[var(--border)] rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent/30" />
+                  <button @click="doRegister()" :disabled="authLoading"
+                          class="w-full bg-brand text-white py-2.5 rounded-xl font-medium hover:bg-accent transition text-sm disabled:opacity-40">
+                    <span x-text="authLoading ? 'Creating account…' : 'Create Account'"></span>
+                  </button>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+      </div>
+{{end}}
+    </div>
+  </div>
+</nav>
+{{end}}
