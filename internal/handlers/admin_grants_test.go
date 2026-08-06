@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/julienschmidt/httprouter"
 	"github.com/tjmerritt/photoapp/internal/handlers"
 	"github.com/tjmerritt/photoapp/internal/permissions"
@@ -16,13 +17,15 @@ import (
 // adminGrantEntry mirrors the unexported adminGrant shape admin_grants.go's
 // listing endpoints return.
 type adminGrantEntry struct {
-	GrantID      string `json:"grantid"`
-	EntityType   string `json:"entity_type"`
-	EntityRef    string `json:"entity_ref"`
-	RoleID       string `json:"roleid"`
-	ExhibitionID string `json:"exhibitionid"`
-	ResourceType string `json:"resource_type"`
-	ResourceRef  string `json:"resource_ref"`
+	GrantID        string `json:"grantid"`
+	EntityType     string `json:"entity_type"`
+	EntityRef      string `json:"entity_ref"`
+	RoleID         string `json:"roleid"`
+	ExhibitionID   string `json:"exhibitionid"`
+	OrganizationID string `json:"organizationid"`
+	ResourceType   string `json:"resource_type"`
+	ResourceRef    string `json:"resource_ref"`
+	ResourceName   string `json:"resource_name"`
 }
 
 // grantsFixture creates an exhibition with an admin user granted
@@ -484,6 +487,293 @@ func TestGrantsHandler_ListForExhibition_RequiresExhibitionID(t *testing.T) {
 	})
 
 	rec := doRequest(t, http.MethodGet, "/api/v1/admin/grants/exhibition", admin, "", nil, nil, h.ListForExhibition)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+// ── PLAN2.md Phase 3d: Group as a grant resource ─────────────────────────────
+
+// seedResourceGroup inserts a static resource_groups row directly (testutil
+// has no group-creation helper — see groups_test.go's own comment on the
+// same gap) and returns its groupid. Pass exhibitionID XOR organizationID,
+// mirroring chk_resource_groups_exhibition_type.
+func seedResourceGroup(t *testing.T, env *testEnv, resourceType, exhibitionID, organizationID string) string {
+	t.Helper()
+	var groupID string
+	var err error
+	if organizationID != "" {
+		err = env.Pool.QueryRow(context.Background(), `
+			INSERT INTO resource_groups (resource_type, organizationid, name)
+			VALUES ($1, $2::uuid, $3)
+			RETURNING groupid::text
+		`, resourceType, organizationID, "test-group-"+uuid.NewString()).Scan(&groupID)
+	} else {
+		err = env.Pool.QueryRow(context.Background(), `
+			INSERT INTO resource_groups (resource_type, exhibitionid, name)
+			VALUES ($1, $2::uuid, $3)
+			RETURNING groupid::text
+		`, resourceType, exhibitionID, "test-group-"+uuid.NewString()).Scan(&groupID)
+	}
+	if err != nil {
+		t.Fatalf("seedResourceGroup: %v", err)
+	}
+	return groupID
+}
+
+// TestGrantsHandler_Create_GroupScope_ExhibitionScopedGroup_UsesExhibitionAdminTier
+// confirms a Group-scoped grant targeting an exhibition-scoped (Photo/
+// Gallery/Display-type) group is gated by ordinary exhibition-tier admin
+// access — canManageRequestedScope resolves the group's own real
+// exhibitionid via resourceGroupOwnScope, not the query-string exhibitionid,
+// but for a group that genuinely belongs to the caller's own exhibition
+// these should agree.
+func TestGrantsHandler_Create_GroupScope_ExhibitionScopedGroup_UsesExhibitionAdminTier(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.GrantsHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
+	exhibitionID, admin, targetRoleID := grantsFixture(t, env)
+	groupID := seedResourceGroup(t, env, handlers.GroupResourcePhoto, exhibitionID, "")
+
+	createBody, _ := json.Marshal(map[string]string{
+		"roleid":        targetRoleID,
+		"entity_type":   permissions.EntityLoggedIn,
+		"resource_type": permissions.ResourceGroup,
+		"resource_ref":  groupID,
+	})
+	rec := doRequest(t, http.MethodPost, "/api/v1/admin/grants?exhibitionid="+exhibitionID, admin, exhibitionID, bytes.NewReader(createBody), nil, h.Create)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("Create: status = %d, body = %s", rec.Code, rec.Body)
+	}
+
+	plainUser := testutil.CreateUser(t, env.Pool)
+	rec = doRequest(t, http.MethodPost, "/api/v1/admin/grants?exhibitionid="+exhibitionID, plainUser, exhibitionID, bytes.NewReader(createBody), nil, h.Create)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("Create as plain user: status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+// TestGrantsHandler_Create_GroupScope_ExhibitionTypeGroup_UsesOrgAdminTier is
+// the case that motivated resourceGroupOwnScope in the first place: an
+// Exhibition-type group is organization-scoped, so a Group-scoped grant
+// targeting one must be gated by isOrgAdmin for that ORGANIZATION, not by
+// exhibition-tier HasAny for whatever exhibitionid happens to be in the
+// query string — an ordinary exhibition admin (even one within the same
+// org) with no org-level grant must be rejected.
+func TestGrantsHandler_Create_GroupScope_ExhibitionTypeGroup_UsesOrgAdminTier(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.GrantsHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
+	organizationID, _, orgAdmin, targetRoleID := orgGrantsFixture(t, env)
+	groupID := seedResourceGroup(t, env, handlers.GroupResourceExhibition, "", organizationID)
+
+	createBody, _ := json.Marshal(map[string]string{
+		"roleid":        targetRoleID,
+		"entity_type":   permissions.EntityLoggedIn,
+		"resource_type": permissions.ResourceGroup,
+		"resource_ref":  groupID,
+	})
+	rec := doRequest(t, http.MethodPost, "/api/v1/admin/grants", orgAdmin, "", bytes.NewReader(createBody), nil, h.Create)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("Create as org admin: status = %d, body = %s", rec.Code, rec.Body)
+	}
+
+	// An admin of a wholly unrelated exhibition (a different, default
+	// organization — testutil.CreateExhibition doesn't attach to
+	// organizationID) must be rejected — canManageRequestedScope resolves
+	// this Group grant's tier from the target group's own organization, not
+	// from whatever exhibitionid the caller happens to supply. (Deliberately
+	// NOT testing "an admin of some other exhibition WITHIN organizationID"
+	// here — that case legitimately succeeds per isOrgAdmin's own third
+	// tier, see TestGroupsHandler_ExhibitionAdminCanManageOrgGroups, so it
+	// wouldn't isolate this fix.)
+	outsideExhibitionID := testutil.CreateExhibition(t, env.Pool)
+	outsideAdmin := testutil.CreateUser(t, env.Pool)
+	outsideRole := testutil.CreateRole(t, env.Pool, outsideExhibitionID, "OutsideExhibitionAdmin", permissions.PermPermissionsAdmin)
+	testutil.Grant(t, env.Pool, outsideRole, testutil.GrantOptions{
+		EntityType: permissions.EntityUser, EntityRef: outsideAdmin, ExhibitionID: outsideExhibitionID,
+	})
+	rec = doRequest(t, http.MethodPost, "/api/v1/admin/grants?exhibitionid="+outsideExhibitionID, outsideAdmin, outsideExhibitionID, bytes.NewReader(createBody), nil, h.Create)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("Create as unrelated exhibition's admin: status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+// TestGrantsHandler_ListForExhibition_IncludesGroupGrant confirms a
+// Group-scoped grant targeting an exhibition-scoped group shows up in
+// ListForExhibition with its resource_type/resource_ref/resource_name
+// populated, resolved via the target group's own exhibitionid (not the
+// granting role's).
+func TestGrantsHandler_ListForExhibition_IncludesGroupGrant(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.GrantsHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
+	exhibitionID, admin, targetRoleID := grantsFixture(t, env)
+	groupID := seedResourceGroup(t, env, handlers.GroupResourceGallery, exhibitionID, "")
+
+	createBody, _ := json.Marshal(map[string]string{
+		"roleid":        targetRoleID,
+		"entity_type":   permissions.EntityLoggedIn,
+		"resource_type": permissions.ResourceGroup,
+		"resource_ref":  groupID,
+	})
+	rec := doRequest(t, http.MethodPost, "/api/v1/admin/grants?exhibitionid="+exhibitionID, admin, exhibitionID, bytes.NewReader(createBody), nil, h.Create)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("Create: status = %d, body = %s", rec.Code, rec.Body)
+	}
+	var created struct {
+		GrantID string `json:"grantid"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+
+	rec = doRequest(t, http.MethodGet, "/api/v1/admin/grants/exhibition?exhibitionid="+exhibitionID, admin, exhibitionID, nil, nil, h.ListForExhibition)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ListForExhibition: status = %d, body = %s", rec.Code, rec.Body)
+	}
+	var listResp struct {
+		Grants []adminGrantEntry `json:"grants"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	found := false
+	for _, g := range listResp.Grants {
+		if g.GrantID == created.GrantID {
+			found = true
+			if g.ResourceType != permissions.ResourceGroup || g.ResourceRef != groupID {
+				t.Errorf("found grant = %+v, want ResourceType=%s ResourceRef=%s", g, permissions.ResourceGroup, groupID)
+			}
+			if g.ResourceName == "" {
+				t.Error("found grant: ResourceName is empty, want the group's name resolved")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("ListForExhibition: created grant not found in %+v", listResp.Grants)
+	}
+}
+
+// TestGrantsHandler_ListForOrganization_IncludesGroupGrant is
+// ListForExhibition's counterpart for an Exhibition-type (org-scoped) group
+// — the grant's own row never carries organizationid directly
+// (chk_grant_scope_exclusive forbids combining it with resource_type), so
+// this exercises the LEFT JOIN resource_groups fallback ListForOrganization
+// needs to surface it at all.
+func TestGrantsHandler_ListForOrganization_IncludesGroupGrant(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.GrantsHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
+	organizationID, _, admin, targetRoleID := orgGrantsFixture(t, env)
+	groupID := seedResourceGroup(t, env, handlers.GroupResourceExhibition, "", organizationID)
+
+	createBody, _ := json.Marshal(map[string]string{
+		"roleid":        targetRoleID,
+		"entity_type":   permissions.EntityLoggedIn,
+		"resource_type": permissions.ResourceGroup,
+		"resource_ref":  groupID,
+	})
+	rec := doRequest(t, http.MethodPost, "/api/v1/admin/grants", admin, "", bytes.NewReader(createBody), nil, h.Create)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("Create: status = %d, body = %s", rec.Code, rec.Body)
+	}
+	var created struct {
+		GrantID string `json:"grantid"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+
+	rec = doRequest(t, http.MethodGet, "/api/v1/admin/grants/organization?organizationid="+organizationID, admin, "", nil, nil, h.ListForOrganization)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ListForOrganization: status = %d, body = %s", rec.Code, rec.Body)
+	}
+	var listResp struct {
+		Grants []adminGrantEntry `json:"grants"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	found := false
+	for _, g := range listResp.Grants {
+		if g.GrantID == created.GrantID {
+			found = true
+			if g.OrganizationID != organizationID {
+				t.Errorf("found grant: OrganizationID = %q, want %q (resolved via the target group, not erg.organizationid)", g.OrganizationID, organizationID)
+			}
+			if g.ResourceType != permissions.ResourceGroup || g.ResourceRef != groupID {
+				t.Errorf("found grant = %+v, want ResourceType=%s ResourceRef=%s", g, permissions.ResourceGroup, groupID)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("ListForOrganization: created grant not found in %+v", listResp.Grants)
+	}
+}
+
+// TestGrantsHandler_Revoke_GroupGrant_UsesGroupOwnScope confirms Revoke
+// resolves a Group-scoped grant's admin tier from the target group's own
+// scope (grantScope's Group case), not from the granting role's own
+// exhibitionid/organization the way a Gallery/Display/Photo-scoped grant
+// does. The granting role deliberately lives in a SECOND, unrelated
+// organization's exhibition — this is the only way to actually distinguish
+// "used the group's real organization" from "used the role's" (using the
+// SAME organization's own exhibition for both wouldn't discriminate: an
+// admin of any exhibition inside that org would legitimately pass either
+// way, per isOrgAdmin's third tier).
+func TestGrantsHandler_Revoke_GroupGrant_UsesGroupOwnScope(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.GrantsHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
+	organizationID, _, orgAdmin, _ := orgGrantsFixture(t, env)
+	groupID := seedResourceGroup(t, env, handlers.GroupResourceExhibition, "", organizationID)
+
+	otherOrgID := testutil.CreateOrganization(t, env.Pool)
+	otherOrgExhibitionID := testutil.CreateExhibitionInOrg(t, env.Pool, otherOrgID)
+	exhibitionScopedRole := testutil.CreateRole(t, env.Pool, otherOrgExhibitionID, "OtherOrgExhibitionRole", permissions.PermGalleryView)
+
+	createBody, _ := json.Marshal(map[string]string{
+		"roleid":        exhibitionScopedRole,
+		"entity_type":   permissions.EntityLoggedIn,
+		"resource_type": permissions.ResourceGroup,
+		"resource_ref":  groupID,
+	})
+	rec := doRequest(t, http.MethodPost, "/api/v1/admin/grants", orgAdmin, "", bytes.NewReader(createBody), nil, h.Create)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("Create: status = %d, body = %s", rec.Code, rec.Body)
+	}
+	var created struct {
+		GrantID string `json:"grantid"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+
+	// An admin of the OTHER organization's exhibition (the granting role's
+	// own home) must not be able to revoke this grant — it targets a group
+	// belonging to the FIRST organization, not the second. If grantScope
+	// buggily fell back to the role's own exhibition/organization for a
+	// Group resource_type, this admin would incorrectly pass.
+	otherOrgAdmin := testutil.CreateUser(t, env.Pool)
+	otherOrgAdminRole := testutil.CreateRole(t, env.Pool, otherOrgExhibitionID, "OtherOrgAdmin", permissions.PermPermissionsAdmin)
+	testutil.Grant(t, env.Pool, otherOrgAdminRole, testutil.GrantOptions{
+		EntityType: permissions.EntityUser, EntityRef: otherOrgAdmin, ExhibitionID: otherOrgExhibitionID,
+	})
+
+	params := httprouter.Params{{Key: "grantid", Value: created.GrantID}}
+	rec = doRequest(t, http.MethodDelete, "/api/v1/admin/grants/"+created.GrantID+"?exhibitionid="+otherOrgExhibitionID, otherOrgAdmin, otherOrgExhibitionID, nil, params, h.Revoke)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("Revoke as the OTHER organization's exhibition admin: status = %d, want %d (grantScope must resolve the group's own organization, not the granting role's)", rec.Code, http.StatusForbidden)
+	}
+
+	rec = doRequest(t, http.MethodDelete, "/api/v1/admin/grants/"+created.GrantID, orgAdmin, "", nil, params, h.Revoke)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("Revoke as the group's own org admin: status = %d, body = %s", rec.Code, rec.Body)
+	}
+}
+
+func TestGrantsHandler_Create_GroupScope_ResourceTypeInvalid(t *testing.T) {
+	env := newTestEnv(t)
+	h := &handlers.GrantsHandler{DB: env.Pool, Cfg: env.Cfg, Checker: env.Checker}
+	exhibitionID, admin, targetRoleID := grantsFixture(t, env)
+
+	body, _ := json.Marshal(map[string]string{
+		"roleid":        targetRoleID,
+		"entity_type":   permissions.EntityLoggedIn,
+		"resource_type": "NotAResourceType",
+		"resource_ref":  "00000000-0000-0000-0000-000000000000",
+	})
+	rec := doRequest(t, http.MethodPost, "/api/v1/admin/grants?exhibitionid="+exhibitionID, admin, exhibitionID, bytes.NewReader(body), nil, h.Create)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}

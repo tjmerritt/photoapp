@@ -96,15 +96,19 @@ const grantEntityRank = `
 
 // grantResourceRank orders rows broadest-to-narrowest by resource scope:
 // the whole exhibition (no resource_type) is broader than a Gallery, which
-// is broader than a Display, which is broader than a single Photo. Used as
-// the secondary ORDER BY key in ListForExhibition.
+// is broader than a Display, which is broader than a single Photo. A Group
+// grant (PLAN2.md Phase 3d) doesn't have one fixed breadth relative to the
+// others — it could reach anywhere from one resource to hundreds — so it's
+// simply placed last, alongside anything else unrecognized. Used as the
+// secondary ORDER BY key in ListForExhibition.
 const grantResourceRank = `
 	CASE COALESCE(erg.resource_type, '')
 	    WHEN ''        THEN 0
 	    WHEN 'Gallery' THEN 1
 	    WHEN 'Display' THEN 2
 	    WHEN 'Photo'   THEN 3
-	    ELSE 4
+	    WHEN 'Group'   THEN 4
+	    ELSE 5
 	END`
 
 // GET /api/v1/admin/grants/global?offset=&limit=  (Phase 6g)
@@ -207,11 +211,17 @@ func (h *GrantsHandler) ListGlobal(w http.ResponseWriter, r *http.Request, _ htt
 
 // GET /api/v1/admin/grants/organization?organizationid=&offset=&limit=  (Phase 2e)
 // Lists grants scoped directly to one organization (organizationid set —
-// covers every exhibition under it, present and future). Unlike
-// ListForExhibition, there's no cascading resource tier to also include:
-// migrations/021_org_admin.sql's chk_grant_scope_exclusive forbids a grant
-// from combining organizationid with resource_type, so a direct-only filter
-// is already complete.
+// covers every exhibition under it, present and future) PLUS, as of
+// PLAN2.md Phase 3d, any Group-scoped grant targeting an Exhibition-type
+// group that itself belongs to this organization. The latter's own row
+// never carries organizationid directly — migrations/021_org_admin.sql's
+// chk_grant_scope_exclusive forbids combining organizationid with
+// resource_type on the same entity_role_grants row — so its organization is
+// resolved via the target resource_groups row instead (LEFT JOIN rg below),
+// the same real-scope-not-role-scope reasoning grantScope/
+// canManageRequestedScope use for Group grants generally (see their doc
+// comments). Gallery/Display/Photo-scoped grants never appear here — those
+// belong to ListForExhibition, unreachable from an organizationid alone.
 // Requires: authenticated + isOrgAdmin(organizationid, PermAdmin or PermPermissionsAdmin).
 func (h *GrantsHandler) ListForOrganization(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	ctx := r.Context()
@@ -233,13 +243,20 @@ func (h *GrantsHandler) ListForOrganization(w http.ResponseWriter, r *http.Reque
 
 	offset, limit := parsePage(r, h.Cfg.DefaultPageSize, h.Cfg.MaxPageSize)
 
+	const where = `
+		r.deleted_at IS NULL
+		AND (
+		       erg.organizationid = $1::uuid
+		    OR (erg.resource_type = 'Group' AND rg.organizationid = $1::uuid)
+		)`
+
 	var total int
 	if err := h.DB.QueryRow(ctx, `
 		SELECT COUNT(*)
 		FROM   entity_role_grants erg
 		JOIN   roles r ON r.roleid = erg.roleid
-		WHERE  erg.organizationid = $1::uuid AND r.deleted_at IS NULL
-	`, organizationID).Scan(&total); err != nil {
+		LEFT   JOIN resource_groups rg ON erg.resource_type = 'Group' AND rg.groupid::text = erg.resource_ref
+		WHERE  `+where, organizationID).Scan(&total); err != nil {
 		slog.Error("Grants.ListForOrganization count", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
@@ -249,14 +266,18 @@ func (h *GrantsHandler) ListForOrganization(w http.ResponseWriter, r *http.Reque
 		SELECT erg.id::text, erg.entity_type, COALESCE(erg.entity_ref, ''),
 		       `+grantEntityNameCase+` AS entity_name,
 		       r.roleid::text, r.name,
-		       org.organizationid::text, org.name,
+		       COALESCE(erg.organizationid, rg.organizationid)::text,
+		       COALESCE(org.name, ''),
+		       COALESCE(erg.resource_type, ''), COALESCE(erg.resource_ref, ''),
+		       COALESCE(CASE erg.resource_type WHEN 'Group' THEN rg.name END, '') AS resource_name,
 		       erg.granted_at::text,
 		       COALESCE(gb.username, '')
 		FROM   entity_role_grants erg
 		JOIN   roles         r   ON r.roleid = erg.roleid
-		JOIN   organizations org ON org.organizationid = erg.organizationid
+		LEFT   JOIN resource_groups rg  ON erg.resource_type = 'Group' AND rg.groupid::text = erg.resource_ref
+		LEFT   JOIN organizations   org ON org.organizationid = COALESCE(erg.organizationid, rg.organizationid)
 		`+grantEntityJoins+`
-		WHERE  erg.organizationid = $1::uuid AND r.deleted_at IS NULL
+		WHERE  `+where+`
 		ORDER  BY `+grantEntityRank+`, r.name
 		LIMIT  $2 OFFSET $3
 	`, organizationID, limit, offset)
@@ -272,6 +293,7 @@ func (h *GrantsHandler) ListForOrganization(w http.ResponseWriter, r *http.Reque
 		var g adminGrant
 		if err := rows.Scan(&g.GrantID, &g.EntityType, &g.EntityRef, &g.EntityName,
 			&g.RoleID, &g.RoleName, &g.OrganizationID, &g.OrganizationName,
+			&g.ResourceType, &g.ResourceRef, &g.ResourceName,
 			&g.GrantedAt, &g.GrantedBy); err != nil {
 			slog.Error("Grants.ListForOrganization", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -295,7 +317,15 @@ func (h *GrantsHandler) ListForOrganization(w http.ResponseWriter, r *http.Reque
 
 // GET /api/v1/admin/grants/exhibition?exhibitionid=&offset=&limit=  (Phase 6g)
 // Lists grants scoped to one exhibition: directly (exhibitionid set,
-// resource_type NULL) or via a Gallery/Display/Photo resource owned by it.
+// resource_type NULL), via a Gallery/Display/Photo resource owned by it, or
+// (PLAN2.md Phase 3d) via a Group-scoped grant targeting an exhibition-
+// scoped (Photo/Gallery/Display-type) group that itself belongs to this
+// exhibition — resolved from the target resource_groups row (LEFT JOIN rg
+// below), not from the granting role's exhibitionid, since nothing stops a
+// group-scoped grant from being made by a role belonging to a different
+// exhibition or an organization; ex (this row's displayed exhibition) is
+// therefore resolved via COALESCE(r.exhibitionid, rg.exhibitionid) rather
+// than r.exhibitionid alone.
 // Requires: authenticated + (PermAdmin or PermPermissionsAdmin).
 func (h *GrantsHandler) ListForExhibition(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	ctx := r.Context()
@@ -320,6 +350,7 @@ func (h *GrantsHandler) ListForExhibition(w http.ResponseWriter, r *http.Request
 		AND (
 		       (erg.exhibitionid = $1::uuid AND erg.resource_type IS NULL)
 		    OR (erg.resource_type IN ('Gallery', 'Display', 'Photo') AND r.exhibitionid = $1::uuid)
+		    OR (erg.resource_type = 'Group' AND rg.exhibitionid = $1::uuid)
 		)`
 
 	var total int
@@ -327,6 +358,7 @@ func (h *GrantsHandler) ListForExhibition(w http.ResponseWriter, r *http.Request
 		SELECT COUNT(*)
 		FROM   entity_role_grants erg
 		JOIN   roles r ON r.roleid = erg.roleid
+		LEFT   JOIN resource_groups rg ON erg.resource_type = 'Group' AND rg.groupid::text = erg.resource_ref
 		WHERE  `+where, exhibitionID).Scan(&total); err != nil {
 		slog.Error("Grants.ListForExhibition count", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -337,13 +369,14 @@ func (h *GrantsHandler) ListForExhibition(w http.ResponseWriter, r *http.Request
 		SELECT erg.id::text, erg.entity_type, COALESCE(erg.entity_ref, ''),
 		       `+grantEntityNameCase+` AS entity_name,
 		       r.roleid::text, r.name,
-		       r.exhibitionid::text, ex.name,
+		       COALESCE(r.exhibitionid, rg.exhibitionid)::text, COALESCE(ex.name, ''),
 		       COALESCE(erg.resource_type, ''), COALESCE(erg.resource_ref, ''),
 		       COALESCE(
 		           CASE erg.resource_type
 		               WHEN 'Gallery' THEN COALESCE(gal.title, '(deleted gallery)')
 		               WHEN 'Display' THEN 'Display in ' || COALESCE(dispgal.title, '(deleted gallery)')
 		               WHEN 'Photo'   THEN COALESCE(pho.title_text, '(untitled photo)')
+		               WHEN 'Group'   THEN COALESCE(rg.name, '(deleted group)')
 		           END,
 		           ''
 		       ) AS resource_name,
@@ -351,7 +384,8 @@ func (h *GrantsHandler) ListForExhibition(w http.ResponseWriter, r *http.Request
 		       COALESCE(gb.username, '')
 		FROM   entity_role_grants erg
 		JOIN   roles       r  ON r.roleid = erg.roleid
-		JOIN   exhibitions ex ON ex.exhibitionid = r.exhibitionid
+		LEFT   JOIN resource_groups rg ON erg.resource_type = 'Group' AND rg.groupid::text = erg.resource_ref
+		LEFT   JOIN exhibitions     ex ON ex.exhibitionid = COALESCE(r.exhibitionid, rg.exhibitionid)
 		`+grantEntityJoins+`
 		LEFT JOIN galleries gal     ON erg.resource_type = 'Gallery' AND gal.galleryid::text = erg.resource_ref
 		LEFT JOIN displays  disp    ON erg.resource_type = 'Display' AND disp.displayid::text = erg.resource_ref
@@ -395,29 +429,65 @@ func (h *GrantsHandler) ListForExhibition(w http.ResponseWriter, r *http.Request
 	})
 }
 
+// resourceGroupOwnScope resolves a (non-deleted) resource_groups row's own
+// scope directly: organizationID is set for an Exhibition-type group,
+// exhibitionID for every other resource_type (Photo/Gallery/Display) — see
+// migrations/026_resource_groups.sql's chk_resource_groups_exhibition_type.
+// Unlike Gallery/Display/Photo grants, whose owning exhibition is
+// approximated via the granting role's own exhibitionid (grantScope/
+// ListForExhibition's established convention — nothing enforces that a
+// group-scoped grant's role belongs to the same scope as the group itself),
+// a Group-scoped grant's admin tier must be resolved from the group's REAL
+// scope, since a group can itself be organization-scoped and the role
+// granting access to it doesn't have to be. found is false if the group
+// doesn't exist or is soft-deleted.
+func resourceGroupOwnScope(ctx context.Context, pool *db.Pool, groupID string) (organizationID, exhibitionID string, found bool, err error) {
+	var exh, org *string
+	err = pool.QueryRow(ctx, `
+		SELECT exhibitionid::text, organizationid::text
+		FROM   resource_groups
+		WHERE  groupid = $1::uuid AND deleted_at IS NULL
+	`, groupID).Scan(&exh, &org)
+	if err == pgx.ErrNoRows {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	if org != nil {
+		return *org, "", true, nil
+	}
+	return "", *exh, true, nil
+}
+
 // grantScope resolves how an existing entity_role_grants row is
 // administered: organizationID is set for an organization-scoped grant,
 // exhibitionID is set for an exhibition-scoped OR resource-scoped grant
-// (for a resource-scoped one, that's the owning ROLE's exhibitionid, not a
-// lookup of the resource itself — the same substitution
+// (for a Gallery/Display/Photo one, that's the owning ROLE's exhibitionid,
+// not a lookup of the resource itself — the same substitution
 // ListForExhibition's own WHERE clause already relies on, since a
 // Gallery/Display/Photo grant's role always belongs to the exhibition that
-// resource is in), and isGlobal is true only when none of
-// organizationid/exhibitionid/resource_type are set at all. found is false
-// if no such grant exists. Used by Revoke and Update (for the row's CURRENT
-// scope, before any edit) so both require the matching admin tier —
-// PLAN2.md Phase 2e closes the gap where any exhibition admin could revoke
-// or rewrite a grant that actually applies to an entire organization or the
-// whole install, just because the query string happened to carry along
-// some exhibitionid.
+// resource is in; for a Group one — PLAN2.md Phase 3d — it's the target
+// GROUP's own real scope instead, via resourceGroupOwnScope, since that
+// substitution doesn't hold for groups — see resourceGroupOwnScope's doc
+// comment), and isGlobal is true only when none of
+// organizationid/exhibitionid/resource_type are set at all, OR (Group only)
+// when the target group can't be resolved at all — the same safe fallback
+// resource_labels.go's Delete uses when its underlying resource has vanished.
+// found is false if no such grant exists. Used by Revoke and Update (for the
+// row's CURRENT scope, before any edit) so both require the matching admin
+// tier — PLAN2.md Phase 2e closes the gap where any exhibition admin could
+// revoke or rewrite a grant that actually applies to an entire organization
+// or the whole install, just because the query string happened to carry
+// along some exhibitionid.
 func (h *GrantsHandler) grantScope(ctx context.Context, grantID string) (organizationID, exhibitionID string, isGlobal, found bool, err error) {
-	var org, exh, roleExh, resourceType *string
+	var org, exh, roleExh, resourceType, resourceRef *string
 	err = h.DB.QueryRow(ctx, `
-		SELECT erg.organizationid::text, erg.exhibitionid::text, r.exhibitionid::text, erg.resource_type
+		SELECT erg.organizationid::text, erg.exhibitionid::text, r.exhibitionid::text, erg.resource_type, erg.resource_ref
 		FROM   entity_role_grants erg
 		JOIN   roles r ON r.roleid = erg.roleid
 		WHERE  erg.id = $1
-	`, grantID).Scan(&org, &exh, &roleExh, &resourceType)
+	`, grantID).Scan(&org, &exh, &roleExh, &resourceType, &resourceRef)
 	if err == pgx.ErrNoRows {
 		return "", "", false, false, nil
 	}
@@ -429,6 +499,18 @@ func (h *GrantsHandler) grantScope(ctx context.Context, grantID string) (organiz
 		return *org, "", false, true, nil
 	case exh != nil:
 		return "", *exh, false, true, nil
+	case resourceType != nil && *resourceType == permissions.ResourceGroup:
+		groupOrg, groupExh, groupFound, gerr := resourceGroupOwnScope(ctx, h.DB, *resourceRef)
+		if gerr != nil {
+			return "", "", false, false, gerr
+		}
+		if !groupFound {
+			return "", "", true, true, nil
+		}
+		if groupOrg != "" {
+			return groupOrg, "", false, true, nil
+		}
+		return "", groupExh, false, true, nil
 	case resourceType != nil && roleExh != nil:
 		return "", *roleExh, false, true, nil
 	default:
@@ -452,12 +534,28 @@ func (h *GrantsHandler) canManageGrantScope(ctx context.Context, userID, organiz
 // canManageRequestedScope is canManageGrantScope's counterpart for a
 // createGrantRequest that hasn't been written to the database yet (Create,
 // and Update's new target state) — req must already be validateGrantRequest-
-// clean. r is only consulted for the resource-scoped case, to recover the
-// admin page's "current exhibition" the way Create always has (a
-// Gallery/Display/Photo grant carries no exhibitionid of its own in the
-// request body, by design — see createGrantRequest's doc comment).
+// clean. r is only consulted for the Gallery/Display/Photo resource-scoped
+// case, to recover the admin page's "current exhibition" the way Create
+// always has (a Gallery/Display/Photo grant carries no exhibitionid of its
+// own in the request body, by design — see createGrantRequest's doc
+// comment). A Group-scoped request (PLAN2.md Phase 3d) is checked first and
+// separately, since — unlike Gallery/Display/Photo — its admin tier comes
+// from the target group's own real scope (resourceGroupOwnScope), which can
+// be organization-level, not from the query-string exhibitionid.
 func (h *GrantsHandler) canManageRequestedScope(ctx context.Context, r *http.Request, userID string, req *createGrantRequest) (bool, error) {
 	switch {
+	case req.ResourceType == permissions.ResourceGroup:
+		groupOrg, groupExh, groupFound, err := resourceGroupOwnScope(ctx, h.DB, req.ResourceRef)
+		if err != nil {
+			return false, err
+		}
+		if !groupFound {
+			return h.Checker.HasAny(ctx, userID, "", permissions.PermAdmin, permissions.PermPermissionsAdmin)
+		}
+		if groupOrg != "" {
+			return isOrgAdmin(ctx, h.DB, h.Checker, userID, groupOrg, permissions.PermAdmin, permissions.PermPermissionsAdmin)
+		}
+		return h.Checker.HasAny(ctx, userID, groupExh, permissions.PermAdmin, permissions.PermPermissionsAdmin)
 	case req.OrganizationID != "":
 		return isOrgAdmin(ctx, h.DB, h.Checker, userID, req.OrganizationID, permissions.PermAdmin, permissions.PermPermissionsAdmin)
 	case req.ExhibitionID != "" || req.ResourceType != "":
@@ -529,7 +627,16 @@ func (h *GrantsHandler) Revoke(w http.ResponseWriter, r *http.Request, ps httpro
 //   - all empty             -> global grant (every organization and exhibition)
 //   - OrganizationID set    -> scoped to that one organization (every exhibition under it)
 //   - ExhibitionID set      -> scoped to that one exhibition
-//   - ResourceType/Ref set  -> scoped to that one Gallery/Display/Photo
+//   - ResourceType/Ref set  -> scoped to that one Gallery/Display/Photo, or
+//                              (PLAN2.md Phase 3d) to every member of a
+//                              resource_groups row when ResourceType is
+//                              "Group" — see permissions.Checker.Check's own
+//                              doc comment for exactly how a Group grant is
+//                              evaluated, and resourceGroupOwnScope for how
+//                              its admin tier is resolved (NOT the same
+//                              "role's exhibitionid" substitution the other
+//                              three resource types use, since a group can
+//                              itself be organization-scoped).
 //
 // Before PLAN2.md Phase 2e this endpoint had no OrganizationID field at all
 // — organization-scoped grants (Phase 1c) were only ever created by
@@ -593,10 +700,10 @@ func validateGrantRequest(req *createGrantRequest) string {
 	}
 
 	switch req.ResourceType {
-	case "", permissions.ResourceGallery, permissions.ResourceDisplay, permissions.ResourcePhoto:
+	case "", permissions.ResourceGallery, permissions.ResourceDisplay, permissions.ResourcePhoto, permissions.ResourceGroup:
 		// ok
 	default:
-		return "resource_type must be one of Gallery, Display, Photo, or empty"
+		return "resource_type must be one of Gallery, Display, Photo, Group, or empty"
 	}
 	if req.ResourceType != "" && req.ResourceRef == "" {
 		return "resource_ref is required when resource_type is set"

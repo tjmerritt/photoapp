@@ -190,10 +190,19 @@ const (
 // There is no ResourceExhibition: exhibition-level scope is expressed via the
 // exhibitionid column on entity_role_grants instead (see
 // migrations/018_grant_exhibitionid.sql).
+//
+// ResourceGroup (PLAN2.md Phase 3d — migrations/027_dynamic_groups_and_group_grants.sql)
+// is different in kind from the other three: a grant with resource_type =
+// ResourceGroup, resource_ref = a resource_groups.groupid doesn't name the
+// resource being acted on directly — it reaches every member of that group
+// (static or dynamic — see internal/handlers/groups.go) as if each had been
+// granted individually. See Check's own doc comment for exactly how this is
+// evaluated.
 const (
 	ResourceGallery = "Gallery"
 	ResourceDisplay = "Display"
 	ResourcePhoto   = "Photo"
+	ResourceGroup   = "Group"
 )
 
 // Gallery permissions.
@@ -467,6 +476,28 @@ type Checker struct {
 // organization once per call so the org-level OR branch can compare against
 // it.
 //
+// PLAN2.md Phase 3d adds a resource_type = ResourceGroup ("Group") grant: it
+// reaches every member of the named resource_groups row (static or
+// dynamic — internal/handlers/groups.go, migrations/
+// 027_dynamic_groups_and_group_grants.sql's resource_group_effective_members
+// view resolves both uniformly) as if each had been granted individually.
+// Two new OR branches below cover this:
+//   - an Exhibition-type group's grant reaches every exhibition that's a
+//     member, exactly like a direct exhibitionid grant reaches everything
+//     within that one exhibition (so it participates via exhibitionID/$3,
+//     not resourceType/resourceRef — an Exhibition-type group's members
+//     are exhibitions, not the Gallery/Display/Photo resourceType this
+//     function otherwise deals in)
+//   - a Photo/Gallery/Display-type group's grant reaches an exact resource
+//     match the same way a direct Gallery/Display/Photo grant does, just
+//     resolved via group membership instead of erg.resource_ref equality
+//
+// A group-scoped grant intentionally does NOT cascade further down the
+// Gallery→Display ownership chain the way a direct Gallery grant does (the
+// $4/galleryID branch below) — a Gallery-type group's grant covers exactly
+// the galleries that are members, not every display inside them. Extending
+// that cascade is a reasonable future enhancement, not built here.
+//
 // exhibitionID is passed to Postgres via nullableUUID, not as a plain string,
 // and NOT behind a "$3 <> '' AND ... = $3::uuid"-style SQL guard or a
 // NULLIF($3, '')::uuid trick — both of those were tried (see SUMMARIES2.md
@@ -524,6 +555,33 @@ func (c *Checker) Check(
 			        OR ($5 <> '' AND $6 <> ''
 			                     AND erg.resource_type = $5
 			                     AND erg.resource_ref  = $6)
+			           -- Group grant, Exhibition-type: reaches every exhibition
+			           -- that's a member of the group, the same way a direct
+			           -- exhibitionid grant reaches everything within it.
+			        OR (erg.resource_type = 'Group'
+			                     AND EXISTS (
+			                             SELECT 1
+			                             FROM   resource_group_effective_members gm
+			                             JOIN   resource_groups g ON g.groupid = gm.groupid
+			                             WHERE  gm.groupid = erg.resource_ref::uuid
+			                               AND  gm.resource_ref = $3::uuid::text
+			                               AND  g.resource_type = 'Exhibition'
+			                               AND  g.deleted_at IS NULL
+			                         ))
+			           -- Group grant, Photo/Gallery/Display-type: reaches every
+			           -- resource that's a member of the group, the same way an
+			           -- exact resource match does.
+			        OR ($5 <> '' AND $6 <> ''
+			                     AND erg.resource_type = 'Group'
+			                     AND EXISTS (
+			                             SELECT 1
+			                             FROM   resource_group_effective_members gm
+			                             JOIN   resource_groups g ON g.groupid = gm.groupid
+			                             WHERE  gm.groupid = erg.resource_ref::uuid
+			                               AND  gm.resource_ref = $6
+			                               AND  g.resource_type = $5
+			                               AND  g.deleted_at IS NULL
+			                         ))
 			       )
 		)
 	`, permission, userID, nullableUUID(exhibitionID), galleryID, resourceType, resourceRef).Scan(&exists)
@@ -560,12 +618,25 @@ func (c *Checker) MustCheck(
 
 // UserPermissions returns all effective permission grants for userID within
 // the current exhibition. Returns global grants, exhibition-scoped grants, and
-// all resource-scoped grants (Gallery, Display, Photo) so the frontend can
-// reason about per-resource access without additional round-trips.
+// all resource-scoped grants (Gallery, Display, Photo, Group) so the frontend
+// can reason about per-resource access without additional round-trips.
 //
 // The result is deduplicated: the same (permission, resource_type, resource_ref)
 // triple appears only once even if it is reachable via multiple roles or entity
 // memberships.
+//
+// Known gap (PLAN2.md Phase 3d): a Group-scoped grant is listed here exactly
+// as Check() evaluates the Photo/Gallery/Display case — as a literal
+// (resource_type='Group', resource_ref=<groupid>) row, same convention as
+// every other resource-scoped grant, via the "role's exhibitionid" stand-in
+// (see the comment on that OR branch below). An Exhibition-type group's
+// grant, however, is NOT surfaced here at all: unlike Check()'s dedicated
+// exhibitionID-membership branch, there's no row-shape in this function's
+// result for "this exhibition inherits X via group membership" — the
+// underlying role is typically organization-scoped (r.exhibitionid IS NULL)
+// for that case, so it doesn't match the resource-scoped OR branch below
+// either. Enforcement (Check/HasAny) is unaffected by this gap; only this
+// display/summary endpoint's completeness is.
 //
 // Pass userID = "" to get permissions for an unauthenticated visitor.
 func (c *Checker) UserPermissions(
@@ -602,10 +673,13 @@ func (c *Checker) UserPermissions(
 		           -- Exhibition-level grants
 		        OR (erg.exhibitionid = $2::uuid
 		                     AND erg.resource_type IS NULL)
-		           -- Gallery, Display, and Photo grants within this exhibition.
-		           -- We include all resource-scoped grants whose role belongs to
-		           -- this exhibition so the frontend has the complete picture.
-		        OR (erg.resource_type IN ('Gallery', 'Display', 'Photo')
+		           -- Gallery, Display, Photo, and Group grants within this
+		           -- exhibition. We include all resource-scoped grants whose
+		           -- role belongs to this exhibition so the frontend has the
+		           -- complete picture (see this function's own doc comment for
+		           -- the one case — Exhibition-type group grants — this still
+		           -- doesn't cover).
+		        OR (erg.resource_type IN ('Gallery', 'Display', 'Photo', 'Group')
 		                     AND r.exhibitionid = $2::uuid)
 		       )
 		ORDER  BY rp.permission, COALESCE(erg.resource_type, ''), COALESCE(erg.resource_ref, '')
