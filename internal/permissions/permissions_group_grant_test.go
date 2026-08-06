@@ -24,6 +24,7 @@ func TestCheck_GroupGrant_PhotoType_StaticMembership(t *testing.T) {
 
 	exhibitionID := testutil.CreateExhibition(t, pool)
 	owner := testutil.CreateUser(t, pool)
+	viewer := testutil.CreateUser(t, pool)
 	photoA := testutil.CreatePhoto(t, pool, exhibitionID, owner)
 	photoB := testutil.CreatePhoto(t, pool, exhibitionID, owner)
 
@@ -46,7 +47,12 @@ func TestCheck_GroupGrant_PhotoType_StaticMembership(t *testing.T) {
 		EntityType: permissions.EntityLoggedIn, ResourceType: permissions.ResourceGroup, ResourceRef: groupID,
 	})
 
-	ok, err := checker.Check(ctx, "some-user", exhibitionID, "", permissions.ResourcePhoto, photoA, permissions.PermPhotoView)
+	// checker.Check's Team-membership branch casts userID to ::uuid via a
+	// non-correlated subquery, which Postgres evaluates regardless of
+	// whether entity_type='Team' actually matches any row — so userID must
+	// always be "" or a real UUID here, never an arbitrary string (this bit
+	// Session 45's own first test-writing pass; see SUMMARIES2.md).
+	ok, err := checker.Check(ctx, viewer, exhibitionID, "", permissions.ResourcePhoto, photoA, permissions.PermPhotoView)
 	if err != nil {
 		t.Fatalf("Check(photoA): %v", err)
 	}
@@ -54,7 +60,7 @@ func TestCheck_GroupGrant_PhotoType_StaticMembership(t *testing.T) {
 		t.Error("Check(photoA) = false, want true (photoA is a member of the granted group)")
 	}
 
-	ok, err = checker.Check(ctx, "some-user", exhibitionID, "", permissions.ResourcePhoto, photoB, permissions.PermPhotoView)
+	ok, err = checker.Check(ctx, viewer, exhibitionID, "", permissions.ResourcePhoto, photoB, permissions.PermPhotoView)
 	if err != nil {
 		t.Fatalf("Check(photoB): %v", err)
 	}
@@ -70,6 +76,7 @@ func TestCheck_GroupGrant_PhotoType_DynamicMembership(t *testing.T) {
 
 	exhibitionID := testutil.CreateExhibition(t, pool)
 	owner := testutil.CreateUser(t, pool)
+	viewer := testutil.CreateUser(t, pool)
 	photoA := testutil.CreatePhoto(t, pool, exhibitionID, owner)
 	photoB := testutil.CreatePhoto(t, pool, exhibitionID, owner)
 
@@ -99,7 +106,7 @@ func TestCheck_GroupGrant_PhotoType_DynamicMembership(t *testing.T) {
 		EntityType: permissions.EntityLoggedIn, ResourceType: permissions.ResourceGroup, ResourceRef: groupID,
 	})
 
-	ok, err := checker.Check(ctx, "some-user", exhibitionID, "", permissions.ResourcePhoto, photoA, permissions.PermPrivatePhotoView)
+	ok, err := checker.Check(ctx, viewer, exhibitionID, "", permissions.ResourcePhoto, photoA, permissions.PermPrivatePhotoView)
 	if err != nil {
 		t.Fatalf("Check(photoA): %v", err)
 	}
@@ -107,7 +114,7 @@ func TestCheck_GroupGrant_PhotoType_DynamicMembership(t *testing.T) {
 		t.Error("Check(photoA) = false, want true (photoA carries the matching label, so it's a dynamic member)")
 	}
 
-	ok, err = checker.Check(ctx, "some-user", exhibitionID, "", permissions.ResourcePhoto, photoB, permissions.PermPrivatePhotoView)
+	ok, err = checker.Check(ctx, viewer, exhibitionID, "", permissions.ResourcePhoto, photoB, permissions.PermPrivatePhotoView)
 	if err != nil {
 		t.Fatalf("Check(photoB): %v", err)
 	}
@@ -129,6 +136,7 @@ func TestCheck_GroupGrant_ExhibitionType(t *testing.T) {
 	organizationID := testutil.CreateOrganization(t, pool)
 	memberExhibition := testutil.CreateExhibitionInOrg(t, pool, organizationID)
 	outsideExhibition := testutil.CreateExhibition(t, pool)
+	viewer := testutil.CreateUser(t, pool)
 
 	var groupID string
 	if err := pool.QueryRow(ctx, `
@@ -149,7 +157,7 @@ func TestCheck_GroupGrant_ExhibitionType(t *testing.T) {
 		EntityType: permissions.EntityLoggedIn, ResourceType: permissions.ResourceGroup, ResourceRef: groupID,
 	})
 
-	ok, err := checker.HasAny(ctx, "some-user", memberExhibition, permissions.PermAdmin)
+	ok, err := checker.HasAny(ctx, viewer, memberExhibition, permissions.PermAdmin)
 	if err != nil {
 		t.Fatalf("HasAny(memberExhibition): %v", err)
 	}
@@ -157,7 +165,7 @@ func TestCheck_GroupGrant_ExhibitionType(t *testing.T) {
 		t.Error("HasAny(memberExhibition) = false, want true (memberExhibition is a member of the granted Exhibition-type group)")
 	}
 
-	ok, err = checker.HasAny(ctx, "some-user", outsideExhibition, permissions.PermAdmin)
+	ok, err = checker.HasAny(ctx, viewer, outsideExhibition, permissions.PermAdmin)
 	if err != nil {
 		t.Fatalf("HasAny(outsideExhibition): %v", err)
 	}
@@ -174,6 +182,7 @@ func TestCheck_GroupGrant_DoesNotCascadeToDisplaysWithinMemberGallery(t *testing
 	exhibitionID := testutil.CreateExhibition(t, pool)
 	galleryID := testutil.CreateGallery(t, pool, exhibitionID)
 	displayID := testutil.CreateDisplay(t, pool, galleryID)
+	viewer := testutil.CreateUser(t, pool)
 
 	var groupID string
 	if err := pool.QueryRow(ctx, `
@@ -195,7 +204,7 @@ func TestCheck_GroupGrant_DoesNotCascadeToDisplaysWithinMemberGallery(t *testing
 	})
 
 	// The Gallery itself is reachable via the group grant.
-	ok, err := checker.Check(ctx, "some-user", exhibitionID, "", permissions.ResourceGallery, galleryID, permissions.PermGalleryView)
+	ok, err := checker.Check(ctx, viewer, exhibitionID, "", permissions.ResourceGallery, galleryID, permissions.PermGalleryView)
 	if err != nil {
 		t.Fatalf("Check(gallery): %v", err)
 	}
@@ -206,7 +215,7 @@ func TestCheck_GroupGrant_DoesNotCascadeToDisplaysWithinMemberGallery(t *testing
 	// But a Display inside that gallery is NOT — a Group grant doesn't
 	// cascade down the Gallery->Display ownership chain the way a direct
 	// Gallery grant does (see Checker.Check's own doc comment).
-	ok, err = checker.Check(ctx, "some-user", exhibitionID, galleryID, permissions.ResourceDisplay, displayID, permissions.PermGalleryView)
+	ok, err = checker.Check(ctx, viewer, exhibitionID, galleryID, permissions.ResourceDisplay, displayID, permissions.PermGalleryView)
 	if err != nil {
 		t.Fatalf("Check(display): %v", err)
 	}
