@@ -208,7 +208,7 @@ BEGIN
             ('LabelNameView'), ('LabelNameCreate'), ('LabelNameModify'), ('LabelNameDelete'),
             ('TeamView'),      ('TeamCreate'),      ('TeamModify'),      ('TeamDelete'),
             ('RoleView'),      ('RoleCreate'),      ('RoleModify'),      ('RoleDelete'),
-            ('Admin'), ('LabelAdmin'), ('EmojiAdmin'), ('UserAdmin'), ('GalleryAdmin'),
+            ('Admin'), ('LabelAdmin'), ('EmojiAdmin'), ('UserAdmin'), ('GalleryManager'),
             ('TeamAdmin'), ('PermissionsAdmin')
         ) AS p(perm)
         ON CONFLICT DO NOTHING;

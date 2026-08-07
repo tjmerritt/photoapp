@@ -178,7 +178,7 @@
     .resize-handle.se { bottom: -5px; right: -5px;  cursor: nwse-resize; }
 
     /* Rough marker for each slot's placard position (slot_positions[i].
-       placard). Its real size is set at the gallery level (Gallery Admin's
+       placard). Its real size is set at the gallery level (Gallery Manager's
        Placard Settings), so this preview uses a fixed guess just to show
        roughly where it'll sit relative to the slot. Draggable in the editor
        preview (see startPlacardDrag() in app.js) — dropping it near an edge
@@ -316,9 +316,9 @@
                   left/right placard it slides top↔bottom. <code>gapIn</code> is the
                   physical distance, in inches, between the placard and the frame
                   (same board-relative unit as the gallery's placard width/height —
-                  see Gallery Admin's Placard Settings). Placard <em>size</em>,
+                  see Gallery Manager's Placard Settings). Placard <em>size</em>,
                   background, and content (items, text, fonts) are configured once
-                  for the whole gallery in Gallery Admin's Placard Settings, so every
+                  for the whole gallery in Gallery Manager's Placard Settings, so every
                   display in a gallery looks consistent — only the position is set
                   here, per slot.<br>
                   <code>matte</code>/<code>frame</code> each take <code>enabled</code>, <code>color</code>,
@@ -402,7 +402,7 @@
                   an approximation — as is the placard drag's <code>gapIn</code>
                   (it assumes a default board width, since this template isn't
                   tied to any one gallery). Placard size, background, and content
-                  are set once for the whole gallery in Gallery Admin's Placard
+                  are set once for the whole gallery in Gallery Manager's Placard
                   Settings. Dragging updates the JSON on the left live, so you can
                   fine-tune numbers by hand afterward if needed.
                 </p>

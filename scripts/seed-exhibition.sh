@@ -117,7 +117,7 @@ INSERT INTO _all_permissions (perm) VALUES
     ('LabelNameView'), ('LabelNameCreate'), ('LabelNameModify'), ('LabelNameDelete'),
     ('TeamView'),      ('TeamCreate'),      ('TeamModify'),      ('TeamDelete'),
     ('RoleView'),      ('RoleCreate'),      ('RoleModify'),      ('RoleDelete'),
-    ('Admin'), ('LabelAdmin'), ('EmojiAdmin'), ('UserAdmin'), ('GalleryAdmin'),
+    ('Admin'), ('LabelAdmin'), ('EmojiAdmin'), ('UserAdmin'), ('GalleryManager'),
     ('TeamAdmin'), ('PermissionsAdmin');
 
 -- ── Roles ─────────────────────────────────────────────────────────────────────

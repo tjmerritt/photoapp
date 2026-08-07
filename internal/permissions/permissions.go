@@ -101,7 +101,7 @@
 //
 // Administrative permissions:
 //
-//	Admin, LabelAdmin, EmojiAdmin, UserAdmin, GalleryAdmin
+//	Admin, LabelAdmin, EmojiAdmin, UserAdmin, GalleryManager
 //
 // Handlers check the fine-grained permission for the specific action being
 // performed. Ownership checks (e.g. "can only modify your own label") are
@@ -367,7 +367,12 @@ const (
 	PermLabelAdmin   = "LabelAdmin"
 	PermEmojiAdmin   = "EmojiAdmin"
 	PermUserAdmin    = "UserAdmin"
-	PermGalleryAdmin = "GalleryAdmin"
+	// PermGalleryManager was named PermGalleryAdmin/"GalleryAdmin" until the
+	// Gallery Admin page itself was renamed Gallery Manager (see
+	// gallery-manager.html) — renamed to match, string value included, via
+	// migrations/028_rename_gallery_admin_permission.sql (updates any
+	// existing role_permissions rows so already-granted roles keep working).
+	PermGalleryManager = "GalleryManager"
 	// PermTeamAdmin governs the teams admin page (Phase 6f): creating/editing/
 	// deleting teams and managing their membership.
 	PermTeamAdmin = "TeamAdmin"
@@ -407,7 +412,7 @@ func PermissionCatalog() []PermissionGroup {
 		{Name: "Teams", Permissions: []string{PermTeamView, PermTeamCreate, PermTeamModify, PermTeamDelete}},
 		{Name: "Roles", Permissions: []string{PermRoleView, PermRoleCreate, PermRoleModify, PermRoleDelete}},
 		{Name: "Groups", Permissions: []string{PermGroupView, PermGroupCreate, PermGroupModify, PermGroupDelete}},
-		{Name: "Administrative", Permissions: []string{PermAdmin, PermLabelAdmin, PermEmojiAdmin, PermUserAdmin, PermGalleryAdmin, PermTeamAdmin, PermPermissionsAdmin}},
+		{Name: "Administrative", Permissions: []string{PermAdmin, PermLabelAdmin, PermEmojiAdmin, PermUserAdmin, PermGalleryManager, PermTeamAdmin, PermPermissionsAdmin}},
 	}
 }
 

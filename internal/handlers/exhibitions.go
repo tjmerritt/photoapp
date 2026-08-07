@@ -60,7 +60,7 @@ var (
 		permissions.PermPhotoCommentView, permissions.PermPhotoCommentCreate, permissions.PermPhotoCommentModify, permissions.PermPhotoCommentDelete,
 		permissions.PermEmojiUpload,
 		permissions.PermAdmin, permissions.PermLabelAdmin, permissions.PermEmojiAdmin, permissions.PermUserAdmin,
-		permissions.PermGalleryAdmin, permissions.PermTeamAdmin, permissions.PermPermissionsAdmin,
+		permissions.PermGalleryManager, permissions.PermTeamAdmin, permissions.PermPermissionsAdmin,
 	}
 )
 

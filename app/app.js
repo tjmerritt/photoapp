@@ -2347,8 +2347,9 @@ function photoFrameSizeStyle(size, slot) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Placard configuration — GALLERY-level (set once in Gallery Admin's Placard
-// Settings, applies to every slot in that gallery for visual consistency).
+// Placard configuration — GALLERY-level (set once in Gallery Manager's
+// Placard Settings, applies to every slot in that gallery for visual
+// consistency).
 // Stored as gallery.placard_defaults JSON:
 //   {
 //     "width": 20, "height": 8,             // percent of the 16:9 canvas
@@ -2366,7 +2367,7 @@ function photoFrameSizeStyle(size, slot) {
 //   }
 // An item's `xIn`/`yIn` is a fixed physical distance from the placard's own
 // top-left corner — deliberately NOT a percent of the placard's width/height,
-// so resizing the placard later (via Gallery Admin's Placard Settings) never
+// so resizing the placard later (via Gallery Manager's Placard Settings) never
 // reflows an item's position. An item can end up outside the (resized)
 // placard's bounds this way — that's expected; the placard box clips its
 // contents (overflow: hidden), so the item just becomes invisible until the
@@ -2412,7 +2413,7 @@ function defaultPlacardItemPosition(n, placardWidthIn, placardHeightIn) {
 // ── Physical units ──────────────────────────────────────────────────────────
 // widthIn/heightIn (the placard's own physical size, in inches) are the
 // canonical stored fields — same convention as items' xIn/yIn, and what the
-// Gallery Admin visual editor and the raw-JSON editor both show, so the two
+// Gallery Manager visual editor and the raw-JSON editor both show, so the two
 // views always agree. `boardWidthIn` is the physical width, in inches, that
 // the whole 16:9 canvas is meant to represent (e.g. "this gallery's display
 // is a 48 inch wide board") — a conversion reference the editor UI uses; it
@@ -3249,13 +3250,14 @@ function displayEditApp() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// galleryAdminApp — gallery administration page.
+// galleryManagerApp — gallery administration page (renamed from
+// galleryAdminApp to match the "Gallery Manager" page/menu naming).
 // Requires auth + GalleryCreate/Modify/Delete permissions.
 // Features: create gallery, rename/delete gallery, expand to see displays,
 // add/remove/reorder displays within a gallery, assign/change/clear each
 // display's template.
 // ─────────────────────────────────────────────────────────────────────────────
-function galleryAdminApp() {
+function galleryManagerApp() {
   return {
     loggedInUser: null,
     authConfig:   { googleEnabled: false, appleEnabled: false, facebookEnabled: false, microsoftEnabled: false },
@@ -4082,7 +4084,7 @@ function templateAdminApp() {
 
     // Drag a slot to reposition it. Preserves the offset between the grab
     // point and the slot's own top-left corner (same technique as
-    // galleryAdminApp's startItemDrag() — see its comment) so the box
+    // galleryManagerApp's startItemDrag() — see its comment) so the box
     // doesn't jump to the cursor on the first move. Clamped to stay fully
     // within the canvas — unlike a placard item, a photo slot hanging off
     // the edge isn't a supported look.
@@ -4518,7 +4520,7 @@ typeof document !== 'undefined' && document.addEventListener('alpine:init', () =
   Alpine.data('galleriesApp',    galleriesApp);
   Alpine.data('displayApp',      displayApp);
   Alpine.data('displayEditApp',  displayEditApp);
-  Alpine.data('galleryAdminApp', galleryAdminApp);
+  Alpine.data('galleryManagerApp', galleryManagerApp);
   Alpine.data('templateAdminApp', templateAdminApp);
   Alpine.data('userSwitcher',    userSwitcher);
   Alpine.data('titleEditor',     titleEditor);
