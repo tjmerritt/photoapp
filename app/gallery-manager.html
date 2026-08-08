@@ -69,6 +69,25 @@
     .btn-icon:hover { background: var(--border); color: var(--brand); }
     .btn-icon.danger:hover { background: #fee2e2; color: #dc2626; }
 
+    /* Thumb-grip drag handle — click-and-hold + drag on desktop, touch +
+       drag on mobile (touch-action:none stops the page itself from
+       scrolling while a drag is in progress). See startDisplayDrag(). */
+    .drag-handle {
+      cursor: grab;
+      touch-action: none;
+      color: var(--muted);
+      padding: 0.25rem;
+      border-radius: 5px;
+      background: none;
+      border: none;
+      transition: background .15s, color .15s;
+    }
+    .drag-handle:hover  { background: var(--border); color: var(--brand); }
+    .drag-handle:active { cursor: grabbing; }
+    .display-row.dragging {
+      opacity: 0.5;
+    }
+
     .btn-primary {
       background: var(--brand);
       color: #fff;
@@ -327,20 +346,19 @@
 
             <!-- Display rows -->
             <template x-for="(d, idx) in expandedDisplays" :key="d.displayid">
-              <div class="display-row">
-                <!-- Reorder -->
-                <div class="flex flex-col gap-0.5 shrink-0">
-                  <button class="btn-icon p-0.5" title="Move up" @click="moveDisplay(d.displayid, 'up')">
-                    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M5 15l7-7 7 7"/>
-                    </svg>
-                  </button>
-                  <button class="btn-icon p-0.5" title="Move down" @click="moveDisplay(d.displayid, 'down')">
-                    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
-                    </svg>
-                  </button>
-                </div>
+              <div class="display-row" :class="{ dragging: draggingDisplayId === d.displayid }">
+                <!-- Reorder — thumb grip. mousedown: click-and-hold then
+                     drag (desktop). touchstart: touch then drag (mobile).
+                     See startDisplayDrag() in app.js; replaces the old
+                     up/down arrow buttons. -->
+                <button class="drag-handle shrink-0" title="Drag to reorder" aria-label="Drag to reorder"
+                        @mousedown="startDisplayDrag(d.displayid, $event)"
+                        @touchstart="startDisplayDrag(d.displayid, $event)">
+                  <svg class="w-4 h-5" viewBox="0 0 24 24" fill="currentColor">
+                    <circle cx="9" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/>
+                    <circle cx="15" cy="6" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="15" cy="18" r="1.5"/>
+                  </svg>
+                </button>
 
                 <!-- Display info -->
                 <span class="flex-1 text-[var(--muted)] flex items-center gap-2 flex-wrap">
@@ -417,15 +435,22 @@
             </div>
 
             <!-- Placard settings — gallery-wide size/appearance/content,
-                 applied consistently to every display's placard boxes. -->
+                 applied consistently to every display's placard boxes.
+                 Phase 4c: gear icon instead of a labeled button, matching
+                 the icon-button treatment already used for the per-display
+                 actions above (Edit photos / Remove display). -->
             <div class="px-5 py-3 border-t border-[var(--border)] flex items-center gap-2 flex-wrap">
-              <button class="btn-secondary text-xs py-1" @click="openPlacardSettings(g.galleryid)">
-                Placard Settings
+              <button class="btn-icon shrink-0" title="Placard Settings" aria-label="Placard Settings"
+                      @click="openPlacardSettings(g.galleryid)">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                </svg>
               </button>
               <span class="text-xs text-[var(--muted)]"
-                    x-text="(expandedGalleryPlacard && expandedGalleryPlacard.items && expandedGalleryPlacard.items.length)
+                    x-text="'Placard Settings — ' + ((expandedGalleryPlacard && expandedGalleryPlacard.items && expandedGalleryPlacard.items.length)
                               ? (expandedGalleryPlacard.items.length + ' item' + (expandedGalleryPlacard.items.length === 1 ? '' : 's') + ' configured')
-                              : 'No placard items configured yet'"></span>
+                              : 'no placard items configured yet')"></span>
             </div>
           </div>
 

@@ -3284,6 +3284,11 @@ function galleryManagerApp() {
     // Placard defaults for the currently-expanded gallery (raw JSON from the
     // API, normalized on demand by normalizeGalleryPlacard()).
     expandedGalleryPlacard: null,
+    // displayid currently being thumb-grip-dragged in the reorder list, or
+    // null — drives the .dragging opacity class in gallery-manager.html so
+    // there's visual feedback for which row is under the pointer/finger.
+    // See startDisplayDrag().
+    draggingDisplayId: null,
 
     // Display templates (for the "new display" and per-row template pickers)
     templates:            [],
@@ -3826,25 +3831,17 @@ function galleryManagerApp() {
       }
     },
 
-    async moveDisplay(displayid, direction) {
-      const idx    = this.expandedDisplays.findIndex(d => d.displayid === displayid);
-      if (idx === -1) return;
-      const newIdx = direction === 'up' ? idx - 1 : idx + 1;
-      if (newIdx < 0 || newIdx >= this.expandedDisplays.length) return;
-
-      // Swap locally for immediate feedback
-      const arr        = [...this.expandedDisplays];
-      const tmp        = arr[idx];
-      arr[idx]         = arr[newIdx];
-      arr[newIdx]      = tmp;
-      this.expandedDisplays = arr;
-
-      // Persist new order
+    // Persists expandedDisplays' current order to the server (PATCH
+    // display_order), then reloads from the server on failure so a rejected
+    // reorder doesn't leave the UI showing an order that was never saved.
+    // Shared by startDisplayDrag()'s drop handler.
+    async persistDisplayOrder() {
+      const order = this.expandedDisplays.map(d => d.displayid);
       try {
         const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(this.expandedGalleryId), {
           method:  'PATCH',
           headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-          body:    JSON.stringify({ display_order: arr.map(d => d.displayid) }),
+          body:    JSON.stringify({ display_order: order }),
         });
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
       } catch(e) {
@@ -3855,6 +3852,65 @@ function galleryManagerApp() {
           if (r.ok) { const g = await r.json(); this.expandedDisplays = g.displays || []; }
         } catch { /* leave current state */ }
       }
+    },
+
+    // Thumb-grip drag-to-reorder for the display list — replaces the old
+    // up/down arrow buttons. mousedown (desktop: click-and-hold then drag)
+    // or touchstart (mobile: touch the grip then drag) on a row's grip
+    // handle starts tracking the pointer; each move re-measures the other
+    // rows' current on-screen positions and, the moment the pointer crosses
+    // a neighboring row's vertical midpoint, splices the dragged display to
+    // that row's position in expandedDisplays. Alpine's x-for then
+    // re-renders the DOM in the new order, so the next move's
+    // getBoundingClientRect() calls automatically reflect it — no separate
+    // "ghost position" bookkeeping needed, unlike the free-form 2D dragging
+    // in startItemDrag()/startSlotDrag() (this is a 1D list reorder, not a
+    // canvas position).
+    //
+    // event.currentTarget (not event.target) is used to find the container,
+    // since the click target could be the <svg>/<circle> inside the handle
+    // button rather than the button itself.
+    startDisplayDrag(displayid, event) {
+      event.preventDefault();
+      const container = event.currentTarget.closest('.display-row')?.parentElement;
+      if (!container) return;
+
+      this.draggingDisplayId = displayid;
+
+      const move = (e) => {
+        e.preventDefault();
+        const pt = e.touches ? e.touches[0] : e;
+        const y  = pt.clientY;
+        const curIdx = this.expandedDisplays.findIndex(d => d.displayid === displayid);
+        if (curIdx === -1) return;
+        const rows = Array.from(container.querySelectorAll(':scope > .display-row'));
+        for (let j = 0; j < rows.length; j++) {
+          if (j === curIdx) continue;
+          const r   = rows[j].getBoundingClientRect();
+          const mid = r.top + r.height / 2;
+          const crossedUp   = j < curIdx && y < mid;
+          const crossedDown = j > curIdx && y > mid;
+          if (crossedUp || crossedDown) {
+            const arr  = [...this.expandedDisplays];
+            const [it] = arr.splice(curIdx, 1);
+            arr.splice(j, 0, it);
+            this.expandedDisplays = arr;
+            break;
+          }
+        }
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        window.removeEventListener('touchmove', move);
+        window.removeEventListener('touchend', up);
+        this.draggingDisplayId = null;
+        this.persistDisplayOrder();
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      window.addEventListener('touchmove', move, { passive: false });
+      window.addEventListener('touchend', up);
     },
 
     displayViewHref(displayid) {
