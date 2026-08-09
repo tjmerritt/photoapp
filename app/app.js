@@ -3492,24 +3492,38 @@ function galleryManagerApp() {
     // units re-renders the *Display fields from the canonical inches value
     // (see refreshPlacardDisplayFields()) — nothing is ever converted
     // through a chain of round-trips that could drift.
-    openPlacardSettings(galleryid) {
+    // Fetches this gallery's own detail (which includes placard_defaults)
+    // directly, rather than reading expandedGalleryPlacard — that field is
+    // only populated for whichever gallery happens to be expanded right
+    // now, but the gear icon that calls this lives in every gallery's
+    // header row (Phase 4c), so it has to work on a collapsed gallery too.
+    // The modal only opens once the fetch succeeds, so there's no separate
+    // loading state to render inside it.
+    async openPlacardSettings(galleryid) {
       this.placardGalleryId = galleryid;
-      const normalized = normalizeGalleryPlacard(this.expandedGalleryPlacard);
-      this.placardDraft = {
-        boardWidthIn: normalized.boardWidthIn,
-        widthIn:      normalized.widthIn,
-        heightIn:     normalized.heightIn,
-        unit:         normalized.unit,
-        background:   normalized.background,
-        borderColor:  normalized.borderColor,
-        items:        JSON.parse(JSON.stringify(normalized.items)),
-      };
-      this.refreshPlacardDisplayFields();
       this.placardError     = '';
-      this.placardJsonMode  = false;
-      this.placardJsonText  = '';
-      this.placardJsonError = '';
-      this.placardModalOpen = true;
+      try {
+        const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(galleryid), { headers: getAuthHeaders() });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const g = await resp.json();
+        const normalized = normalizeGalleryPlacard(g.placard_defaults);
+        this.placardDraft = {
+          boardWidthIn: normalized.boardWidthIn,
+          widthIn:      normalized.widthIn,
+          heightIn:     normalized.heightIn,
+          unit:         normalized.unit,
+          background:   normalized.background,
+          borderColor:  normalized.borderColor,
+          items:        JSON.parse(JSON.stringify(normalized.items)),
+        };
+        this.refreshPlacardDisplayFields();
+        this.placardJsonMode  = false;
+        this.placardJsonText  = '';
+        this.placardJsonError = '';
+        this.placardModalOpen = true;
+      } catch(e) {
+        this.showToast('Failed to load placard settings: ' + e.message);
+      }
     },
 
     closePlacardSettings() {
@@ -3729,7 +3743,14 @@ function galleryManagerApp() {
           throw new Error(e.error || 'HTTP ' + resp.status);
         }
         const g = await resp.json();
-        this.expandedGalleryPlacard = g.placard_defaults || null;
+        // Only refresh the expanded-section status line if this save was
+        // for the gallery that's actually expanded right now — the gear
+        // icon that opened this modal can now be clicked from any gallery's
+        // header row (Phase 4c), including a collapsed one, so this save
+        // isn't necessarily for expandedGalleryId at all.
+        if (this.placardGalleryId === this.expandedGalleryId) {
+          this.expandedGalleryPlacard = g.placard_defaults || null;
+        }
         this.placardModalOpen = false;
         this.showToast('Placard settings saved.');
       } catch(e) {

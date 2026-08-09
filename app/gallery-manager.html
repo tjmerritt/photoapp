@@ -283,9 +283,12 @@
 
             <!-- Title / rename -->
             <div class="flex-1 min-w-0">
-              <!-- View mode -->
+              <!-- View mode — click the title itself to rename (replaces the
+                   old separate "Rename" icon button, which now lives in the
+                   action row as Placard Settings' gear icon instead). -->
               <div x-show="editingGalleryId !== g.galleryid" class="flex items-center gap-2">
-                <span class="font-semibold truncate" x-text="g.title"></span>
+                <span class="font-semibold truncate cursor-pointer hover:underline" title="Click to rename"
+                      @click="startEdit(g)" x-text="g.title"></span>
                 <span class="text-xs text-[var(--muted)] shrink-0"
                       x-text="'(' + g.display_count + ' display' + (g.display_count === 1 ? ')' : 's)')"></span>
               </div>
@@ -314,10 +317,18 @@
                   <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
                 </svg>
               </a>
-              <!-- Rename -->
-              <button class="btn-icon" title="Rename" @click="startEdit(g)">
+              <!-- Placard Settings (gear icon) — moved up from the expanded
+                   displays section so it's reachable without expanding the
+                   gallery first. Takes the old "Rename" button's spot;
+                   renaming now happens by clicking the title itself (see
+                   above). openPlacardSettings() fetches this gallery's own
+                   detail on demand, so it works whether or not this row is
+                   currently expanded. -->
+              <button class="btn-icon" title="Placard Settings" aria-label="Placard Settings"
+                      @click="openPlacardSettings(g.galleryid)">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
                 </svg>
               </button>
               <!-- Expand/collapse displays -->
@@ -434,19 +445,13 @@
               </select>
             </div>
 
-            <!-- Placard settings — gallery-wide size/appearance/content,
-                 applied consistently to every display's placard boxes.
-                 Phase 4c: gear icon instead of a labeled button, matching
-                 the icon-button treatment already used for the per-display
-                 actions above (Edit photos / Remove display). -->
+            <!-- Placard settings status — gallery-wide size/appearance/
+                 content, applied consistently to every display's placard
+                 boxes. The gear icon itself moved up to the gallery header
+                 row (next to the title) so it's reachable without expanding
+                 the gallery; this is just a read-only status line, still
+                 sourced from the expanded gallery's own fetched detail. -->
             <div class="px-5 py-3 border-t border-[var(--border)] flex items-center gap-2 flex-wrap">
-              <button class="btn-icon shrink-0" title="Placard Settings" aria-label="Placard Settings"
-                      @click="openPlacardSettings(g.galleryid)">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                </svg>
-              </button>
               <span class="text-xs text-[var(--muted)]"
                     x-text="'Placard Settings — ' + ((expandedGalleryPlacard && expandedGalleryPlacard.items && expandedGalleryPlacard.items.length)
                               ? (expandedGalleryPlacard.items.length + ' item' + (expandedGalleryPlacard.items.length === 1 ? '' : 's') + ' configured')
