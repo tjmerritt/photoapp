@@ -170,7 +170,7 @@ func (h *GalleriesHandler) Get(w http.ResponseWriter, r *http.Request, ps httpro
 
 	// Fetch display summaries ordered by sort_order.
 	rows, err := h.DB.Query(ctx, `
-		SELECT d.displayid::text, d.sort_order,
+		SELECT d.displayid::text, d.name, d.sort_order,
 		       t.templateid::text, t.name, t.photo_count,
 		       COUNT(s.slotid)                                          AS slot_count,
 		       COUNT(s.slotid) FILTER (WHERE s.photoid IS NOT NULL)     AS filled_slots,
@@ -195,7 +195,7 @@ func (h *GalleriesHandler) Get(w http.ResponseWriter, r *http.Request, ps httpro
 		var tmplID, tmplName *string
 		var tmplCount *int
 		if err := rows.Scan(
-			&d.DisplayID, &d.SortOrder,
+			&d.DisplayID, &d.Name, &d.SortOrder,
 			&tmplID, &tmplName, &tmplCount,
 			&d.SlotCount, &d.FilledSlots,
 			&d.CreatedAt, &d.UpdatedAt,

@@ -260,6 +260,7 @@ type TemplateSummary struct {
 // DisplaySummary is a brief display entry embedded in GalleryDetail.
 type DisplaySummary struct {
 	DisplayID   string           `json:"displayid"`
+	Name        string           `json:"name"`
 	SortOrder   int              `json:"sort_order"`
 	Template    *TemplateSummary `json:"template,omitempty"`
 	SlotCount   int              `json:"slot_count"`
@@ -295,6 +296,7 @@ type DisplaySlot struct {
 type DisplayDetail struct {
 	DisplayID string           `json:"displayid"`
 	GalleryID string           `json:"galleryid"`
+	Name      string           `json:"name"`
 	SortOrder int              `json:"sort_order"`
 	Template  *TemplateSummary `json:"template,omitempty"`
 	Slots     []DisplaySlot    `json:"slots"`
@@ -347,7 +349,11 @@ type SlotUpdate struct {
 	Placard   json.RawMessage `json:"placard"`   // null/absent to clear
 }
 
+// Name is nil for "no change"; a blank/whitespace-only value is ignored
+// rather than saved (see displays.go's Update) so a display can't be left
+// with an empty name.
 type UpdateDisplayRequest struct {
+	Name       *string      `json:"name"`
 	TemplateID *string      `json:"templateid"` // nil = no change; "" = clear
 	SortOrder  *int         `json:"sort_order"`
 	Slots      []SlotUpdate `json:"slots"`

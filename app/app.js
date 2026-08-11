@@ -2922,6 +2922,15 @@ function displayEditApp() {
     // while editing. Edit-only; display.html never shows this.
     showGuides: true,
 
+    // Display name — persistent and independent of sort_order/position, so
+    // reordering displays (the thumb-grip drag in Gallery Manager) never
+    // changes it. Defaults to "Display NNN" at creation time (see
+    // internal/handlers/displays.go's Create); click-to-edit here mirrors
+    // the gallery title's rename UX in gallery-manager.html.
+    editingDisplayName: false,
+    displayNameDraft:   '',
+    savingDisplayName:  false,
+
     // Photo picker (search + assign a photo to a slot)
     pickerOpen:       false,
     pickerSlotIndex:  null,
@@ -3071,6 +3080,52 @@ function displayEditApp() {
         this.layoutFrames();
         new ResizeObserver(() => this.layoutFrames()).observe(grid);
       }
+    },
+
+    // ── Display name (click-to-edit) ────────────────────────────────────────
+
+    startEditDisplayName() {
+      if (!this.display) return;
+      this.displayNameDraft   = this.display.name;
+      this.editingDisplayName = true;
+    },
+
+    cancelEditDisplayName() {
+      this.editingDisplayName = false;
+    },
+
+    async saveDisplayName() {
+      if (!this.display || this.savingDisplayName) return;
+      const trimmed = this.displayNameDraft.trim();
+      // Blank is a no-op, not a save — same rule the server enforces (see
+      // displays.go's Update), kept here too so Enter/blur on an
+      // accidentally-cleared field doesn't round-trip to the server only to
+      // have it silently ignore the change.
+      if (!trimmed || trimmed === this.display.name) {
+        this.editingDisplayName = false;
+        return;
+      }
+      this.savingDisplayName = true;
+      try {
+        const resp = await fetch('/api/v1/displays/' + encodeURIComponent(this.display.displayid), {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body:    JSON.stringify({ name: trimmed }),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        this.display = await resp.json();
+        // Keep the sidebar/breadcrumb's cached copy (galleryDisplays, used
+        // for prev/next and "Display N of M") in sync too, so it doesn't
+        // show a stale name if it's ever displayed there.
+        const idx = this.galleryDisplays.findIndex(d => d.displayid === this.display.displayid);
+        if (idx !== -1) {
+          this.galleryDisplays[idx] = { ...this.galleryDisplays[idx], name: this.display.name };
+        }
+        this.editingDisplayName = false;
+      } catch(e) {
+        this.showToast('Failed to save name: ' + e.message);
+      }
+      this.savingDisplayName = false;
     },
 
     // ── Photo picker ──────────────────────────────────────────────────────────
@@ -3281,9 +3336,6 @@ function galleryManagerApp() {
     expandedGalleryId: null,
     expandedDisplays:  [],
     loadingDisplays:   false,
-    // Placard defaults for the currently-expanded gallery (raw JSON from the
-    // API, normalized on demand by normalizeGalleryPlacard()).
-    expandedGalleryPlacard: null,
     // displayid currently being thumb-grip-dragged in the reorder list, or
     // null — drives the .dragging opacity class in gallery-manager.html so
     // there's visual feedback for which row is under the pointer/finger.
@@ -3434,13 +3486,11 @@ function galleryManagerApp() {
       if (this.expandedGalleryId === galleryid) {
         this.expandedGalleryId = null;
         this.expandedDisplays  = [];
-        this.expandedGalleryPlacard = null;
         return;
       }
       this.expandedGalleryId    = galleryid;
       this.loadingDisplays      = true;
       this.expandedDisplays     = [];
-      this.expandedGalleryPlacard = null;
       this.newDisplayTemplateId = '';
       try {
         const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(galleryid));
@@ -3454,7 +3504,6 @@ function galleryManagerApp() {
           ...d,
           selectedTemplateId: d.template ? d.template.templateid : '',
         }));
-        this.expandedGalleryPlacard = g.placard_defaults || null;
       } catch(e) {
         this.showToast('Failed to load displays: ' + e.message);
       }
@@ -3493,12 +3542,11 @@ function galleryManagerApp() {
     // (see refreshPlacardDisplayFields()) — nothing is ever converted
     // through a chain of round-trips that could drift.
     // Fetches this gallery's own detail (which includes placard_defaults)
-    // directly, rather than reading expandedGalleryPlacard — that field is
-    // only populated for whichever gallery happens to be expanded right
-    // now, but the gear icon that calls this lives in every gallery's
-    // header row (Phase 4c), so it has to work on a collapsed gallery too.
-    // The modal only opens once the fetch succeeds, so there's no separate
-    // loading state to render inside it.
+    // directly rather than depending on any locally-cached copy — the gear
+    // icon that calls this lives in every gallery's header row (Phase 4c),
+    // so it has to work correctly whether or not that gallery happens to be
+    // expanded. The modal only opens once the fetch succeeds, so there's no
+    // separate loading state to render inside it.
     async openPlacardSettings(galleryid) {
       this.placardGalleryId = galleryid;
       this.placardError     = '';
@@ -3742,15 +3790,6 @@ function galleryManagerApp() {
           const e = await resp.json().catch(() => ({}));
           throw new Error(e.error || 'HTTP ' + resp.status);
         }
-        const g = await resp.json();
-        // Only refresh the expanded-section status line if this save was
-        // for the gallery that's actually expanded right now — the gear
-        // icon that opened this modal can now be clicked from any gallery's
-        // header row (Phase 4c), including a collapsed one, so this save
-        // isn't necessarily for expandedGalleryId at all.
-        if (this.placardGalleryId === this.expandedGalleryId) {
-          this.expandedGalleryPlacard = g.placard_defaults || null;
-        }
         this.placardModalOpen = false;
         this.showToast('Placard settings saved.');
       } catch(e) {
@@ -3774,6 +3813,7 @@ function galleryManagerApp() {
         // Build a DisplaySummary-shaped object from the DisplayDetail response
         this.expandedDisplays.push({
           displayid:          d.displayid,
+          name:               d.name,
           sort_order:         d.sort_order,
           template:           d.template || null,
           selectedTemplateId: d.template ? d.template.templateid : '',

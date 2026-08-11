@@ -356,7 +356,7 @@
             </div>
 
             <!-- Display rows -->
-            <template x-for="(d, idx) in expandedDisplays" :key="d.displayid">
+            <template x-for="d in expandedDisplays" :key="d.displayid">
               <div class="display-row" :class="{ dragging: draggingDisplayId === d.displayid }">
                 <!-- Reorder — thumb grip. mousedown: click-and-hold then
                      drag (desktop). touchstart: touch then drag (mobile).
@@ -371,9 +371,15 @@
                   </svg>
                 </button>
 
-                <!-- Display info -->
+                <!-- Display info — d.name is the persistent, user-editable
+                     name (default "Display NNN" set at creation time; edit
+                     it by clicking it on the Display Manager page). Shown
+                     read-only here rather than the old position-derived
+                     "Display N" label, which used to shift whenever
+                     displays were reordered (see the drag-to-reorder grip
+                     above) — the whole point of adding a stored name. -->
                 <span class="flex-1 text-[var(--muted)] flex items-center gap-2 flex-wrap">
-                  <span class="shrink-0">Display <span x-text="idx + 1"></span></span>
+                  <span class="shrink-0" x-text="d.name"></span>
                   <span x-show="d.template" class="text-xs shrink-0">
                     (<span x-text="d.filled_slots"></span>/<span x-text="d.slot_count"></span> filled)
                   </span>
@@ -443,19 +449,6 @@
                   <option :value="t.templateid" x-text="t.name + ' (' + t.photo_count + ')'"></option>
                 </template>
               </select>
-            </div>
-
-            <!-- Placard settings status — gallery-wide size/appearance/
-                 content, applied consistently to every display's placard
-                 boxes. The gear icon itself moved up to the gallery header
-                 row (next to the title) so it's reachable without expanding
-                 the gallery; this is just a read-only status line, still
-                 sourced from the expanded gallery's own fetched detail. -->
-            <div class="px-5 py-3 border-t border-[var(--border)] flex items-center gap-2 flex-wrap">
-              <span class="text-xs text-[var(--muted)]"
-                    x-text="'Placard Settings — ' + ((expandedGalleryPlacard && expandedGalleryPlacard.items && expandedGalleryPlacard.items.length)
-                              ? (expandedGalleryPlacard.items.length + ' item' + (expandedGalleryPlacard.items.length === 1 ? '' : 's') + ' configured')
-                              : 'no placard items configured yet')"></span>
             </div>
           </div>
 

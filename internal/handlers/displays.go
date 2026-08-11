@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/julienschmidt/httprouter"
@@ -48,7 +49,7 @@ func (h *DisplaysHandler) Get(w http.ResponseWriter, r *http.Request, ps httprou
 	var tmplID, tmplName, tmplSlotPositions, tmplPresentation *string
 	var tmplCount *int
 	err = h.DB.QueryRow(ctx, `
-		SELECT d.displayid::text, d.galleryid::text, d.sort_order,
+		SELECT d.displayid::text, d.galleryid::text, d.name, d.sort_order,
 		       t.templateid::text, t.name, t.photo_count, t.slot_positions::text, t.presentation::text,
 		       d.created_at, d.updated_at
 		FROM   displays d
@@ -56,7 +57,7 @@ func (h *DisplaysHandler) Get(w http.ResponseWriter, r *http.Request, ps httprou
 		LEFT   JOIN display_templates t ON t.templateid = d.templateid AND t.deleted_at IS NULL
 		WHERE  d.displayid = $1 AND d.deleted_at IS NULL AND g.exhibitionid = $2
 	`, displayID, exhibitionID).Scan(
-		&d.DisplayID, &d.GalleryID, &d.SortOrder,
+		&d.DisplayID, &d.GalleryID, &d.Name, &d.SortOrder,
 		&tmplID, &tmplName, &tmplCount, &tmplSlotPositions, &tmplPresentation,
 		&d.CreatedAt, &d.UpdatedAt,
 	)
@@ -232,13 +233,23 @@ func (h *DisplaysHandler) Create(w http.ResponseWriter, r *http.Request, ps http
 		templateID = req.TemplateID
 	}
 
+	// Default name is "Display NNN" — NNN a zero-padded count of every
+	// display ever created in this gallery (including soft-deleted ones, so
+	// the number is never reused) computed in the same statement as the
+	// INSERT. Stored once, then independent of sort_order — reordering
+	// (drag-to-reorder in Gallery Manager) never changes it, unlike a
+	// position-derived label would. See migrations/029_display_names.sql.
 	var d models.DisplayDetail
 	if err := h.DB.QueryRow(ctx, `
-		INSERT INTO displays (galleryid, templateid, sort_order)
-		VALUES ($1, NULLIF($2::text, '')::uuid, $3)
-		RETURNING displayid::text, galleryid::text, sort_order, created_at, updated_at
+		WITH next_num AS (
+			SELECT COUNT(*) + 1 AS n FROM displays WHERE galleryid = $1
+		)
+		INSERT INTO displays (galleryid, templateid, sort_order, name)
+		SELECT $1, NULLIF($2::text, '')::uuid, $3, 'Display ' || lpad(next_num.n::text, 3, '0')
+		FROM   next_num
+		RETURNING displayid::text, galleryid::text, name, sort_order, created_at, updated_at
 	`, galleryID, templateID, sortOrder).Scan(
-		&d.DisplayID, &d.GalleryID, &d.SortOrder, &d.CreatedAt, &d.UpdatedAt,
+		&d.DisplayID, &d.GalleryID, &d.Name, &d.SortOrder, &d.CreatedAt, &d.UpdatedAt,
 	); err != nil {
 		slog.Error("Create display", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -310,6 +321,23 @@ func (h *DisplaysHandler) Update(w http.ResponseWriter, r *http.Request, ps http
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		middleware.WriteError(w, http.StatusBadRequest, "invalid JSON")
 		return
+	}
+
+	// Apply name change. A blank/whitespace-only value is silently ignored
+	// (not saved) rather than left to fall through as an actually-empty
+	// name — the click-to-edit UI on the Display Manager page has no
+	// separate "required" validation of its own, so this is the one place
+	// that guarantees a display never ends up with no name at all.
+	if req.Name != nil {
+		if trimmed := strings.TrimSpace(*req.Name); trimmed != "" {
+			if _, err := h.DB.Exec(ctx, `
+				UPDATE displays SET name=$1 WHERE displayid=$2
+			`, trimmed, displayID); err != nil {
+				slog.Error("Update display name", "error", err)
+				middleware.WriteError(w, http.StatusInternalServerError, "db error")
+				return
+			}
+		}
 	}
 
 	// Apply sort_order change.
