@@ -430,8 +430,9 @@
         <!-- Display name — persistent, independent of position (see
              displays.name / migrations/029_display_names.sql); click it to
              rename, same click-to-edit pattern as the gallery title in
-             gallery-manager.html. "Display N of M" below is unrelated
-             positional info (still shifts on reorder) and is kept as-is. -->
+             gallery-manager.html. The "(X of Y)" position indicator (still
+             shifts on reorder, unlike the name) sits to the name's right
+             instead of on its own line below. -->
         <div class="flex items-center gap-2 mt-0.5" x-show="display">
           <template x-if="!editingDisplayName">
             <span class="text-sm font-medium cursor-pointer hover:underline" title="Click to rename"
@@ -451,9 +452,9 @@
               <button class="btn-secondary text-xs py-1 px-3" @click="cancelEditDisplayName()">Cancel</button>
             </div>
           </template>
+          <span class="text-sm text-[var(--muted)]"
+                x-text="'(' + (currentIndex + 1) + ' of ' + galleryDisplays.length + ')'"></span>
         </div>
-        <p class="text-sm text-[var(--muted)] mt-0.5"
-           x-text="'Display ' + (currentIndex + 1) + ' of ' + galleryDisplays.length"></p>
       </div>
       <!-- Navigation at top -->
       <div class="flex items-center gap-2">
