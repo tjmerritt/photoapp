@@ -84,8 +84,17 @@
     }
     .drag-handle:hover  { background: var(--border); color: var(--brand); }
     .drag-handle:active { cursor: grabbing; }
+    /* Dragged-row highlight — a tinted background + lifted shadow instead
+       of the original opacity dip. Opacity faded the row's own text along
+       with the background, and against this page's already-light
+       surface/text colors that made the dragged row harder to read, not
+       easier — a solid tint keeps full text contrast while still standing
+       out from the other rows. */
     .display-row.dragging {
-      opacity: 0.5;
+      background: rgba(233, 69, 96, 0.10);
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
+      position: relative;
+      z-index: 1;
     }
 
     .btn-primary {
