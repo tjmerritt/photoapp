@@ -36,12 +36,30 @@ type adminExhibition struct {
 	Hostname     string `json:"hostname"`
 }
 
-// adminStats is the shape returned by GET /api/v1/admin/stats (Phase 6a).
+// adminStats is the shape returned by GET /api/v1/admin/stats (Phase 6a,
+// extended in Phase 4e to cover the full Overview page resource list).
 type adminStats struct {
 	UserCount        int `json:"user_count"`        // members of this exhibition
 	PhotoCount       int `json:"photo_count"`        // non-deleted photos in this exhibition
 	ActiveLabelCount int `json:"active_label_count"` // distinct, enabled label names in use in this exhibition (label_names is per-exhibition)
-	ActiveEmojiCount int `json:"active_emoji_count"` // active emoji types (site-wide — emoji_types has no exhibitionid)
+	ActiveEmojiCount int `json:"active_emoji_count"` // active emoji types (site-wide — emoji_types has no exhibitionid); equals OpenEmojiCount + CustomEmojiCount
+
+	// Phase 4e additions. OrganizationCount/ExhibitionCount/TemplateCount/
+	// PermissionCount/OpenEmojiCount/CustomEmojiCount are site-wide (the
+	// resources they count aren't exhibition-scoped); the rest follow
+	// UserCount/PhotoCount/ActiveLabelCount above and are scoped to the
+	// current exhibition.
+	OrganizationCount int `json:"organization_count"` // non-deleted organizations, site-wide
+	ExhibitionCount   int `json:"exhibition_count"`    // non-deleted exhibitions, site-wide
+	TeamCount         int `json:"team_count"`          // non-deleted teams in this exhibition
+	GalleryCount      int `json:"gallery_count"`       // non-deleted galleries in this exhibition
+	DisplayCount      int `json:"display_count"`       // non-deleted displays across this exhibition's galleries
+	TemplateCount     int `json:"template_count"`      // non-deleted display templates, site-wide (not exhibition-scoped)
+	RoleCount         int `json:"role_count"`          // non-deleted roles in this exhibition
+	PermissionCount   int `json:"permission_count"`    // size of the fixed permission catalog, site-wide
+	CommentCount      int `json:"comment_count"`       // non-deleted comments on this exhibition's photos
+	OpenEmojiCount    int `json:"open_emoji_count"`    // active emoji types with no owning organization
+	CustomEmojiCount  int `json:"custom_emoji_count"`  // active emoji types owned by an organization
 }
 
 // adminUser is the shape returned by GET /api/v1/admin/users (Phase 6b).
@@ -324,17 +342,97 @@ func (h *AdminHandler) Stats(w http.ResponseWriter, r *http.Request, _ httproute
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
 		}
+		// Phase 4e — remaining exhibition-scoped counts for the Overview page.
+		if err := h.DB.QueryRow(ctx, `
+			SELECT COUNT(*) FROM teams WHERE deleted_at IS NULL AND exhibitionid = $1::uuid
+		`, exhibitionID).Scan(&stats.TeamCount); err != nil {
+			slog.Error("Stats team count", "error", err)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		if err := h.DB.QueryRow(ctx, `
+			SELECT COUNT(*) FROM galleries WHERE deleted_at IS NULL AND exhibitionid = $1::uuid
+		`, exhibitionID).Scan(&stats.GalleryCount); err != nil {
+			slog.Error("Stats gallery count", "error", err)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		if err := h.DB.QueryRow(ctx, `
+			SELECT COUNT(*)
+			FROM   displays d
+			JOIN   galleries g ON g.galleryid = d.galleryid
+			WHERE  d.deleted_at IS NULL AND g.deleted_at IS NULL AND g.exhibitionid = $1::uuid
+		`, exhibitionID).Scan(&stats.DisplayCount); err != nil {
+			slog.Error("Stats display count", "error", err)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		if err := h.DB.QueryRow(ctx, `
+			SELECT COUNT(*) FROM roles WHERE deleted_at IS NULL AND exhibitionid = $1::uuid
+		`, exhibitionID).Scan(&stats.RoleCount); err != nil {
+			slog.Error("Stats role count", "error", err)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
+		if err := h.DB.QueryRow(ctx, `
+			SELECT COUNT(*)
+			FROM   comments c
+			JOIN   photos p ON p.photoid = c.photoid
+			WHERE  c.deleted_at IS NULL AND p.exhibitionid = $1::uuid
+		`, exhibitionID).Scan(&stats.CommentCount); err != nil {
+			slog.Error("Stats comment count", "error", err)
+			middleware.WriteError(w, http.StatusInternalServerError, "db error")
+			return
+		}
 	}
 	// emoji_types is organization-scoped, not exhibition-scoped (Phase 1b —
 	// see internal/handlers/emojis.go), so this count doesn't vary by
 	// exhibitionid the way label_names now does; out of scope for the
-	// label_names fix above.
+	// label_names fix above. Phase 4e splits it into Open (no owning org)
+	// vs. Custom (owned by an org) rather than one combined figure.
 	if err := h.DB.QueryRow(ctx, `
-		SELECT COUNT(*) FROM emoji_types WHERE is_active = TRUE
-	`).Scan(&stats.ActiveEmojiCount); err != nil {
-		slog.Error("Stats emoji count", "error", err)
+		SELECT COUNT(*) FROM emoji_types WHERE is_active = TRUE AND organizationid IS NULL
+	`).Scan(&stats.OpenEmojiCount); err != nil {
+		slog.Error("Stats open emoji count", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
 		return
+	}
+	if err := h.DB.QueryRow(ctx, `
+		SELECT COUNT(*) FROM emoji_types WHERE is_active = TRUE AND organizationid IS NOT NULL
+	`).Scan(&stats.CustomEmojiCount); err != nil {
+		slog.Error("Stats custom emoji count", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	stats.ActiveEmojiCount = stats.OpenEmojiCount + stats.CustomEmojiCount
+
+	// Phase 4e — remaining site-wide (not exhibition-scoped) counts.
+	if err := h.DB.QueryRow(ctx, `
+		SELECT COUNT(*) FROM organizations WHERE deleted_at IS NULL
+	`).Scan(&stats.OrganizationCount); err != nil {
+		slog.Error("Stats organization count", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if err := h.DB.QueryRow(ctx, `
+		SELECT COUNT(*) FROM exhibitions WHERE deleted_at IS NULL
+	`).Scan(&stats.ExhibitionCount); err != nil {
+		slog.Error("Stats exhibition count", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	if err := h.DB.QueryRow(ctx, `
+		SELECT COUNT(*) FROM display_templates WHERE deleted_at IS NULL
+	`).Scan(&stats.TemplateCount); err != nil {
+		slog.Error("Stats template count", "error", err)
+		middleware.WriteError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+	// The permission catalog is a fixed set of Go constants, not a DB table
+	// (see internal/permissions.PermissionCatalog) — count it in memory
+	// rather than with a query.
+	for _, group := range permissions.PermissionCatalog() {
+		stats.PermissionCount += len(group.Permissions)
 	}
 
 	middleware.WriteJSON(w, http.StatusOK, stats)

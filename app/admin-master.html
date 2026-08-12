@@ -38,58 +38,121 @@
     </template>
   </div>
 
-  <!-- Quick stats -->
-  <div x-show="!loading && !authError && !noExhibitions && stats"
-       class="grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-4xl mx-auto p-6">
-    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+  <!-- Overview: every resource type, with a count and links to view/create it. -->
+  <div x-show="!loading && !authError && !noExhibitions"
+       class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-5xl mx-auto p-6 pb-10">
+
+    <!-- Organizations — site-wide, no admin UI to create one yet. -->
+    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 flex flex-col">
+      <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Organizations</p>
+      <p class="text-2xl font-bold text-[#1a1a2e] mt-1" x-text="stats ? stats.organization_count : '—'"></p>
+      <p class="text-sm text-gray-500 mt-2 flex-1">The billing entities that own exhibitions, site-wide.</p>
+    </div>
+
+    <!-- Exhibitions — site-wide, no admin UI to create one yet. -->
+    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 flex flex-col">
+      <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Exhibitions</p>
+      <p class="text-2xl font-bold text-[#1a1a2e] mt-1" x-text="stats ? stats.exhibition_count : '—'"></p>
+      <p class="text-sm text-gray-500 mt-2 flex-1">Independently-hosted photo collections, site-wide.</p>
+    </div>
+
+    <!-- Teams -->
+    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 flex flex-col">
+      <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Teams</p>
+      <p class="text-2xl font-bold text-[#1a1a2e] mt-1" x-text="stats ? stats.team_count : '—'"></p>
+      <p class="text-sm text-gray-500 mt-2 flex-1">Create teams and manage their membership.</p>
+      <div class="flex items-center gap-4 mt-3 text-sm">
+        <a href="/admin-teams.html" class="text-accent font-medium hover:underline">View</a>
+        <a href="/admin-teams.html" class="text-green-700 font-medium hover:underline">+ New</a>
+      </div>
+    </div>
+
+    <!-- Users -->
+    <a href="/admin-users.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 flex flex-col hover:shadow-md hover:border-accent/40 transition">
       <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Users</p>
       <p class="text-2xl font-bold text-[#1a1a2e] mt-1" x-text="stats ? stats.user_count : '—'"></p>
+      <p class="text-sm text-gray-500 mt-2">Enable/disable accounts and per-user permissions.</p>
+    </a>
+
+    <!-- Galleries -->
+    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 flex flex-col">
+      <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Galleries</p>
+      <p class="text-2xl font-bold text-[#1a1a2e] mt-1" x-text="stats ? stats.gallery_count : '—'"></p>
+      <p class="text-sm text-gray-500 mt-2 flex-1">Ordered collections of displays within this exhibition.</p>
+      <div class="flex items-center gap-4 mt-3 text-sm">
+        <a href="/gallery-manager.html" class="text-accent font-medium hover:underline">View</a>
+        <a href="/gallery-manager.html" class="text-green-700 font-medium hover:underline">+ New</a>
+      </div>
     </div>
-    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+
+    <!-- Displays — created per-gallery from Gallery Manager, no standalone "New". -->
+    <a href="/gallery-manager.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 flex flex-col hover:shadow-md hover:border-accent/40 transition">
+      <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Displays</p>
+      <p class="text-2xl font-bold text-[#1a1a2e] mt-1" x-text="stats ? stats.display_count : '—'"></p>
+      <p class="text-sm text-gray-500 mt-2">Panels within this exhibition's galleries. Add via a gallery's + button.</p>
+    </a>
+
+    <!-- Templates — global, not exhibition-scoped. -->
+    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 flex flex-col">
+      <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Templates</p>
+      <p class="text-2xl font-bold text-[#1a1a2e] mt-1" x-text="stats ? stats.template_count : '—'"></p>
+      <p class="text-sm text-gray-500 mt-2 flex-1">Display layout geometry, shared site-wide.</p>
+      <div class="flex items-center gap-4 mt-3 text-sm">
+        <a href="/template-admin.html" class="text-accent font-medium hover:underline">View</a>
+        <a href="/template-admin.html" class="text-green-700 font-medium hover:underline">+ New</a>
+      </div>
+    </div>
+
+    <!-- Photos -->
+    <a href="/admin.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 flex flex-col hover:shadow-md hover:border-accent/40 transition">
       <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Photos</p>
       <p class="text-2xl font-bold text-[#1a1a2e] mt-1" x-text="stats ? stats.photo_count : '—'"></p>
-    </div>
-    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
-      <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Active labels</p>
-      <p class="text-2xl font-bold text-[#1a1a2e] mt-1" x-text="stats ? stats.active_label_count : '—'"></p>
-    </div>
-    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
-      <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Active emojis</p>
-      <p class="text-2xl font-bold text-[#1a1a2e] mt-1" x-text="stats ? stats.active_emoji_count : '—'"></p>
-    </div>
-  </div>
+      <p class="text-sm text-gray-500 mt-2">Search photos and toggle public/private visibility.</p>
+    </a>
 
-  <!-- Admin page cards -->
-  <div x-show="!loading && !authError && !noExhibitions"
-       class="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-4xl mx-auto px-6 pb-10">
-    <a href="/admin.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 hover:shadow-md hover:border-accent/40 transition">
-      <p class="font-semibold text-[#1a1a2e]">Photos</p>
-      <p class="text-sm text-gray-500 mt-1">Search photos and toggle public/private visibility.</p>
+    <!-- Roles -->
+    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 flex flex-col">
+      <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Roles</p>
+      <p class="text-2xl font-bold text-[#1a1a2e] mt-1" x-text="stats ? stats.role_count : '—'"></p>
+      <p class="text-sm text-gray-500 mt-2 flex-1">Create roles and choose which permissions each one bundles.</p>
+      <div class="flex items-center gap-4 mt-3 text-sm">
+        <a href="/admin-roles.html" class="text-accent font-medium hover:underline">View</a>
+        <a href="/admin-roles.html" class="text-green-700 font-medium hover:underline">+ New</a>
+      </div>
+    </div>
+
+    <!-- Permissions — fixed catalog, not creatable; page manages grants. -->
+    <a href="/admin-permissions.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 flex flex-col hover:shadow-md hover:border-accent/40 transition">
+      <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Permissions</p>
+      <p class="text-2xl font-bold text-[#1a1a2e] mt-1" x-text="stats ? stats.permission_count : '—'"></p>
+      <p class="text-sm text-gray-500 mt-2">View and revoke global and exhibition-specific role grants.</p>
     </a>
-    <a href="/admin-users.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 hover:shadow-md hover:border-accent/40 transition">
-      <p class="font-semibold text-[#1a1a2e]">Users</p>
-      <p class="text-sm text-gray-500 mt-1">Enable/disable accounts and per-user permissions.</p>
+
+    <!-- Labels -->
+    <a href="/admin-labels.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 flex flex-col hover:shadow-md hover:border-accent/40 transition">
+      <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Labels</p>
+      <p class="text-2xl font-bold text-[#1a1a2e] mt-1" x-text="stats ? stats.active_label_count : '—'"></p>
+      <p class="text-sm text-gray-500 mt-2">Set colors, and enable/disable or restrict label names.</p>
     </a>
-    <a href="/admin-teams.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 hover:shadow-md hover:border-accent/40 transition">
-      <p class="font-semibold text-[#1a1a2e]">Teams</p>
-      <p class="text-sm text-gray-500 mt-1">Create teams and manage their membership.</p>
+
+    <!-- Comments — no dedicated admin page yet. -->
+    <div class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 flex flex-col">
+      <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Comments</p>
+      <p class="text-2xl font-bold text-[#1a1a2e] mt-1" x-text="stats ? stats.comment_count : '—'"></p>
+      <p class="text-sm text-gray-500 mt-2 flex-1">Comments on this exhibition's photos.</p>
+    </div>
+
+    <!-- Emojis — split Open (no owning org) vs. Custom (org-owned). -->
+    <a href="/admin-emojis.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 flex flex-col hover:shadow-md hover:border-accent/40 transition">
+      <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold">Emojis</p>
+      <p class="text-2xl font-bold text-[#1a1a2e] mt-1">
+        <span x-text="stats ? stats.open_emoji_count : '—'"></span><span class="text-sm font-normal text-gray-400"> open</span>
+        <span class="text-gray-300 mx-1">/</span>
+        <span x-text="stats ? stats.custom_emoji_count : '—'"></span><span class="text-sm font-normal text-gray-400"> custom</span>
+      </p>
+      <p class="text-sm text-gray-500 mt-2">Enable/disable custom and built-in emoji types.</p>
     </a>
-    <a href="/admin-emojis.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 hover:shadow-md hover:border-accent/40 transition">
-      <p class="font-semibold text-[#1a1a2e]">Emojis</p>
-      <p class="text-sm text-gray-500 mt-1">Enable/disable custom and built-in emoji types.</p>
-    </a>
-    <a href="/admin-labels.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 hover:shadow-md hover:border-accent/40 transition">
-      <p class="font-semibold text-[#1a1a2e]">Labels</p>
-      <p class="text-sm text-gray-500 mt-1">Set colors, and enable/disable or restrict label names.</p>
-    </a>
-    <a href="/admin-permissions.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 hover:shadow-md hover:border-accent/40 transition">
-      <p class="font-semibold text-[#1a1a2e]">Permissions</p>
-      <p class="text-sm text-gray-500 mt-1">View and revoke global and exhibition-specific role grants.</p>
-    </a>
-    <a href="/admin-roles.html" class="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 hover:shadow-md hover:border-accent/40 transition">
-      <p class="font-semibold text-[#1a1a2e]">Roles</p>
-      <p class="text-sm text-gray-500 mt-1">Create roles and choose which permissions each one bundles.</p>
-    </a>
+
   </div>
 
 </body>
