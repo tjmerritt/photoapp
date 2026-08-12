@@ -235,13 +235,22 @@ func (h *DisplaysHandler) Create(w http.ResponseWriter, r *http.Request, ps http
 
 	// name: an explicit, non-blank client-supplied name (e.g. from the "Add
 	// Display" popup's prefilled/edited field) is used as-is; otherwise it
-	// falls back to "Display NNN" — NNN a zero-padded count of every
-	// display ever created in this gallery (including soft-deleted ones, so
-	// the number is never reused), computed via COALESCE(NULLIF(...), ...)
-	// in the same statement as the INSERT. Either way it's stored once and
-	// is then independent of sort_order — reordering (drag-to-reorder in
-	// Gallery Manager) never changes it, unlike a position-derived label
-	// would. See migrations/029_display_names.sql.
+	// falls back to "Display NNN" — NNN the gallery's own display_counter,
+	// atomically incremented as part of this same statement (the `bumped`
+	// CTE below) and used regardless of whether it ends up in the name or
+	// not, so the counter always reflects how many displays have ever been
+	// created here. This *always* advances and *never* reuses a number,
+	// even across deletions — unlike an earlier version of this query that
+	// used COUNT(*) over displays (including soft-deleted ones) at create
+	// time, which was correct in isolation but got bypassed in practice:
+	// the Add Display popup's prefilled name guess was computed from the
+	// gallery's *active* display count, always sent as an explicit name,
+	// so the COUNT(*) fallback here never actually ran — see
+	// migrations/030_gallery_display_counter.sql for the full story and
+	// GallerySummary.DisplayCounter for how the client's guess now reads
+	// this same counter instead of approximating it. Either way, the name
+	// is stored once and is then independent of sort_order — reordering
+	// (drag-to-reorder in Gallery Manager) never changes it.
 	name := ""
 	if req.Name != nil {
 		name = strings.TrimSpace(*req.Name)
@@ -249,13 +258,15 @@ func (h *DisplaysHandler) Create(w http.ResponseWriter, r *http.Request, ps http
 
 	var d models.DisplayDetail
 	if err := h.DB.QueryRow(ctx, `
-		WITH next_num AS (
-			SELECT COUNT(*) + 1 AS n FROM displays WHERE galleryid = $1
+		WITH bumped AS (
+			UPDATE galleries SET display_counter = display_counter + 1
+			WHERE  galleryid = $1
+			RETURNING display_counter
 		)
 		INSERT INTO displays (galleryid, templateid, sort_order, name)
 		SELECT $1, NULLIF($2::text, '')::uuid, $3,
-		       COALESCE(NULLIF($4, ''), 'Display ' || lpad(next_num.n::text, 3, '0'))
-		FROM   next_num
+		       COALESCE(NULLIF($4, ''), 'Display ' || lpad(bumped.display_counter::text, 3, '0'))
+		FROM   bumped
 		RETURNING displayid::text, galleryid::text, name, sort_order, created_at, updated_at
 	`, galleryID, templateID, sortOrder, name).Scan(
 		&d.DisplayID, &d.GalleryID, &d.Name, &d.SortOrder, &d.CreatedAt, &d.UpdatedAt,

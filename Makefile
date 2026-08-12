@@ -53,6 +53,7 @@ migrate-up:
 	psql "$$DATABASE_URL" -f migrations/027_dynamic_groups_and_group_grants.sql
 	psql "$$DATABASE_URL" -f migrations/028_rename_gallery_admin_permission.sql
 	psql "$$DATABASE_URL" -f migrations/029_display_names.sql
+	psql "$$DATABASE_URL" -f migrations/030_gallery_display_counter.sql
 
 #Commented out so that the database isn't destroyed accidentally
 #migrate-down:

@@ -46,6 +46,7 @@ func (h *GalleriesHandler) List(w http.ResponseWriter, r *http.Request, _ httpro
 	rows, err := h.DB.Query(ctx, `
 		SELECT g.galleryid::text, g.title, g.sort_order,
 		       COUNT(d.displayid) FILTER (WHERE d.deleted_at IS NULL) AS display_count,
+		       g.display_counter,
 		       g.created_at, g.updated_at
 		FROM   galleries g
 		LEFT   JOIN displays d ON d.galleryid = g.galleryid
@@ -64,7 +65,7 @@ func (h *GalleriesHandler) List(w http.ResponseWriter, r *http.Request, _ httpro
 	galleries := []models.GallerySummary{}
 	for rows.Next() {
 		var g models.GallerySummary
-		if err := rows.Scan(&g.GalleryID, &g.Title, &g.SortOrder, &g.DisplayCount, &g.CreatedAt, &g.UpdatedAt); err != nil {
+		if err := rows.Scan(&g.GalleryID, &g.Title, &g.SortOrder, &g.DisplayCount, &g.DisplayCounter, &g.CreatedAt, &g.UpdatedAt); err != nil {
 			slog.Error("List galleries", "error", err)
 			middleware.WriteError(w, http.StatusInternalServerError, "db error")
 			return
@@ -116,9 +117,9 @@ func (h *GalleriesHandler) Create(w http.ResponseWriter, r *http.Request, _ http
 	if err := h.DB.QueryRow(ctx, `
 		INSERT INTO galleries (exhibitionid, title, sort_order)
 		VALUES ($1, $2, $3)
-		RETURNING galleryid::text, title, sort_order, 0, created_at, updated_at
+		RETURNING galleryid::text, title, sort_order, 0, display_counter, created_at, updated_at
 	`, exhibitionID, req.Title, sortOrder).Scan(
-		&g.GalleryID, &g.Title, &g.SortOrder, &g.DisplayCount, &g.CreatedAt, &g.UpdatedAt,
+		&g.GalleryID, &g.Title, &g.SortOrder, &g.DisplayCount, &g.DisplayCounter, &g.CreatedAt, &g.UpdatedAt,
 	); err != nil {
 		slog.Error("Create gallery", "error", err)
 		middleware.WriteError(w, http.StatusInternalServerError, "db error")
@@ -144,14 +145,14 @@ func (h *GalleriesHandler) Get(w http.ResponseWriter, r *http.Request, ps httpro
 	var g models.GalleryDetail
 	var placardJSON *string
 	err := h.DB.QueryRow(ctx, `
-		SELECT g.galleryid::text, g.title, g.sort_order,
+		SELECT g.galleryid::text, g.title, g.sort_order, g.display_counter,
 		       pd.defaults::text,
 		       g.created_at, g.updated_at
 		FROM   galleries g
 		LEFT   JOIN placard_defaults pd ON pd.galleryid = g.galleryid
 		WHERE  g.galleryid = $1 AND g.exhibitionid = $2 AND g.deleted_at IS NULL
 	`, galleryID, exhibitionID).Scan(
-		&g.GalleryID, &g.Title, &g.SortOrder,
+		&g.GalleryID, &g.Title, &g.SortOrder, &g.DisplayCounter,
 		&placardJSON,
 		&g.CreatedAt, &g.UpdatedAt,
 	)

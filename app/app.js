@@ -3824,18 +3824,21 @@ function galleryManagerApp() {
     },
 
     // Opens the Add Display popup for galleryid. The name field is
-    // prefilled with a guess at the server's own default ("Display NNN",
-    // NNN = this gallery's current display_count + 1) — just a starting
-    // suggestion, not a reservation: whatever's actually in the field when
-    // Create is pressed is what gets sent (see createDisplay()), and the
-    // server computes its own real default independently if that ends up
-    // blank. The guess can be off (e.g. a display was deleted earlier,
-    // which the server's count-including-deleted numbering accounts for
-    // but this quick client-side guess doesn't) — that's fine, it's just
-    // a prefilled suggestion the user can edit or accept.
+    // prefilled with the server's own next default ("Display NNN", NNN =
+    // this gallery's display_counter + 1) — display_counter is a
+    // persistent, deletion-proof count of every display ever created here
+    // (see GallerySummary's doc comment), so this guess is exactly what
+    // the server will assign if the field is submitted unedited, not a
+    // separate approximation that can drift from it. That distinction
+    // matters: an earlier version of this guess used the gallery's
+    // *active* display_count instead, which under-counted after a
+    // delete — and because whatever's in the field always gets sent as an
+    // explicit name (see createDisplay()), that stale guess could collide
+    // with a still-existing display's name instead of the server's own
+    // fallback numbering ever kicking in to prevent it.
     openAddDisplayModal(galleryid) {
       const g = this.galleries.find(x => x.galleryid === galleryid);
-      const nextNum = (g ? g.display_count : 0) + 1;
+      const nextNum = (g ? g.display_counter : 0) + 1;
       this.addDisplayGalleryId  = galleryid;
       this.addDisplayName       = 'Display ' + String(nextNum).padStart(3, '0');
       this.addDisplayTemplateId = '';
@@ -3867,7 +3870,15 @@ function galleryManagerApp() {
         }
         const idx = this.galleries.findIndex(g => g.galleryid === galleryid);
         if (idx !== -1) {
-          this.galleries[idx] = { ...this.galleries[idx], display_count: this.galleries[idx].display_count + 1 };
+          // display_counter mirrors the server's own atomic bump (see
+          // displays.go's Create) — kept in sync locally so the *next*
+          // Add Display click on this gallery still guesses correctly
+          // without needing a full galleries reload in between.
+          this.galleries[idx] = {
+            ...this.galleries[idx],
+            display_count:   this.galleries[idx].display_count + 1,
+            display_counter: this.galleries[idx].display_counter + 1,
+          };
         }
         this.addDisplayModalOpen = false;
         this.showToast('Display added.');

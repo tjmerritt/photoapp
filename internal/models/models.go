@@ -215,13 +215,24 @@ type SearchResponse struct {
 // ── Galleries ────────────────────────────────────────────────────────────────
 
 // GallerySummary is one row in GET /api/v1/galleries.
+//
+// DisplayCounter is a persistent, monotonically-increasing count of every
+// display ever created in this gallery (deletions don't decrease it) — the
+// source of truth for each new display's default "Display NNN" name (see
+// displays.go's Create and migrations/030_gallery_display_counter.sql).
+// Exposed here so the Add Display popup's prefilled name guess matches
+// exactly what the server will assign if left unedited, rather than a
+// separate client-side approximation that can drift from it (which is
+// exactly what caused duplicate default names after a delete+recreate,
+// before this field existed).
 type GallerySummary struct {
-	GalleryID    string    `json:"galleryid"`
-	Title        string    `json:"title"`
-	SortOrder    int       `json:"sort_order"`
-	DisplayCount int       `json:"display_count"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	GalleryID      string    `json:"galleryid"`
+	Title          string    `json:"title"`
+	SortOrder      int       `json:"sort_order"`
+	DisplayCount   int       `json:"display_count"`
+	DisplayCounter int       `json:"display_counter"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // GalleryDetail is the full response for GET /api/v1/galleries/:galleryid.
@@ -229,6 +240,7 @@ type GalleryDetail struct {
 	GalleryID       string           `json:"galleryid"`
 	Title           string           `json:"title"`
 	SortOrder       int              `json:"sort_order"`
+	DisplayCounter  int              `json:"display_counter"` // see GallerySummary's doc comment
 	PlacardsDefault json.RawMessage  `json:"placard_defaults,omitempty"`
 	Displays        []DisplaySummary `json:"displays"`
 	CreatedAt       time.Time        `json:"created_at"`
