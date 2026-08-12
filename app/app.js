@@ -3322,7 +3322,9 @@ function galleryManagerApp() {
     loading:      true,
     error:        null,
 
-    // Create form
+    // Create form — a popup (opened via the top-right + Add button) rather
+    // than an always-visible inline form. See openCreateGalleryModal().
+    createGalleryModalOpen: false,
     newTitle:    '',
     creating:    false,
     createError: '',
@@ -3342,9 +3344,20 @@ function galleryManagerApp() {
     // See startDisplayDrag().
     draggingDisplayId: null,
 
-    // Display templates (for the "new display" and per-row template pickers)
-    templates:            [],
-    newDisplayTemplateId: '',
+    // Display templates (for the Add Display popup's template picker)
+    templates: [],
+
+    // Add Display popup — replaces the old inline "+ Add Display" row.
+    // Opened via the green + icon in a gallery's header row (between the
+    // Placard Settings gear and the expand/collapse arrow), not just from
+    // the expanded section, so it works whether or not that gallery is
+    // currently expanded. See openAddDisplayModal()/createDisplay().
+    addDisplayModalOpen:  false,
+    addDisplayGalleryId:  null,
+    addDisplayName:       '',
+    addDisplayTemplateId: '',
+    addDisplaySaving:     false,
+    addDisplayError:      '',
 
     avatarSrc(user) { return avatarSrc(user); },
 
@@ -3410,6 +3423,16 @@ function galleryManagerApp() {
       this.loading = false;
     },
 
+    openCreateGalleryModal() {
+      this.newTitle               = '';
+      this.createError            = '';
+      this.createGalleryModalOpen = true;
+    },
+
+    closeCreateGalleryModal() {
+      this.createGalleryModalOpen = false;
+    },
+
     async createGallery() {
       if (this.creating || !this.newTitle.trim()) return;
       this.creating    = true;
@@ -3426,7 +3449,8 @@ function galleryManagerApp() {
         }
         const g = await resp.json();
         this.galleries.push({ ...g, display_count: 0 });
-        this.newTitle = '';
+        this.newTitle               = '';
+        this.createGalleryModalOpen = false;
         this.showToast('Gallery created.');
       } catch(e) {
         this.createError = e.message;
@@ -3488,22 +3512,23 @@ function galleryManagerApp() {
         this.expandedDisplays  = [];
         return;
       }
-      this.expandedGalleryId    = galleryid;
-      this.loadingDisplays      = true;
-      this.expandedDisplays     = [];
-      this.newDisplayTemplateId = '';
+      this.expandedGalleryId = galleryid;
+      await this.loadExpandedDisplays(galleryid);
+    },
+
+    // Fetches galleryid's own displays and replaces expandedDisplays with
+    // them — factored out of toggleDisplays() so createDisplay() can reuse
+    // it to refresh (rather than toggle) the list after adding a display,
+    // regardless of whether that gallery was already expanded, collapsed,
+    // or a different gallery was expanded at the time.
+    async loadExpandedDisplays(galleryid) {
+      this.loadingDisplays  = true;
+      this.expandedDisplays = [];
       try {
         const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(galleryid));
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const g = await resp.json();
-        // selectedTemplateId backs the x-model on each row's template <select> —
-        // kept as a plain field (rather than deriving :value from d.template) so
-        // the dropdown updates instantly on selection instead of waiting on a
-        // reactive re-render tied to the PATCH response.
-        this.expandedDisplays = (g.displays || []).map(d => ({
-          ...d,
-          selectedTemplateId: d.template ? d.template.templateid : '',
-        }));
+        this.expandedDisplays = g.displays || [];
       } catch(e) {
         this.showToast('Failed to load displays: ' + e.message);
       }
@@ -3798,81 +3823,67 @@ function galleryManagerApp() {
       this.placardSaving = false;
     },
 
-    async addDisplay(galleryid) {
+    // Opens the Add Display popup for galleryid. The name field is
+    // prefilled with a guess at the server's own default ("Display NNN",
+    // NNN = this gallery's current display_count + 1) — just a starting
+    // suggestion, not a reservation: whatever's actually in the field when
+    // Create is pressed is what gets sent (see createDisplay()), and the
+    // server computes its own real default independently if that ends up
+    // blank. The guess can be off (e.g. a display was deleted earlier,
+    // which the server's count-including-deleted numbering accounts for
+    // but this quick client-side guess doesn't) — that's fine, it's just
+    // a prefilled suggestion the user can edit or accept.
+    openAddDisplayModal(galleryid) {
+      const g = this.galleries.find(x => x.galleryid === galleryid);
+      const nextNum = (g ? g.display_count : 0) + 1;
+      this.addDisplayGalleryId  = galleryid;
+      this.addDisplayName       = 'Display ' + String(nextNum).padStart(3, '0');
+      this.addDisplayTemplateId = '';
+      this.addDisplayError      = '';
+      this.addDisplayModalOpen  = true;
+    },
+
+    closeAddDisplayModal() {
+      this.addDisplayModalOpen = false;
+    },
+
+    async createDisplay() {
+      if (this.addDisplaySaving || !this.addDisplayName.trim()) return;
+      const galleryid = this.addDisplayGalleryId;
+      this.addDisplaySaving = true;
+      this.addDisplayError  = '';
       try {
         const resp = await fetch('/api/v1/galleries/' + encodeURIComponent(galleryid) + '/displays', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
           body:    JSON.stringify({
-            sort_order: this.expandedDisplays.length,
-            templateid: this.newDisplayTemplateId || undefined,
+            name:       this.addDisplayName.trim(),
+            templateid: this.addDisplayTemplateId || undefined,
           }),
         });
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
-        const d = await resp.json();
-        // Build a DisplaySummary-shaped object from the DisplayDetail response
-        this.expandedDisplays.push({
-          displayid:          d.displayid,
-          name:               d.name,
-          sort_order:         d.sort_order,
-          template:           d.template || null,
-          selectedTemplateId: d.template ? d.template.templateid : '',
-          slot_count:         d.slots ? d.slots.length : 0,
-          filled_slots:       d.slots ? d.slots.filter(s => s.photo).length : 0,
-          created_at:         d.created_at,
-          updated_at:         d.updated_at,
-        });
+        if (!resp.ok) {
+          const e = await resp.json().catch(() => ({}));
+          throw new Error(e.error || 'HTTP ' + resp.status);
+        }
         const idx = this.galleries.findIndex(g => g.galleryid === galleryid);
         if (idx !== -1) {
           this.galleries[idx] = { ...this.galleries[idx], display_count: this.galleries[idx].display_count + 1 };
         }
-        this.newDisplayTemplateId = '';
+        this.addDisplayModalOpen = false;
         this.showToast('Display added.');
+        // Ensure this gallery's display list ends up open and showing the
+        // new display, regardless of whatever was expanded (or not) before
+        // — setting expandedGalleryId directly rather than going through
+        // toggleDisplays() means this works the same whether that gallery
+        // was already open, closed, or a different gallery was open.
+        this.expandedGalleryId = galleryid;
+        await this.loadExpandedDisplays(galleryid);
       } catch(e) {
-        this.showToast('Failed to add display: ' + e.message);
+        this.addDisplayError = e.message;
       }
+      this.addDisplaySaving = false;
     },
 
-    // Re-syncs a per-display template <select>'s DOM value on initial render.
-    // x-model's own initial binding runs before the nested x-for="t in templates"
-    // has created its <option> elements (a select's own directives are processed
-    // before Alpine walks into its children), so the browser silently falls back
-    // to the first <option> ("No template") and never corrects itself on its own.
-    // Called via x-init="syncTemplateSelect($el, d)" on the select.
-    syncTemplateSelect(el, d) {
-      this.$nextTick(() => { el.value = d.selectedTemplateId; });
-    },
-
-    // Assign, change, or clear (templateid === '') the template on an existing display.
-    // The <select> is x-model-bound to d.selectedTemplateId, so it already shows the
-    // pick instantly; here we just persist it and revert on failure.
-    async setDisplayTemplate(displayid, templateid) {
-      const idx = this.expandedDisplays.findIndex(d => d.displayid === displayid);
-      if (idx === -1) return;
-      const previousTemplateId = this.expandedDisplays[idx].template
-        ? this.expandedDisplays[idx].template.templateid : '';
-      try {
-        const resp = await fetch('/api/v1/displays/' + encodeURIComponent(displayid), {
-          method:  'PATCH',
-          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-          body:    JSON.stringify({ templateid: templateid }),
-        });
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
-        const d = await resp.json();
-        this.expandedDisplays[idx] = {
-          ...this.expandedDisplays[idx],
-          template:           d.template || null,
-          selectedTemplateId: d.template ? d.template.templateid : '',
-          slot_count:         d.slots ? d.slots.length : 0,
-          filled_slots:       d.slots ? d.slots.filter(s => s.photo).length : 0,
-        };
-        this.showToast(templateid ? 'Template assigned.' : 'Template cleared.');
-      } catch(e) {
-        // Revert the dropdown to whatever was actually saved before this attempt.
-        this.expandedDisplays[idx] = { ...this.expandedDisplays[idx], selectedTemplateId: previousTemplateId };
-        this.showToast('Failed to update template: ' + e.message);
-      }
-    },
 
     async deleteDisplay(displayid, galleryid) {
       if (!confirm('Remove this display?')) return;

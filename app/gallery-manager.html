@@ -68,6 +68,8 @@
     }
     .btn-icon:hover { background: var(--border); color: var(--brand); }
     .btn-icon.danger:hover { background: #fee2e2; color: #dc2626; }
+    .btn-icon.add-icon { color: #16a34a; }
+    .btn-icon.add-icon:hover { background: #dcfce7; color: #15803d; }
 
     /* Thumb-grip drag handle — click-and-hold + drag on desktop, touch +
        drag on mobile (touch-action:none stops the page itself from
@@ -239,8 +241,15 @@
 <!-- ══ MAIN ══════════════════════════════════════════════════════════════════ -->
 <main class="flex-1 max-w-3xl mx-auto w-full px-4 py-10">
 
-  <h1 class="text-3xl font-serif mb-1">Gallery Manager</h1>
-  <p class="text-sm text-[var(--muted)] mb-8">Manage galleries and their display order.</p>
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <h1 class="text-3xl font-serif mb-1">Gallery Manager</h1>
+      <p class="text-sm text-[var(--muted)] mb-8">Manage galleries and their display order.</p>
+    </div>
+    <!-- Create gallery — a popup (name only, required) instead of the old
+         always-visible inline form. See openCreateGalleryModal(). -->
+    <button class="btn-primary shrink-0" @click="openCreateGalleryModal()">+ Add</button>
+  </div>
 
   <!-- Loading -->
   <div x-show="loading" class="flex items-center justify-center py-24 gap-3">
@@ -258,25 +267,6 @@
   </div>
 
   <div x-show="!loading" class="animate-fadein">
-
-    <!-- ── Create gallery form ─────────────────────────────────────────── -->
-    <div class="mb-8 p-5 bg-white border border-[var(--border)] rounded-xl">
-      <h2 class="text-base font-semibold mb-3">Create New Gallery</h2>
-      <div class="flex gap-2 items-start flex-wrap">
-        <input class="input flex-1 min-w-[180px]"
-               type="text"
-               x-model="newTitle"
-               placeholder="Gallery title"
-               @keyup.enter="createGallery()" />
-        <button class="btn-primary shrink-0"
-                @click="createGallery()"
-                :disabled="creating || !newTitle.trim()">
-          <span x-show="!creating">+ Create</span>
-          <span x-show="creating">Creating…</span>
-        </button>
-      </div>
-      <p x-show="createError" class="text-red-500 text-xs mt-2" x-text="createError"></p>
-    </div>
 
     <!-- ── Gallery list ───────────────────────────────────────────────── -->
     <div x-show="galleries.length === 0 && !error" class="text-center py-12 text-[var(--muted)] text-sm">
@@ -340,6 +330,17 @@
                   <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
                 </svg>
               </button>
+              <!-- Add Display — opens a popup (name + template + Create)
+                   instead of the old inline row below the expanded list, so
+                   it's reachable without expanding the gallery first, same
+                   reasoning as the gear icon above. See
+                   openAddDisplayModal() in app.js. -->
+              <button class="btn-icon add-icon" title="Add Display" aria-label="Add Display"
+                      @click="openAddDisplayModal(g.galleryid)">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/>
+                </svg>
+              </button>
               <!-- Expand/collapse displays -->
               <button class="btn-icon" title="Manage displays" @click="toggleDisplays(g.galleryid)">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -392,25 +393,10 @@
                   <span x-show="d.template" class="text-xs shrink-0">
                     (<span x-text="d.filled_slots"></span>/<span x-text="d.slot_count"></span> filled)
                   </span>
-                  <!-- x-init re-syncs the DOM value after the nested x-for below has
-                       actually created its <option> elements. Without this, x-model's
-                       initial binding runs before those options exist (Alpine processes
-                       a select's own directives before walking into its children), so
-                       the browser silently falls back to the first <option> ("No
-                       template") and never corrects itself since nothing re-triggers
-                       the x-model effect afterward. syncTemplateSelect() is a plain
-                       component method (not an inline arrow function) because the CSP
-                       build's expression parser doesn't support arrow-function bodies
-                       inside directive attributes. -->
-                  <select class="input text-xs py-1 pr-6"
-                          x-model="d.selectedTemplateId"
-                          x-init="syncTemplateSelect($el, d)"
-                          @change="setDisplayTemplate(d.displayid, d.selectedTemplateId)">
-                    <option value="">No template</option>
-                    <template x-for="t in templates" :key="t.templateid">
-                      <option :value="t.templateid" x-text="t.name + ' (' + t.photo_count + ')'"></option>
-                    </template>
-                  </select>
+                  <!-- Template — read-only name, not a change-template
+                       dropdown (that's chosen once at creation time, in the
+                       Add Display popup; see openAddDisplayModal()). -->
+                  <span class="text-xs shrink-0" x-text="d.template ? d.template.name : 'No template'"></span>
                 </span>
 
                 <!-- View display (public, read-only) -->
@@ -445,20 +431,6 @@
                  class="display-row text-[var(--muted)] italic text-xs">
               No displays in this gallery yet.
             </div>
-
-            <!-- Add display button -->
-            <div class="px-5 py-3 border-t border-[var(--border)] bg-[var(--surface)] flex items-center gap-2 flex-wrap">
-              <button class="text-sm text-[var(--accent)] hover:underline font-medium"
-                      @click="addDisplay(g.galleryid)">
-                + Add Display
-              </button>
-              <select class="input text-xs py-1 pr-6" x-model="newDisplayTemplateId">
-                <option value="">No template</option>
-                <template x-for="t in templates" :key="t.templateid">
-                  <option :value="t.templateid" x-text="t.name + ' (' + t.photo_count + ')'"></option>
-                </template>
-              </select>
-            </div>
           </div>
 
         </div>
@@ -467,6 +439,78 @@
 
   </div>
 </main>
+
+<!-- ══ CREATE GALLERY MODAL ════════════════════════════════════════════════ -->
+<div x-show="createGalleryModalOpen" x-cloak x-transition
+     class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
+     @click.self="closeCreateGalleryModal()"
+     @keydown.escape.window="closeCreateGalleryModal()">
+  <div class="modal-card animate-scalein">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-serif text-lg">Create Gallery</h3>
+      <button class="text-[var(--muted)] hover:text-[var(--brand)] text-xl leading-none px-1" @click="closeCreateGalleryModal()">&times;</button>
+    </div>
+
+    <label class="text-xs font-medium text-[var(--muted)]">
+      Gallery name
+      <input class="input w-full mt-1" type="text"
+             x-model="newTitle"
+             placeholder="Gallery name"
+             @keyup.enter="createGallery()" />
+    </label>
+
+    <p x-show="createError" class="text-red-500 text-xs mt-2" x-text="createError"></p>
+
+    <div class="flex gap-2 mt-4">
+      <button class="btn-primary text-sm" @click="createGallery()" :disabled="creating || !newTitle.trim()">
+        <span x-show="!creating">Create</span>
+        <span x-show="creating">Creating…</span>
+      </button>
+      <button class="btn-secondary text-sm" @click="closeCreateGalleryModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ ADD DISPLAY MODAL ═══════════════════════════════════════════════════ -->
+<div x-show="addDisplayModalOpen" x-cloak x-transition
+     class="fixed inset-0 z-50 flex items-center justify-center backdrop p-4"
+     @click.self="closeAddDisplayModal()"
+     @keydown.escape.window="closeAddDisplayModal()">
+  <div class="modal-card animate-scalein">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="font-serif text-lg">Add Display</h3>
+      <button class="text-[var(--muted)] hover:text-[var(--brand)] text-xl leading-none px-1" @click="closeAddDisplayModal()">&times;</button>
+    </div>
+
+    <div class="flex flex-col gap-3">
+      <label class="text-xs font-medium text-[var(--muted)]">
+        Display name
+        <input class="input w-full mt-1" type="text"
+               x-model="addDisplayName"
+               @keyup.enter="createDisplay()" />
+      </label>
+      <label class="text-xs font-medium text-[var(--muted)]">
+        Template
+        <select class="input w-full mt-1" x-model="addDisplayTemplateId">
+          <option value="">No template</option>
+          <template x-for="t in templates" :key="t.templateid">
+            <option :value="t.templateid" x-text="t.name + ' (' + t.photo_count + ')'"></option>
+          </template>
+        </select>
+      </label>
+    </div>
+
+    <p x-show="addDisplayError" class="text-red-500 text-xs mt-2" x-text="addDisplayError"></p>
+
+    <div class="flex gap-2 mt-4">
+      <button class="btn-primary text-sm" @click="createDisplay()" :disabled="addDisplaySaving || !addDisplayName.trim()">
+        <span x-show="!addDisplaySaving">Create</span>
+        <span x-show="addDisplaySaving">Creating…</span>
+      </button>
+      <button class="btn-secondary text-sm" @click="closeAddDisplayModal()">Cancel</button>
+    </div>
+  </div>
+</div>
 
 <!-- ══ PLACARD SETTINGS MODAL ══════════════════════════════════════════════ -->
 <div x-show="placardModalOpen" x-cloak x-transition

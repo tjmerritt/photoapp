@@ -334,7 +334,12 @@ type UpdateGalleryRequest struct {
 	DisplayOrder    []string        `json:"display_order"`    // displayids in new order
 }
 
+// Name is optional — a blank/whitespace-only value (or omitting it
+// entirely) falls back to the server-generated "Display NNN" default (see
+// displays.go's Create); a non-blank value is used as-is, e.g. from the
+// "Add Display" popup's prefilled/edited name field.
 type CreateDisplayRequest struct {
+	Name       *string `json:"name"`
 	TemplateID *string `json:"templateid"`
 	SortOrder  *int    `json:"sort_order"`
 }

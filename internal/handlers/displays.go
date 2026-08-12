@@ -233,22 +233,31 @@ func (h *DisplaysHandler) Create(w http.ResponseWriter, r *http.Request, ps http
 		templateID = req.TemplateID
 	}
 
-	// Default name is "Display NNN" — NNN a zero-padded count of every
+	// name: an explicit, non-blank client-supplied name (e.g. from the "Add
+	// Display" popup's prefilled/edited field) is used as-is; otherwise it
+	// falls back to "Display NNN" — NNN a zero-padded count of every
 	// display ever created in this gallery (including soft-deleted ones, so
-	// the number is never reused) computed in the same statement as the
-	// INSERT. Stored once, then independent of sort_order — reordering
-	// (drag-to-reorder in Gallery Manager) never changes it, unlike a
-	// position-derived label would. See migrations/029_display_names.sql.
+	// the number is never reused), computed via COALESCE(NULLIF(...), ...)
+	// in the same statement as the INSERT. Either way it's stored once and
+	// is then independent of sort_order — reordering (drag-to-reorder in
+	// Gallery Manager) never changes it, unlike a position-derived label
+	// would. See migrations/029_display_names.sql.
+	name := ""
+	if req.Name != nil {
+		name = strings.TrimSpace(*req.Name)
+	}
+
 	var d models.DisplayDetail
 	if err := h.DB.QueryRow(ctx, `
 		WITH next_num AS (
 			SELECT COUNT(*) + 1 AS n FROM displays WHERE galleryid = $1
 		)
 		INSERT INTO displays (galleryid, templateid, sort_order, name)
-		SELECT $1, NULLIF($2::text, '')::uuid, $3, 'Display ' || lpad(next_num.n::text, 3, '0')
+		SELECT $1, NULLIF($2::text, '')::uuid, $3,
+		       COALESCE(NULLIF($4, ''), 'Display ' || lpad(next_num.n::text, 3, '0'))
 		FROM   next_num
 		RETURNING displayid::text, galleryid::text, name, sort_order, created_at, updated_at
-	`, galleryID, templateID, sortOrder).Scan(
+	`, galleryID, templateID, sortOrder, name).Scan(
 		&d.DisplayID, &d.GalleryID, &d.Name, &d.SortOrder, &d.CreatedAt, &d.UpdatedAt,
 	); err != nil {
 		slog.Error("Create display", "error", err)
